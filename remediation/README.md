@@ -72,7 +72,7 @@ POST /events ──► main.py (auth Bearer) ──► engine.handle_event ─�
 - **`timeline.py`** : `Broker` (file `asyncio.Queue` de 1000 par abonné ; un abonné trop lent est déconnecté et se reconnecte), `frame()` (trame SSE), `sse_stream()` (abonnement *avant* le rejeu, donc sans trou ni doublon ; commentaire `: keepalive` si inactif).
 - **`verify.py`** : `ScriptVerifier` lance `VERIFY_TX_PATH` sans shell, avec timeout (`VERIFY_TIMEOUT_S`) ; exit 0 = OK ; renvoie `VerifyResult(ok, rc, detail)` (dernière ligne de sortie, 200 caractères max).
 - **`models.py`** : `IncomingEvent` = `AnomalyEvent` (`resilience_common`) + `source_ip` optionnel (une IP littérale) ; champs inconnus ignorés.
-- **`http_metrics.py`** : `resilience_http_requests_total{service,method,path,status}` et `resilience_http_request_duration_seconds{service,method,path}` (chemin = gabarit de route, cardinalité bornée).
+- **`http_metrics.py`** : `resilience_http_requests_total{service,method,path,status}` et `resilience_http_request_duration_seconds{service,method,path}` (chemin = gabarit de route, cardinalité bornée). Les compteurs sont **ceux de `resilience_common.metrics`** (pas de redéclaration : une double déclaration fait crasher le boot avec `DuplicateTimeseries`).
 
 ## Endpoints
 

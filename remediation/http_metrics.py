@@ -1,22 +1,16 @@
 """Métriques HTTP standard du contrat (docs/contracts.md §2), noms et labels exacts.
 
-`resilience_common.metrics.instrument()` n'est volontairement pas utilisé : à ce jour il
-expose `resilience_http_http_requests_total{handler,...}` (préfixe doublé, label `handler`
-au lieu de `service`/`path`), non conforme au contrat. À corriger dans la lib commune.
+Les compteurs sont ceux de `resilience_common.metrics` (une seule déclaration dans le
+registre Prometheus : les redéclarer ici provoquait `DuplicateTimeseries` au boot, puisque
+`resilience_common` les enregistre déjà au niveau module). Le moteur conserve son propre
+middleware (request_id + journalisation) et n'appelle que `observe()`.
 """
 
 from __future__ import annotations
 
-from prometheus_client import Counter, Histogram
+from resilience_common.metrics import http_request_duration_seconds, http_requests_total
 
-http_requests_total = Counter(
-    "resilience_http_requests_total", "Requêtes HTTP traitées.",
-    labelnames=("service", "method", "path", "status"),
-)
-http_request_duration_seconds = Histogram(
-    "resilience_http_request_duration_seconds", "Latence serveur des requêtes HTTP.",
-    labelnames=("service", "method", "path"),
-)
+__all__ = ["http_request_duration_seconds", "http_requests_total", "observe"]
 
 
 def observe(service: str, method: str, route_path: str | None, status: int, seconds: float) -> None:

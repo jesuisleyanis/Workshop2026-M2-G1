@@ -186,3 +186,6 @@ def test_metrics_endpoint_exposes_contract_metrics(env):
     assert f'resilience_mttd_seconds{{incident_id="{inc_id}"}}' in text
     assert 'resilience_http_requests_total{method="POST",path="/events",service="remediation",status="202"}' in text
     assert "resilience_http_request_duration_seconds_bucket" in text
+    # Une seule déclaration dans le registre (régression : DuplicateTimeseries au boot quand
+    # http_metrics redéclarait le compteur déjà enregistré par resilience_common).
+    assert text.count("# HELP resilience_http_requests_total ") == 1
