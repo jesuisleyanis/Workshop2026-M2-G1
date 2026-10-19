@@ -49,6 +49,9 @@ Le modèle n'est **pas commité** (`ml/training/artifacts/` est dans `.gitignore
 aucun artefact pré-calculé : son étape `trainer` lance `ml.training.train` sur
 `ml/training/data/baseline_real.csv` (+ `calibration.json`) s'ils sont versionnés, sinon sur la baseline
 synthétique (cf. `ml/training/README.md` §6). Le scikit-learn d'entraînement est donc toujours celui du runtime.
+Si `calibration.json` a été calculée sur un autre modèle, l'entraînement échoue (code 3) et **le build aussi** :
+l'image ne part jamais avec un seuil qui ne correspond pas à son modèle. L'étape `ml-tools` du même Dockerfile
+sert aux cibles `make train` / `calibrate` / `test-ml` (dev uniquement, hors image finale).
 
 - **Versions épinglées** : `scikit-learn==1.9.1`, `numpy`, `joblib` sont figés **à l'identique** côté
   entraînement (`ml/training/requirements.txt`) et detector (`ml/detector/requirements.txt`). Une dérive fausserait silencieusement les scores.

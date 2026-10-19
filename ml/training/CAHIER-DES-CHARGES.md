@@ -20,7 +20,8 @@ reproductible, ainsi que les statistiques de baseline nécessaires à l'explicab
 normal held-out ; détection >= 90 % par type d'attaque simulée ; deux exécutions à seed égal donnent les mêmes statistiques.
 Sur données réelles : CSV invalide refusé (colonne manquante, NaN, négatif, < 200 fenêtres) ; seuil calibré strictement entre le
 normal et chaque attaque, sinon rien n'est écrit ; MTTD modèle <= 20 s par scénario (budget de la démo en 60 s) ; un seuil
-calibré sur un autre modèle est signalé (`model_fingerprint`).
+calibré sur un autre modèle **fait échouer** l'entraînement (code 3) et donc le build detector (`model_fingerprint`) ;
+train/calibrate/tests tournent dans l'image `ml-tools` (même scikit-learn que le runtime).
 
 **Sécurité.** `joblib` est un pickle : le detector ne charge `model.joblib` que si son sha256 correspond à `baseline_stats.json`.
 Aucun secret ni donnée réelle ; données 100 % fictives.

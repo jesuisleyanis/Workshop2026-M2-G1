@@ -76,6 +76,14 @@ def anomaly_scores(model: IsolationForest, data: np.ndarray) -> np.ndarray:
     return -model.score_samples(data)
 
 
+class StaleCalibrationError(RuntimeError):
+    """calibration.json a été calculée sur un autre modèle que celui qu'on entraîne."""
+
+
+#: Code retour de la CLI quand la calibration est périmée (fait échouer le build detector).
+EXIT_STALE_CALIBRATION = 3
+
+
 def model_fingerprint(model: IsolationForest) -> str:
     """Empreinte du COMPORTEMENT du modèle (scores sur un jeu sonde fixe).
 
@@ -99,6 +107,7 @@ def train(
     data_source: str | None = None,
     attacks_real: Series | None = None,
     calibration: dict | None = None,
+    allow_stale_calibration: bool = False,
 ) -> tuple[IsolationForest, dict]:
     """Entraîne le modèle sur le trafic normal et renvoie (modèle, baseline_stats).
 
@@ -107,6 +116,10 @@ def train(
     récentes. `attacks_real` (fenêtres capturées pendant `make attack`, étiquetées)
     s'ajoute à l'évaluation. `calibration` (sortie de ml.training.calibrate) impose
     le seuil calibré sur les vraies attaques à la place du quantile.
+
+    Lève StaleCalibrationError si `calibration` a été calculée sur un autre modèle
+    (`model_fingerprint` différente), sauf `allow_stale_calibration` : la calibration
+    est alors ignorée et le seuil reste celui du quantile.
     """
     heldout = None
     if real is not None:
@@ -128,6 +141,20 @@ def train(
         random_state=seed,
     )
     model.fit(data)
+
+    fingerprint = model_fingerprint(model)
+    calibration_ignored = None
+    calibrated_on = (calibration or {}).get("model_fingerprint")
+    if calibrated_on is not None and calibrated_on != fingerprint:
+        # Seuil calculé pour un AUTRE modèle (données, seed ou scikit-learn différents) :
+        # l'appliquer en silence donnerait un detector mal réglé. On échoue, sauf demande
+        # explicite, auquel cas on retombe sur le seuil par quantile (jamais le seuil périmé).
+        if not allow_stale_calibration:
+            raise StaleCalibrationError(
+                f"calibration faite sur le modèle {calibrated_on}, modèle entraîné = {fingerprint} "
+                "(données, seed ou scikit-learn différents) : relancer `make calibrate`")
+        calibration_ignored = {"calibrated_on": calibrated_on, "reason": "empreinte différente"}
+        calibration = None
 
     base_scores = anomaly_scores(model, data)
     threshold = max(DEFAULT_THRESHOLD, float(np.quantile(base_scores, THRESHOLD_QUANTILE)))
@@ -169,9 +196,11 @@ def train(
             "data": data_desc,
         },
     }
-    stats["model_fingerprint"] = model_fingerprint(model)
+    stats["model_fingerprint"] = fingerprint
     if calibration is not None:
         stats["calibration"] = calibration
+    if calibration_ignored is not None:
+        stats["calibration_ignored"] = calibration_ignored
     stats["evaluation"] = evaluate(model, stats, seed=seed, normal_heldout=heldout,
                                    attacks_real=attacks_real)
     return model, stats
@@ -286,15 +315,24 @@ def main(argv: list[str] | None = None) -> int:
                    help="CSV de fenêtres capturées pendant les scénarios (label = type)")
     p.add_argument("--calibration", type=Path,
                    help="calibration.json (ml.training.calibrate) : impose le seuil calibré")
+    p.add_argument("--allow-stale-calibration", action="store_true",
+                   help="si la calibration vise un autre modèle : l'ignorer (seuil par quantile) "
+                        "au lieu d'échouer")
     args = p.parse_args(argv)
 
     real = load_csv(args.data, label="normal") if args.data else None
     attacks = load_csv(args.attack_data, min_rows=1) if args.attack_data else None
     calibration = json.loads(args.calibration.read_text(encoding="utf-8")) if args.calibration else None
 
-    model, stats = train(args.n_samples, args.seed, args.version, args.n_estimators,
-                         real=real, data_source=args.data.name if args.data else None,
-                         attacks_real=attacks, calibration=calibration)
+    try:
+        model, stats = train(args.n_samples, args.seed, args.version, args.n_estimators,
+                             real=real, data_source=args.data.name if args.data else None,
+                             attacks_real=attacks, calibration=calibration,
+                             allow_stale_calibration=args.allow_stale_calibration)
+    except StaleCalibrationError as exc:
+        sys.stderr.write(f"ERREUR : {exc}\n"
+                         "(rien n'est écrit ; --allow-stale-calibration pour ignorer la calibration)\n")
+        return EXIT_STALE_CALIBRATION
     vdir = save(model, stats, args.out)
     ev = stats["evaluation"]
     sys.stdout.write(
@@ -303,10 +341,9 @@ def main(argv: list[str] | None = None) -> int:
         f"faux positifs (normal held-out {ev['normal_heldout']['source']}): "
         f"{ev['normal_heldout']['false_positive_rate']:.2%}\n"
     )
-    if calibration is not None and calibration.get("model_fingerprint") not in (
-            None, stats["model_fingerprint"]):
-        sys.stdout.write("ATTENTION : le modèle diffère de celui calibré (données, seed ou "
-                         "scikit-learn changés) -> relancer ml.training.calibrate\n")
+    if "calibration_ignored" in stats:
+        sys.stdout.write("ATTENTION : calibration IGNORÉE (faite sur un autre modèle) -> seuil par "
+                         "quantile ; relancer `make calibrate`\n")
     for section, title in (("attacks", "attaques simulées (indicatif)"),
                            ("attacks_real", "attaques RÉELLES capturées")):
         if section not in ev:
