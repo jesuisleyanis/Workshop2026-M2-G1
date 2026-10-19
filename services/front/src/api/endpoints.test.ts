@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createApiClient } from './client'
 import { createEndpoints } from './index'
-import { decodeJwtExp } from './tokenStore'
+import { decodeJwtClaims, decodeJwtExp } from './tokenStore'
 import { parseAccounts, parseLogin, parseTransaction } from './parsers'
 import { fakeJwt, jsonResponse } from '../test/helpers'
 
@@ -21,36 +21,36 @@ describe('endpoints /api/v1', () => {
     expect(init.method).toBe('POST')
   })
 
-  it('getAccounts : GET /api/v1/accounts, décimaux en chaîne acceptés', async () => {
-    const { api, f } = endpointsWith(() => jsonResponse([{ id: 'FR01', balance: '1250.50', currency: 'EUR', label: 'Courant' }]))
+  it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {
+    const { api, f } = endpointsWith(() =>
+      jsonResponse([{ id: 1, iban_fake: 'FR76 0000 0001', balance_cents: 125050, currency: 'EUR' }]),
+    )
     const accounts = await api.getAccounts()
-    expect(accounts).toEqual([{ id: 'FR01', owner: null, label: 'Courant', balance: 1250.5, currency: 'EUR' }])
+    expect(accounts).toEqual([{ id: '1', owner: null, label: 'FR76 0000 0001', iban: 'FR76 0000 0001', balance: 1250.5, currency: 'EUR' }])
     expect((f.mock.calls[0] as unknown as [string])[0]).toBe('/api/v1/accounts')
   })
 
-  it('createTransaction : POST /api/v1/transactions avec from_account/to_account/amount', async () => {
+  it('createTransaction : POST avec src/dst_account entiers et amount_cents', async () => {
     const { api, f } = endpointsWith(() =>
       jsonResponse(
-        { id: 'tx1', from_account: 'FR01', to_account: 'FR02', amount: 10, currency: 'EUR', status: 'created', created_at: '2026-10-21T09:14:33Z' },
+        { id: 42, src_account: 1, dst_account: 2, amount_cents: 1000, status: 'created' },
         201,
       ),
     )
-    const tx = await api.createTransaction({ from_account: 'FR01', to_account: 'FR02', amount: 10 })
-    expect(tx).toMatchObject({ id: 'tx1', status: 'created', fromAccount: 'FR01', toAccount: 'FR02' })
+    const tx = await api.createTransaction({ from_account: '1', to_account: '2', amount: 10 })
+    expect(tx).toMatchObject({ id: '42', status: 'created', fromAccount: '1', toAccount: '2', amount: 10 })
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/v1/transactions')
-    expect(JSON.parse(init.body as string)).toEqual({ from_account: 'FR01', to_account: 'FR02', amount: 10 })
+    expect(JSON.parse(init.body as string)).toEqual({ src_account: 1, dst_account: 2, amount_cents: 1000 })
   })
 
-  it('listTransactions : accepte { transactions: [...] }', async () => {
+  it('listTransactions : accepte une liste TransactionOut (centimes)', async () => {
     const { api } = endpointsWith(() =>
-      jsonResponse({
-        transactions: [{ id: 'a', from_account: 'x', to_account: 'y', amount: '5.00', status: 'rejected', created_at: '2026-10-21T09:00:00Z' }],
-      }),
+      jsonResponse([{ id: 7, src_account: 1, dst_account: 2, amount_cents: 500, status: 'rejected' }]),
     )
     const txs = await api.listTransactions()
     expect(txs).toHaveLength(1)
-    expect(txs[0]).toMatchObject({ status: 'rejected', amount: 5, currency: 'EUR' })
+    expect(txs[0]).toMatchObject({ status: 'rejected', amount: 5, currency: 'EUR', fromAccount: '1', toAccount: '2' })
   })
 })
 
@@ -59,10 +59,11 @@ describe('parseurs', () => {
     expect(() => parseLogin({})).toThrowError(/Jeton absent/)
   })
   it('rejette un compte sans solde numérique', () => {
-    expect(() => parseAccounts([{ id: 'a', balance: 'abc' }])).toThrowError()
+    expect(() => parseAccounts([{ id: 'a', balance_cents: 'abc' }])).toThrowError()
   })
-  it('rejette une transaction sans created_at', () => {
-    expect(() => parseTransaction({ id: '1', from_account: 'a', to_account: 'b', amount: 1 })).toThrowError()
+  it('tolère une transaction sans horodatage (payment-api n’en fournit pas)', () => {
+    const tx = parseTransaction({ id: 1, src_account: 1, dst_account: 2, amount_cents: 100, status: 'created' })
+    expect(tx).toMatchObject({ id: '1', fromAccount: '1', toAccount: '2', amount: 1, createdAt: '' })
   })
 })
 
@@ -72,5 +73,9 @@ describe('decodeJwtExp', () => {
   })
   it('renvoie null pour un jeton illisible', () => {
     expect(decodeJwtExp('pas-un-jwt')).toBeNull()
+  })
+  it('lit le claim sub (username affiché dans la session)', () => {
+    expect(decodeJwtClaims(fakeJwt(1_800_000_000))).toEqual({ sub: 'demo01', exp: 1_800_000_000 })
+    expect(decodeJwtClaims('pas-un-jwt')).toEqual({ sub: null, exp: null })
   })
 })

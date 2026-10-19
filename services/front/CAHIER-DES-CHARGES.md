@@ -13,15 +13,25 @@ Le front est un **site statique** (build Vite) servi par nginx **derrière le WA
 | # | Exigence | Réalisation |
 |---|---|---|
 | F1 | Page de connexion appelant `POST /api/v1/login`, stockage du JWT | `LoginPage`, `AuthProvider`, `api/tokenStore.ts` (sessionStorage) |
-| F2 | Tableau de bord : solde via `GET /api/v1/accounts` | `DashboardPage`, `BalanceCard` |
-| F3 | Formulaire de virement fictif `POST /api/v1/transactions` | `TransferPage`, `TransferForm`, `lib/validation.ts` |
-| F4 | Historique `GET /api/v1/transactions` | `HistoryPage`, `TransactionTable` |
+| F2 | Accueil : solde total + cartes de comptes via `GET /api/v1/accounts`, dernières opérations | `DashboardPage` |
+| F3 | Formulaire de virement fictif `POST /api/v1/transactions` (choix du compte, raccourcis bénéficiaire, récapitulatif, carte de résultat) | `TransferPage`, `lib/validation.ts` |
+| F4 | Historique `GET /api/v1/transactions` avec filtres par statut | `HistoryPage` |
 | F5 | Auth Bearer sur toutes les routes métier | `api/client.ts` |
-| F6 | Gestion des erreurs (corps `{error:{code,message,request_id}}`, 401, 429, réseau, timeout) | `api/errors.ts`, `ErrorBanner`, `lib/errorMessages.ts` |
-| F7 | États de chargement et de réessai | `Spinner`, `hooks/useResource.ts` |
-| F8 | Déconnexion sur 401 et à l'expiration du JWT (15 min) | `AuthProvider` + `setUnauthorizedHandler` |
+| F6 | Gestion des erreurs (corps `{error:{code,message,request_id}}`, 401, 409 `insufficient_funds`, 429, réseau, timeout) | `api/errors.ts`, `components/ui.tsx` (`ErrorBlock`), `lib/errorMessages.ts` |
+| F7 | États de chargement (squelettes), vides et de réessai | `components/ui.tsx`, `hooks/useResource.ts`, `BankDataProvider` |
+| F8 | Déconnexion sur 401 et à l'expiration du JWT (15 min), compte à rebours de session, message d'expiration | `AuthProvider` + `setUnauthorizedHandler`, `Layout` |
 | F9 | Base d'API configurable (`VITE_API_BASE`) | `config.ts` |
 | F10 | Image durcie : non-root, healthcheck, statique | `Dockerfile`, `docker/` |
+| F11 | Page Comptes : IBAN fictif, copie, « virer depuis ce compte » | `AccountsPage` |
+| F12 | Libellé de virement (absent de l'API) conservé localement | `lib/labels.ts` (localStorage, par id de transaction) |
+
+### Design
+
+Maquette « Banque Résilience » (claude.ai/design) : cadre clair, barre latérale, cartes « nuit », pastilles ok/ko.
+Jetons de couleur et utilitaires (`field`, `btn-primary`, `btn-ghost`, `tnum`) dans `src/index.css` (`@theme` Tailwind v4).
+Polices **auto-hébergées** (`@fontsource`) : la CSP (`style-src 'self'`) interdit les CDN de polices.
+Écart volontaire à la maquette : les raccourcis « comptes de démonstration » ne remplissent que l'**identifiant** —
+aucun mot de passe n'est embarqué dans le bundle, servi publiquement derrière le WAF (donc lisible depuis le PC Attaquant).
 
 Non-objectifs : aucune logique métier (le serveur est l'autorité : solde, plafonds, rate-limit), pas de stockage de mot de passe, pas de vrai paiement.
 
@@ -38,20 +48,31 @@ Toutes les routes passent par le préfixe `/api/v1` (contrat « Conventions d'AP
 
 Le front ignore quel microservice répond : c'est le **WAF** (ou le proxy Vite en dev) qui route `/api/v1/*`. Les statuts attendus et leur traitement : `401` => déconnexion et retour au login ; `429` (`auth_rate_limited` côté auth) => message « trop de tentatives » ; `5xx` / réseau / timeout => bandeau d'erreur + bouton Réessayer. Un `403` du WAF (page HTML, corps non conforme) est converti en `ApiError` générique `http_403`.
 
-### Hypothèses de schéma (à confirmer avec `payment-api` / `auth`)
+### Schéma des corps métier (aligné sur `payment-api` / `auth`)
 
-Le contrat fige les routes, l'auth et les erreurs, **pas** les corps métier. Le front suppose :
+Le contrat `docs/contracts.md` fige les routes, l'auth et les erreurs, **pas** les corps métier.
+Ceux-ci sont ceux réellement émis par `payment-api` (`AccountOut`, `TransactionIn`, `TransactionOut`) et `auth` :
+les montants transitent en **centimes entiers**, les comptes sont identifiés par un **id entier**
+(`iban_fake` sert de libellé affiché). Le front raisonne en euros : la conversion centimes ↔ euros
+et le renommage des champs sont isolés dans `src/api/parsers.ts` + `src/api/index.ts`.
 
 ```jsonc
 // POST /api/v1/login  { "username": "...", "password": "..." }
 //   -> { "access_token": "<jwt>", "token_type": "bearer", "expires_in": 900 }   // "token" accepté en alias
-// GET /api/v1/accounts -> [ { "id": "FR01", "label": "Compte courant", "balance": 1250.50, "currency": "EUR" } ]   // ou { "accounts": [...] }
-// POST /api/v1/transactions  { "from_account", "to_account", "amount", "currency"?, "label"? }
-//   -> { "id", "from_account", "to_account", "amount", "currency", "status": "created"|"rejected", "label"?, "created_at" }
+// GET /api/v1/accounts -> [ { "id": 1, "iban_fake": "FR76 …", "balance_cents": 100000, "currency": "EUR" } ]
+// POST /api/v1/transactions  { "src_account": <int>, "dst_account": <int>, "amount_cents": <int> }
+//   -> { "id", "src_account", "dst_account", "amount_cents", "status": "created"|"rejected", "created_at"? }
 // GET /api/v1/transactions -> [ <transaction> ]   // ou { "transactions": [...] }
 ```
 
-Les montants peuvent être des nombres ou des chaînes décimales. Un écart de schéma est isolé dans `src/api/parsers.ts` (un seul fichier à ajuster) et couvert par `src/api/endpoints.test.ts`. Codes d'erreur métier reconnus : `insufficient_funds`, `invalid_credentials`, `validation_error` (sinon le `message` serveur est affiché).
+Les parsers restent tolérants (centimes ou euros, liste nue ou enveloppée, `created_at` optionnel) pour
+absorber une évolution mineure sans casse. Un écart de schéma reste isolé dans `src/api/parsers.ts`
+(un seul fichier à ajuster) et couvert par `src/api/endpoints.test.ts`. Codes d'erreur métier reconnus :
+`insufficient_funds` (409, carte « Virement refusé »), `invalid_credentials`, `validation_error` (sinon le `message` serveur est affiché).
+
+> **Dev sans WAF** — le front Vite peut viser directement les services : `DEV_AUTH_TARGET` (login/register → `auth`)
+> et `DEV_API_TARGET` (accounts/transactions → `payment-api`). Si `DEV_AUTH_TARGET` est absent, tout passe par
+> `DEV_API_TARGET` (comportement WAF inchangé). Voir `vite.config.ts`.
 
 ## 4. Variables d'environnement
 
@@ -77,4 +98,4 @@ Les montants peuvent être des nombres ou des chaînes décimales. Un écart de 
 
 ## 7. Tests (Vitest + Testing Library)
 
-Client API (fetch mocké : Bearer, erreurs du contrat, 401, réseau, timeout), parseurs (schémas), validation du virement, parcours UI (redirection login, connexion OK/KO, chargement/erreur/réessai, 401 => logout, virement, historique). Lancement : `npm run test`. Détails dans le [`README.md`](README.md).
+Client API (fetch mocké : Bearer, erreurs du contrat, 401, réseau, timeout), parseurs (schémas, claims JWT), validation du virement, formatage, libellés locaux, parcours UI (redirection login + message de garde, connexion OK/KO/champs vides, déconnexion manuelle et sur 401, chargement/erreur/réessai, comptes → virement pré-rempli, virement OK / refus 409 / erreur serveur, historique trié et filtré). Lancement : `npm run test`. Détails dans le [`README.md`](README.md).

@@ -6,8 +6,45 @@ export function formatMoney(amount: number, currency = 'EUR'): string {
   }
 }
 
-export function formatDateTime(iso: string): string {
+function toDate(iso: string): Date | null {
+  if (!iso) return null
   const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeStyle: 'medium' }).format(d)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+export function formatDateTime(iso: string): string {
+  const d = toDate(iso)
+  return d ? new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }).format(d) : '—'
+}
+
+/** « 21 oct. 2026 » ; « — » si l'horodatage est absent ou illisible. */
+export function formatDate(iso: string): string {
+  const d = toDate(iso)
+  return d ? d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'
+}
+
+export function formatDateShort(iso: string): string {
+  const d = toDate(iso)
+  return d ? d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) : '—'
+}
+
+export function formatTime(iso: string): string {
+  const d = toDate(iso)
+  return d ? d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : ''
+}
+
+/** Regroupe un IBAN par blocs de 4 caractères. */
+export function formatIban(iban: string): string {
+  return iban.replace(/\s+/g, '').replace(/(.{4})/g, '$1 ').trim()
+}
+
+/** « FR76 … 0142 » pour les espaces contraints. */
+export function shortIban(iban: string): string {
+  const x = iban.replace(/\s+/g, '')
+  return x.length > 8 ? `${x.slice(0, 4)} … ${x.slice(-4)}` : x
+}
+
+/** Montant -> valeur de champ de saisie (« 1250,50 »). */
+export function amountToInput(amount: number): string {
+  return amount.toFixed(2).replace('.', ',')
 }

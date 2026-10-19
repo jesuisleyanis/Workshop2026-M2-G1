@@ -24,6 +24,8 @@ export interface Account {
   id: string
   owner: string | null
   label: string | null
+  /** IBAN fictif (`iban_fake` côté payment-api), affiché tel quel. */
+  iban: string | null
   balance: number
   currency: string
 }

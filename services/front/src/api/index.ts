@@ -14,7 +14,18 @@ export function createEndpoints(client: ApiClient) {
     listTransactions: async (signal?: AbortSignal): Promise<Transaction[]> =>
       parseTransactions(await client.request('/api/v1/transactions', { signal })),
     createTransaction: async (req: TransferRequest): Promise<Transaction> =>
-      parseTransaction(await client.request('/api/v1/transactions', { method: 'POST', body: req })),
+      // L'UI raisonne en euros / IBAN affiché ; payment-api attend des ids de compte
+      // entiers et un montant en centimes (TransactionIn : src_account, dst_account, amount_cents).
+      parseTransaction(
+        await client.request('/api/v1/transactions', {
+          method: 'POST',
+          body: {
+            src_account: Number(req.from_account),
+            dst_account: Number(req.to_account),
+            amount_cents: Math.round(req.amount * 100),
+          },
+        }),
+      ),
   }
 }
 
