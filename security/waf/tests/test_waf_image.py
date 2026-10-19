@@ -7,7 +7,8 @@ trois backends factices répondent sous les noms `front`, `payment-api` et `auth
 Ce qui est prouvé ici, et que les tests de texte (test_nginx_conf.py) ne peuvent pas prouver :
   * la conf rendue par l'entrypoint de l'image est acceptée par nginx (`nginx -t`) ;
   * le CRS bloque (403) et le journal d'audit reçoit le blocage ;
-  * une IP écrite dans le DOSSIER monté (par renommage, comme lineinfile) est bloquée après reload ;
+  * une IP écrite dans le DOSSIER monté (par renommage, comme le moteur de remédiation) est
+    bloquée SANS commande de reload : le WAF se recharge seul ; une liste invalide ne le casse pas ;
   * X-Forwarded-For envoyé par le client est écrasé ; /metrics, /internal/*, /api/inconnu = 404
     sans atteindre un backend ;
   * le journal d'audit est tronqué au seuil, et nginx continue d'y écrire ;
@@ -114,10 +115,6 @@ class Waf:
     def exec(self, *cmd: str) -> str:
         return _docker("exec", self.name, *cmd).stdout
 
-    def reload(self) -> None:
-        self.exec("nginx", "-s", "reload")
-        time.sleep(1.5)     # les anciens workers terminent leurs requêtes, les nouveaux lisent la liste
-
 
 @pytest.fixture(scope="module")
 def stack(tmp_path_factory):
@@ -134,7 +131,7 @@ def stack(tmp_path_factory):
                 "--network-alias", "front", "--network-alias", "payment-api", "--network-alias", "auth",
                 STUB_IMAGE, "python", "-c", STUB)
         waf = Waf(waf_name, network, blocklist)
-        waf.start("AUDIT_LOG_MAX_BYTES=1048576", "AUDIT_ROTATE_INTERVAL_S=1")
+        waf.start("AUDIT_LOG_MAX_BYTES=1048576", "AUDIT_ROTATE_INTERVAL_S=1", "BLOCKLIST_WATCH_INTERVAL_S=1")
         yield waf, stub, blocklist
     finally:
         _docker("rm", "-f", waf_name, stub, check=False)
@@ -206,23 +203,77 @@ def test_audit_log_keeps_no_request_headers(stack):
     assert "TOKEN-ZQ9-SECRET" not in raw
 
 
-def test_ip_written_by_rename_in_the_mounted_directory_is_blocked_after_reload(stack):
-    """Le playbook réécrit le fichier par renommage (lineinfile) : le WAF doit voir la nouvelle
-    liste parce que c'est le DOSSIER qui est monté."""
+def _wait_status(waf: Waf, path: str, expected: int, timeout: float = 20.0) -> int:
+    deadline = time.time() + timeout
+    status = waf.get(path)[0]
+    while status != expected and time.time() < deadline:
+        time.sleep(0.5)
+        status = waf.get(path)[0]
+    return status
+
+
+def _rename_write(blocklist: Path, text: str, name: str = "blocked_ips.conf") -> None:
+    tmp = blocklist / f".{name}.tmp"
+    tmp.write_text(text, encoding="utf-8", newline=chr(10))
+    os.replace(tmp, blocklist / name)                   # nouvel inode : ce que fait le moteur
+
+
+def test_ip_written_by_rename_is_blocked_without_any_reload_command(stack):
+    """Le moteur n'a pas de `docker exec` : il écrit le fichier (renommage atomique) et le WAF se
+    recharge seul (98-blocklist-watch.sh). Aucun `nginx -s reload` n'est lancé ici."""
     waf, _, blocklist = stack
     source_ip = json.loads(waf.get("/")[2])["real_ip"]
-    target, tmp = blocklist / "blocked_ips.conf", blocklist / ".blocked_ips.conf.tmp"
 
-    tmp.write_text(f"{source_ip} 1;\n", encoding="utf-8")
-    os.replace(tmp, target)                             # nouvel inode, comme Ansible
-    waf.reload()
-    assert waf.get("/")[0] == 403
+    _rename_write(blocklist, f"{source_ip} 1; # list=permanent incident=pytest" + chr(10))
+    assert _wait_status(waf, "/", 403) == 403
     assert waf.get("/api/v1/accounts")[0] == 403
 
-    tmp.write_text("# vide\n", encoding="utf-8")
-    os.replace(tmp, target)
-    waf.reload()
+    _rename_write(blocklist, "# vide" + chr(10))        # retrait (reset.sh) : repris tout seul aussi
+    assert _wait_status(waf, "/", 200) == 200
+
+
+def test_the_real_engine_writer_is_understood_by_nginx(stack):
+    """Même code que le moteur de remédiation (remediation/actions/blocklist.py), vrai nginx."""
+    import asyncio
+    import sys
+
+    pytest.importorskip("httpx")
+    sys.path.insert(0, str(WAF_DIR.parents[1] / "remediation"))
+    try:
+        from actions.blocklist import BlocklistFile
+    except ImportError as exc:  # dépendances du moteur absentes de cet environnement
+        pytest.skip(f"moteur de remédiation non importable : {exc}")
+    finally:
+        sys.path.pop(0)
+    waf, _, blocklist = stack
+    source_ip = json.loads(waf.get("/")[2])["real_ip"]
+    result = asyncio.run(BlocklistFile(blocklist / "blocked_ips.conf").add(source_ip, deny_list="permanent", incident_id="pytest-engine"))
+    assert result.changed is True
+    assert _wait_status(waf, "/", 403) == 403
+    _rename_write(blocklist, "# vide" + chr(10))
+    assert _wait_status(waf, "/", 200) == 200
+
+
+def test_an_invalid_list_never_breaks_the_waf(stack):
+    waf, _, blocklist = stack
+    _rename_write(blocklist, "ceci n'est pas une liste de blocage valide" + chr(10))
+    time.sleep(3)                                        # plusieurs tours de veille
+    assert waf.get("/")[0] == 200                        # l'ancienne conf reste en service
+    assert "invalide" in _docker("logs", waf.name, check=False).stderr
+    _rename_write(blocklist, "# vide" + chr(10))
+    time.sleep(2)
     assert waf.get("/")[0] == 200
+
+
+def test_any_conf_file_in_the_directory_is_part_of_the_list(stack):
+    waf, _, blocklist = stack
+    source_ip = json.loads(waf.get("/")[2])["real_ip"]
+    _rename_write(blocklist, f"{source_ip} 1;" + chr(10), name="manual.conf")
+    try:
+        assert _wait_status(waf, "/", 403) == 403
+    finally:
+        (blocklist / "manual.conf").unlink(missing_ok=True)
+    assert _wait_status(waf, "/", 200) == 200
 
 
 def test_audit_log_is_truncated_at_the_threshold_and_nginx_keeps_writing(stack):

@@ -14,8 +14,9 @@ security/waf/
 ├── templates/conf.d/
 │   ├── default.conf.template          # serveur : routage, liste de blocage, refus explicites
 │   └── logging.conf.template          # access log JSON (contrat §1) sur stdout
-├── blocklist/blocked_ips.conf         # liste de deny rechargeable (gérée par la remédiation) ; le DOSSIER est monté
+├── blocklist/                         # DOSSIER monté (ro ici, rw côté remédiation) ; blocked_ips.conf y est écrit à l'exécution (non versionné)
 ├── docker-entrypoint.d/97-audit-rotate.sh  # borne le journal d'audit (troncature au seuil)
+├── docker-entrypoint.d/98-blocklist-watch.sh  # recharge nginx quand la liste change (nginx -t d'abord)
 ├── Dockerfile.exporter                # image du service waf-exporter
 ├── waf_exporter.py                    # journal d'audit -> resilience_waf_blocked_total + event waf_blocked
 ├── requirements.txt                   # dépendances de l'exporter
@@ -86,17 +87,15 @@ Le WAF n'est pas `read_only` : l'entrypoint de l'image rend sa conf et son certi
 
 ## Interface de blocage IP (consommée par la remédiation)
 
-L'action `waf_block_ip` / `waf_blacklist_ip` du moteur de remédiation (playbook `infra/ansible/playbooks/waf_deny_ip.yml`) :
+Le moteur de remédiation n'a **aucun moyen de joindre le WAF** (ni `docker exec` : `docker-socket-proxy` n'autorise que quatre appels ; ni signal). Le contrat est donc un **dossier partagé** :
 
-1. ajoute une ligne `"<ip> 1;"` dans `security/waf/blocklist/blocked_ips.conf` **sur l'hôte**. C'est le **dossier** `security/waf/blocklist/` qui est monté (en lecture seule : un WAF compromis ne peut pas débloquer une source) sur `/etc/nginx/blocklist/`. Un montage du *fichier* seul garderait l'ancien inode quand l'hôte Linux réécrit le fichier par renommage (`lineinfile` d'Ansible) : l'action serait marquée réussie sans que nginx voie la nouvelle liste. Le playbook lit les variables que le moteur envoie : `deny_ip`, `deny_list`, `incident_id` ;
-2. déclenche un rechargement à chaud : `docker exec resilience-g1-waf-1 nginx -s reload`.
+1. **Le moteur écrit** (actions `waf_block_ip` / `waf_blacklist_ip`, `remediation/actions/blocklist.py`) une ligne `<ip> 1; # list=… incident=… ts=…` dans `security/waf/blocklist/blocked_ips.conf`, par **renommage atomique** (fichier temporaire du même dossier + `os.replace`), idempotent. L'IP est validée, plafonnée (`BLOCKLIST_MAX_ENTRIES`) et jamais une adresse de `NEVER_BLOCK_IPS`.
+2. **Le WAF lit** ce dossier monté en **lecture seule** sur `/etc/nginx/blocklist/` (`include /etc/nginx/blocklist/*.conf` dans le bloc `geo`) : un WAF compromis ne peut pas débloquer une source. C'est le **dossier**, pas le fichier, qui est monté : un montage du fichier seul garderait l'ancien inode après un renommage (action « réussie », IP non bloquée).
+3. **Le WAF se recharge seul** : `docker-entrypoint.d/98-blocklist-watch.sh` (tâche de fond, toutes les secondes) compare l'empreinte des `*.conf`, lance `nginx -t` puis `nginx -s reload`. **Une liste invalide ne casse jamais le WAF** : `nginx -t` échoue, la conf en service reste inchangée, l'erreur part sur stderr (« liste de blocage invalide, rechargement annulé ») et la même liste n'est pas retestée tant qu'elle ne change pas.
 
-Les requêtes des IP listées reçoivent **403** (renvoyé avant ModSecurity : pas d'event `waf_blocked`, c'est un blocage de source, pas une règle CRS). **Toute modification du fichier doit être suivie d'un reload**, y compris un retrait manuel. Interface stable — ne pas changer le format sans mettre à jour `remediation/` et `docs/contracts.md`.
+Les requêtes des IP listées reçoivent **403** (renvoyé avant ModSecurity : pas d'event `waf_blocked`, c'est un blocage de source, pas une règle CRS). **Plus de reload manuel** : toute modification du dossier (y compris un retrait à la main ou `attacks/reset.sh`, qui remplace le fichier par renommage) est reprise en 1-2 s. Sur un hôte Linux, `make up` rend le dossier inscriptible à l'uid du moteur (`prepare-blocklist`). Interface stable — ne pas changer le format sans mettre à jour `remediation/` et `docs/contracts.md`. Le playbook `infra/ansible/playbooks/waf_deny_ip.yml` écrit dans le même dossier : c'est le geste de l'**opérateur** (PRA), plus un appel du moteur.
 
-> État de la chaîne automatique (suivi au ROADMAP, **I11**) : le nom de variable du playbook est aligné sur le moteur (`deny_ip`)
-> et l'écriture-par-renommage est vue par nginx (testé sur la vraie image). **Reste ouvert** : `docker exec … nginx -s reload` n'est
-> pas autorisé par `docker-socket-proxy`, et le detector n'émet pas encore `source_ip`. L'action `waf_block_ip` n'est donc pas
-> vérifiée de bout en bout : le composant WAF n'est pas marqué ✅ tant que l'e2e `web_attack` n'est pas vert.
+> **I13 (à vérifier sur le PC attaquant)** : en Docker Desktop, le WAF voit les clients de l'hôte sous l'IP de passerelle du réseau `edge` (observé : `172.24.0.1` pour une attaque lancée depuis l'hôte). Bloquer cette IP bloque donc aussi les autres clients de l'hôte. À contrôler avec l'IP réellement vue pour le PC attaquant sur le hotspot avant la démo.
 
 ## Observabilité (fonction SOC)
 

@@ -13,6 +13,8 @@ import pytest
 import yaml
 
 from actions.docker_proxy import DockerProxy
+from actions.base import ActionError
+from actions.blocklist import BlocklistResult
 from actions.runner import RunnerResult
 from broker_helpers import capture_logs  # noqa: F401  (réexporté pour les tests)
 from config import Settings
@@ -22,6 +24,11 @@ from journal import Journal
 from models import IncomingEvent
 from timeline import Broker
 from verify import VerifyResult
+
+def waf_blocked_entry(ip: str) -> list[str]:
+    """Une entrée Loki [horodatage, ligne] pour un événement waf_blocked (contrat §1)."""
+    return ["1", json.dumps({"level": "WARNING", "service": "waf", "event": "waf_blocked", "client_ip": ip})]
+
 
 TOKEN = "t0ken-" + "x" * 32
 TABLE_PATH = Path(__file__).resolve().parent.parent / "decision_table.yml"
@@ -75,6 +82,23 @@ class FakeRunner:
         return RunnerResult(ok=self.ok, rc=0 if self.ok else 2, changed=self.changed, detail="fake")
 
 
+class FakeBlocklist:
+    """Liste de blocage du WAF simulée : enregistre (ip, deny_list, incident_id), idempotente."""
+
+    def __init__(self, ok: bool = True) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+        self.ips: set[str] = set()
+        self.ok = ok
+
+    async def add(self, ip: str, *, deny_list: str, incident_id: str) -> BlocklistResult:
+        if not self.ok:
+            raise ActionError("écriture de la liste de blocage impossible (fake)")
+        self.calls.append((ip, deny_list, incident_id))
+        changed = ip not in self.ips
+        self.ips.add(ip)
+        return BlocklistResult(changed=changed, entries=len(self.ips))
+
+
 class FakeNetwork:
     """Mock HTTP unique : docker-socket-proxy, auth, loki. Enregistre toutes les requêtes."""
 
@@ -82,7 +106,7 @@ class FakeNetwork:
         self.requests: list[httpx.Request] = []
         self.restart_status = 204
         self.auth_status = 200
-        self.loki_values: list[list[str]] = [["1", "waf_blocked"]]
+        self.loki_values: list[list[str]] = [waf_blocked_entry("203.0.113.7")]
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -149,6 +173,7 @@ class Env:
         self.http = httpx.AsyncClient(transport=httpx.MockTransport(self.net.handler))
         self.settings = settings or make_settings()
         self.runner = FakeRunner(ok=runner_ok)
+        self.blocklist = FakeBlocklist(ok=runner_ok)  # runner_ok=False : l'écriture WAF échoue aussi
         self.verifier = FakeVerifier(verify, self.clock, verify_cost_s)
         self.journal = Journal(":memory:")
         self.broker = Broker()
@@ -162,12 +187,17 @@ class Env:
         self.services = Services(
             http=self.http,
             docker=DockerProxy(self.http, self.settings.docker_proxy_url, self.settings.docker_allow_recreate),
-            runner=self.runner, verifier=self.verifier)
+            runner=self.runner, verifier=self.verifier, blocklist=self.blocklist)
         self.log = logging.getLogger("remediation-test")
         self.log.propagate = False
         self.engine = RemediationEngine(
             table=table or load_decision_table(TABLE_PATH), settings=self.settings, journal=self.journal,
             broker=self.broker, services=self.services, log=self.log, clock=self.clock, sleep=fake_sleep)
+
+    @property
+    def mutations(self) -> list:
+        """Tout ce qui a modifié le SI hors Docker : écritures de la blocklist + playbooks."""
+        return [*self.blocklist.calls, *self.runner.calls]
 
     async def run(self, event: IncomingEvent):
         sub = await self.engine.handle_event(event)

@@ -8,7 +8,7 @@ ROOT    := $(shell pwd)
 # `python`. Forçable : make seed PYTHON=py
 PYTHON  ?= $(shell python3 -c "" >/dev/null 2>&1 && echo python3 || echo python)
 
-.PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front test-waf audit package decrypt \
+.PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front test-waf prepare-blocklist audit package decrypt \
         traffic train capture-baseline capture-attack calibrate ml-tools test-ml
 
 ML_DATA  := ml/training/data
@@ -32,11 +32,18 @@ help: ## Affiche cette aide
 decrypt: ## Déchiffre les secrets SOPS vers .env
 	scripts/decrypt-secrets.sh
 
-up: decrypt ## Lève la stack (profil démo minimal)
+up: decrypt prepare-blocklist ## Lève la stack (profil démo minimal)
 	$(COMPOSE) --profile demo up -d --build
 
-up-full: decrypt ## Lève la stack complète (observabilité + full)
+up-full: decrypt prepare-blocklist ## Lève la stack complète (observabilité + full)
 	$(COMPOSE) --profile demo --profile full up -d --build
+
+# Le moteur de remédiation (uid 10001) écrit la liste de blocage du WAF dans ce dossier monté :
+# sur un hôte Linux il doit lui être inscriptible (sans effet sous Windows/Docker Desktop).
+prepare-blocklist:
+	@mkdir -p security/waf/blocklist
+	@test -f security/waf/blocklist/blocked_ips.conf || echo "# vide" > security/waf/blocklist/blocked_ips.conf
+	@chmod 0777 security/waf/blocklist 2>/dev/null || true
 
 down: ## Arrête et nettoie la stack
 	$(COMPOSE) --profile demo --profile full --profile attack --profile ai down

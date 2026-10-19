@@ -38,7 +38,8 @@ Exigences voisines servies : R2 (via `verify_tx`), R4/R20 (flux SSE pour la supe
 | **Table de décision** | `decision_table.yml` (chemin : `DECISION_TABLE`), schéma `version / defaults / rules`. Validée au démarrage : table invalide → le service **refuse de démarrer**. Exposée en lecture par `GET /decision-table`. | `contracts.md` §4 |
 | **`verify_tx`** | Script exécuté sans shell, avec timeout ; exit 0 = retour à la normale. | `contracts.md` « Codes retour scripts » |
 | **docker-socket-proxy** | HTTP vers `DOCKER_PROXY_URL` (défaut `http://docker-socket-proxy:2375`). | §5 |
-| **Ansible (ansible-runner)** | Playbooks nommés `waf_deny_ip.yml` et `pg_restore.yml` sous `ANSIBLE_PRIVATE_DATA_DIR/project/`. | §5.5 |
+| **Ansible (ansible-runner)** | Playbook nommé `pg_restore.yml` sous `ANSIBLE_PRIVATE_DATA_DIR/project/`. | §5.5 |
+| **Liste de blocage du WAF** | Dossier `security/waf/blocklist/` monté **en écriture** (`BLOCKLIST_PATH`) : le moteur y écrit `<ip> 1;` par renommage atomique (`actions/blocklist.py`) ; le WAF le monte en lecture seule et se recharge seul. Lecture de Loki (réseau `obs`) pour la source. | §5.5 |
 | **API interne du service `auth`** | `POST {AUTH_URL}/internal/tighten-rate-limit`, headers `X-Internal-Token` (= `INTERNAL_TOKEN`) et `Idempotency-Key` (= `incident_id`). | action `tighten_rate_limit` |
 | **Loki** | `GET {LOKI_URL}/loki/api/v1/query_range`, lecture seule (action `confirm_waf_block`). | action `confirm_waf_block` |
 | **Webhook opérateur** (optionnel) | `POST NOTIFY_WEBHOOK_URL` à l'escalade. | action `notify_operator` |
@@ -110,7 +111,8 @@ Image `python:3.12-slim` multi-stage (aucun outil de build dans l'image finale),
 
 ### 5.5 Autres bornes de privilège
 
-- **Ansible** : seuls les playbooks `waf_deny_ip.yml` et `pg_restore.yml` (`ALLOWED_PLAYBOOKS`) peuvent être lancés ; ni le nom du playbook ni ses variables ne viennent de l'événement (autre playbook → refus, `rc=-1`).
+- **Ansible** : seul le playbook `pg_restore.yml` (`ALLOWED_PLAYBOOKS`) peut être lancé ; ni le nom du playbook ni ses variables ne viennent de l'événement (autre playbook → refus, `rc=-1`).
+- **Blocage d'IP** : le moteur n'a ni `docker exec` ni accès à l'hôte (le proxy n'autorise que 4 appels, aucun ne recharge nginx). Il écrit la liste (`actions/blocklist.py` : IP validée, écriture atomique, plafond `BLOCKLIST_MAX_ENTRIES`, commentaire assaini) et **le WAF se recharge seul** (`98-blocklist-watch.sh` : `nginx -t` avant `reload`). L'IP vient, selon la table : de l'événement (`from_event`), de **Loki** (`from_loki` : source la plus fréquente des `waf_blocked` des 120 s, issue de `$remote_addr` donc non falsifiable) ou d'une IP littérale ; jamais une adresse de `NEVER_BLOCK_IPS`. Seul droit ajouté : écrire dans ce dossier (et lire Loki).
 - **Blocage IP** : l'IP vient de `source_ip` (validée comme IP littérale unique : ni réseau, ni nom, ni texte libre, car elle finit dans une configuration Nginx). Refus de bloquer `NEVER_BLOCK_IPS` (défaut : `127.0.0.1`, `::1`, `192.168.137.1`, l'hôte du réseau `RESILIENCE-G1`), ni boucle locale / non spécifiée / multicast.
 - **Restauration** : `backup` = `latest` ou un nom simple (regex, pas de `/`, pas de `..` : pas de path traversal).
 - **`verify_tx`** : lancé sans shell (`create_subprocess_exec`), groupe de processus dédié, timeout qui tue aussi les enfants.
@@ -187,7 +189,8 @@ Documentés tels quels, sans correction (phase fondations) :
 
 - **Proxy Docker dans Compose** : `infra/compose/docker-compose.yml` utilise `tecnativa/docker-socket-proxy` avec `CONTAINERS: 1` et `POST: 1`, ce que `proxy/haproxy.cfg` identifie comme plus large que nécessaire (`POST /containers/create` serait permis côté proxy). La liste blanche côté client du moteur reste active, mais la configuration stricte `proxy/haproxy.cfg` n'est pas, à ce jour, celle câblée dans Compose.
 - **Variables d'environnement Compose** : le service `remediation` de Compose définit `VERIFY_TX_CMD`, alors que `config.py` lit `VERIFY_TX_PATH` ; il ne définit ni `INCIDENTS_DB` explicite, ni montage Ansible. Les valeurs par défaut de l'image (`VERIFY_TX_PATH=/opt/scripts/verify_tx`, `ANSIBLE_PRIVATE_DATA_DIR=/opt/ansible`, `INCIDENTS_DB=/var/lib/remediation/incidents.db`) s'appliquent donc.
-- **Noms de playbooks** : le moteur attend `waf_deny_ip.yml` et `pg_restore.yml` ; `infra/ansible/playbooks/` contient `block_ip.yml` et `restore_pg_dump.yml`. Alignement à faire côté infra.
+- **Playbook `pg_restore.yml`** : Ansible dans un conteneur non-root ne peut pas atteindre le réseau `data`/l'hôte comme le suppose le contrat (même faiblesse que l'ancien blocage d'IP, désormais traité sans Ansible). À reprendre, voir ROADMAP.
+- **Sources de blocage pour `service_flood` / `auth_abuse`** : leur table utilise encore `from_event` et le detector n'émet pas `source_ip` : le blocage échoue (puis l'action suivante s'exécute). `from_loki` couvre `web_attack` ; l'étendre aux autres types demande une requête Loki sur l'access log (`http_request`).
 - **Champ `source_ip`** : extension additive du contrat §3 (absente du schéma contractuel), à émettre par le detector / Alertmanager pour que `source: from_event` fonctionne ; sans lui, `waf_block_ip` / `waf_blacklist_ip` échouent proprement (« aucune IP source »).
 - **Authentification** : bearer statique partagé (`REMEDIATION_TOKEN`), et non le JWT HS256 décrit dans « Conventions d'API REST » ; pas de préfixe `/api/v1` sur les routes. Choix volontaire pour une API service-à-service interne.
 - **Idempotence de `tighten_rate_limit`** : repose sur le service `auth`, qui doit dédoublonner sur `Idempotency-Key`.

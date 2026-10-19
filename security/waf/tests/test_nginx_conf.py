@@ -136,37 +136,70 @@ def _waf_volumes() -> dict[str, tuple[str, str]]:
     return out
 
 
-def test_blocklist_is_mounted_as_a_directory_read_only():
-    """Régression : un bind mount de FICHIER garde l'ancien inode après le renommage de
-    `lineinfile` sur un hôte Linux -> l'IP serait « bloquée » côté Ansible mais pas côté nginx."""
-    include = re.search(r"include\s+(\S+blocked_ips\.conf);", CONF).group(1)
-    mount_dir = str(Path(include).parent).replace("\\", "/")
+def _remediation_volumes() -> dict[str, tuple[str, str]]:
+    out = {}
+    for src, dst, mode in re.findall(r"-\s+(\S+):(/\S+?)(?::(ro|rw))?\s*$", _service_block("remediation"), re.M):
+        out[dst] = (src, mode or "rw")
+    return out
+
+
+def test_blocklist_is_mounted_as_a_directory_read_only_in_the_waf():
+    """Régression : un bind mount de FICHIER garde l'ancien inode après un renommage (celui du
+    moteur de remédiation) -> l'IP serait « bloquée » côté moteur mais pas côté nginx."""
+    include = re.search(r"include\s+(\S+/)\*\.conf;", CONF).group(1)           # glob : dossier entier
+    mount_dir = include.rstrip("/")
     volumes = _waf_volumes()
     assert mount_dir in volumes, f"{mount_dir} non monté (volumes : {sorted(volumes)})"
     source, mode = volumes[mount_dir]
     assert mode == "ro"
     assert not Path(source).suffix, f"la source du montage doit être un dossier, pas un fichier : {source}"
-    assert (WAF / "blocklist" / "blocked_ips.conf").is_file()
-    assert "/etc/nginx/blocked_ips.conf" not in "".join(volumes) + COMPOSE
+    assert (WAF / "blocklist").is_dir()
+    assert "/etc/nginx/blocked_ips.conf" not in COMPOSE
     assert "COPY --chown=root:root blocklist/ /etc/nginx/blocklist/" in DOCKERFILE
 
 
-def test_playbook_writes_in_the_mounted_directory():
+def test_remediation_and_waf_share_the_same_blocklist_directory():
+    waf_source = _waf_volumes()["/etc/nginx/blocklist"][0]
+    remediation = _remediation_volumes()
+    target, (source, mode) = next((t, v) for t, v in remediation.items() if "blocklist" in t)
+    assert source == waf_source and mode == "rw"          # le moteur écrit, le WAF lit
+    path_env = re.search(r"BLOCKLIST_PATH:\s*(\S+)", _service_block("remediation")).group(1)
+    assert path_env == f"{target}/blocked_ips.conf"
+
+
+def test_remediation_can_reach_loki_but_is_not_on_the_edge_network():
+    """La source du blocage vient de Loki (réseau obs) ; jamais le réseau exposé."""
+    networks = re.search(r"networks:\s*\[([^\]]*)\]", _service_block("remediation")).group(1)
+    names = {n.strip() for n in networks.split(",")}
+    assert "obs" in names and "edge" not in names
+    assert not re.search(r"^\s+ports:", _service_block("remediation"), re.M)
+
+
+def test_waf_does_not_need_docker_to_reload():
+    """Le WAF se recharge seul : ni socket Docker, ni verbe de proxy de plus pour le moteur."""
+    assert "docker.sock" not in _service_block("waf")
+    haproxy = (ROOT / "remediation" / "proxy" / "haproxy.cfg").read_text(encoding="utf-8")
+    assert "exec" not in haproxy and "kill" not in haproxy
+
+
+def test_engine_no_longer_runs_a_playbook_for_the_waf():
+    runner = (ROOT / "remediation" / "actions" / "runner.py").read_text(encoding="utf-8")
+    assert re.search(r"ALLOWED_PLAYBOOKS = frozenset\(\{PLAYBOOK_PG_RESTORE\}\)", runner)
+    assert "run_playbook" not in ENGINE_WAF and "blocklist.add" in ENGINE_WAF
+
+
+def test_operator_playbook_stays_consistent_with_the_mounted_directory():
+    """waf_deny_ip.yml ne sert plus qu'à l'opérateur (PRA) : il doit écrire dans le même dossier."""
     m = re.search(r'blocked_file:\s*"\{\{ project_root \}\}/(\S+)"', PLAYBOOK)
-    assert m
-    assert m.group(1) == "security/waf/blocklist/blocked_ips.conf"
-    source = _waf_volumes()["/etc/nginx/blocklist"][0]
-    assert source.endswith("security/waf/blocklist")
+    assert m and m.group(1) == "security/waf/blocklist/blocked_ips.conf"
+    assert _waf_volumes()["/etc/nginx/blocklist"][0].endswith("security/waf/blocklist")
+    assert not re.search(r"blocked_ip", PLAYBOOK)
 
 
-def test_playbook_reads_the_variable_the_engine_sends():
-    """Le moteur envoie `deny_ip` (remediation/actions/waf.py) : le playbook doit le lire,
-    sinon l'assert « IP absente » échoue et le blocage n'a jamais lieu."""
-    assert '{"deny_ip": ip, "deny_list": self.deny_list, "incident_id": ctx.incident_id}' in ENGINE_WAF
-    assert not re.search(r"blocked_ip", PLAYBOOK)
-    for var in ("deny_ip", "deny_list", "incident_id"):
-        assert re.search(rf"^    {var}:", PLAYBOOK, re.M), var
-    assert 'line: "{{ deny_ip }} 1;"' in PLAYBOOK
+def test_blocklist_runtime_file_is_not_versioned():
+    ignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "security/waf/blocklist/*.conf" in ignore
+    assert (WAF / "blocklist" / ".gitkeep").is_file()
 
 
 def test_reset_script_empties_the_mounted_file():
@@ -277,7 +310,7 @@ ROTATE = WAF / "docker-entrypoint.d" / "97-audit-rotate.sh"
 
 
 def test_rotation_script_is_installed_executable_in_the_image():
-    assert "97-audit-rotate.sh /docker-entrypoint.d/97-audit-rotate.sh" in DOCKERFILE
+    assert "docker-entrypoint.d/97-audit-rotate.sh docker-entrypoint.d/98-blocklist-watch.sh /docker-entrypoint.d/" in DOCKERFILE
     assert "--chmod=0755" in DOCKERFILE
     assert "AUDIT_LOG_MAX_BYTES" in DOCKERFILE
     # le seuil laisse de la marge dans le tmpfs de 64 Mo du compose

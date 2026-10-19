@@ -40,3 +40,8 @@ remediation/incidents.db
 
 # Captures ML en cours (écrites en .tmp puis renommées si valides)
 ml/training/data/*.tmp
+
+# Liste de blocage du WAF : écrite à l'exécution par le moteur de remédiation (jamais commitée)
+security/waf/blocklist/*.conf
+security/waf/blocklist/.*.tmp
+security/waf/blocklist/*.tmp

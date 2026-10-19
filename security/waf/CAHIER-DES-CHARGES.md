@@ -12,7 +12,7 @@ Pare-feu applicatif en frontal, **seul point exposé** de la plateforme. Couvre 
 - ModSecurity + jeu de règles OWASP CRS actifs.
 - TLS auto-signé (environnement de labo fermé), généré au premier démarrage par l'image OWASP CRS.
 - Image `owasp/modsecurity-crs` **épinglée** (CRS 4 LTS), non-root, ports internes 8080/8443.
-- **Liste de blocage IP rechargeable à chaud** (`blocklist/blocked_ips.conf`, dossier monté en lecture seule), pilotée par le moteur de remédiation.
+- **Liste de blocage IP rechargeable à chaud** (`blocklist/blocked_ips.conf`, dossier monté en lecture seule), **écrite par le moteur de remédiation, rechargée par le WAF lui-même** (`98-blocklist-watch.sh`).
 - `waf_exporter.py` (service compose `waf-exporter`) : suit le journal d'audit ModSecurity et transforme les blocages en métrique `resilience_waf_blocked_total{rule}` et en log event `waf_blocked` (contrat §1).
 
 Hors périmètre : terminaison TLS de production, gestion de certificats signés, répartition de charge.
@@ -22,7 +22,7 @@ Hors périmètre : terminaison TLS de production, gestion de certificats signés
 | Interface | Direction | Détail |
 |---|---|---|
 | HTTP 80/443 | entrée | Seul point exposé ; transmet `X-Forwarded-For` |
-| `blocklist/blocked_ips.conf` | entrée (remédiation) | `waf_block_ip`/`waf_blacklist_ip` (extravars `deny_ip`, `deny_list`, `incident_id`) ajoutent `"<ip> 1;"` puis `nginx -s reload` |
+| `blocklist/*.conf` | entrée (remédiation) | `waf_block_ip`/`waf_blacklist_ip` écrivent `"<ip> 1;"` par renommage atomique ; le WAF détecte le changement, `nginx -t` puis `nginx -s reload` (aucun `docker exec`) |
 | access log JSON `json_waf` | sortie | Récupéré par Promtail → Loki (fonction SOC) |
 | `resilience_waf_blocked_total{rule}` | sortie | Métrique §2 (`waf-exporter:9188`), alimente `waf_blocked_per_s` du vecteur ML |
 | journal d'audit ModSecurity JSON | sortie (volume tmpfs `waf-logs`) | Lu en lecture seule par waf-exporter ; parties `AHZ`, 403 seulement |
@@ -42,9 +42,8 @@ Hors périmètre : terminaison TLS de production, gestion de certificats signés
 ## Critères d'acceptation
 
 - [x] Une requête légitime vers le front est relayée (200, HTTP et HTTPS).
-- [ ] Une requête légitime vers `/api/v1/*` est relayée **et répond 200** (critère d'origine, non affaibli). Aujourd'hui le
-  WAF route bien (testé contre des backends factices) mais, sur cette branche, payment-api/auth ne démarrent pas
-  (ROADMAP I12, corrigé sur `fix/stack-startup`) : on obtient 502. À cocher une fois la stack complète levée.
+- [x] Une requête légitime vers `/api/v1/*` est relayée **et répond 200** (critère d'origine, non affaibli) : login, comptes
+  et virement de `verify_tx` passent par le WAF sur la stack complète (200/201), ROADMAP I12 levé.
 - [x] Une charge typée injection est bloquée par le CRS (SQLi 403 règle 942100, XSS 403 règle 941100) et comptée ;
   la traversée de chemin est refusée (400) par Nginx avant le CRS.
 - [x] Une IP écrite **par renommage** dans `blocklist/blocked_ips.conf` (comme `lineinfile`) + reload reçoit 403 ; retirée + reload, 200 (testé sur la vraie image, `test_waf_image.py`).
@@ -55,9 +54,9 @@ Hors périmètre : terminaison TLS de production, gestion de certificats signés
   déclarée renvoient 404 au niveau du WAF, sans atteindre un backend (testé).
 - [x] Le journal d'audit ne peut pas remplir son tmpfs : tronqué au seuil, nginx continue d'écrire, waf-exporter relit
   depuis le début (testé).
-- [ ] **Chaîne `web_attack` de bout en bout** (attaque → détection → `waf_block_ip` → IP bloquée → `verify_tx` OK) : bloquée
-  par ROADMAP **I11** (reload via `docker-socket-proxy`, `source_ip` du detector). Le WAF n'est pas ✅ au ROADMAP tant que
-  `RESILIENCE_E2E=1 pytest tests/e2e -k web_attack` n'est pas vert.
+- [x] **Chaîne `web_attack` de bout en bout** (attaque → detector → `confirm_waf_block` → `waf_blacklist_ip` depuis Loki →
+  liste écrite → le WAF se recharge seul → la source reçoit 403 → vérification `verify_tx` OK côté moteur) :
+  `RESILIENCE_E2E=1 pytest tests/e2e -k web_attack` vert sur la stack complète (ROADMAP I11).
 
 ## Tests
 

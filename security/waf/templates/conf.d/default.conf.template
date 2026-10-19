@@ -11,13 +11,14 @@ server_tokens off;
 more_clear_headers Server;
 
 # --- Liste de blocage IP rechargeable à chaud -----------------------------------------
-# L'action de remédiation waf_block_ip / waf_blacklist_ip (playbook Ansible waf_deny_ip.yml)
-# ajoute "<ip> 1;" dans security/waf/blocklist/blocked_ips.conf puis `nginx -s reload`.
+# L'action de remédiation waf_block_ip / waf_blacklist_ip (moteur de remédiation)
+# écrit "<ip> 1;" dans security/waf/blocklist/blocked_ips.conf ; le script de veille
+# docker-entrypoint.d/98-blocklist-watch.sh détecte le changement et recharge nginx (nginx -t d'abord).
 # Le DOSSIER blocklist/ est monté en lecture seule (pas le fichier : voir le Dockerfile).
 # Interface documentée dans le README.
 geo $blocked_source {
     default 0;
-    include /etc/nginx/blocklist/blocked_ips.conf;
+    include /etc/nginx/blocklist/*.conf;      # glob : aucun fichier = liste vide, nginx démarre quand même
 }
 
 server {

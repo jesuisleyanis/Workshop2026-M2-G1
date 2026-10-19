@@ -13,19 +13,20 @@ from actions.base import ActionContext, ActionError, ActionParamError
 from actions.docker_proxy import DockerProxy, DockerProxyError
 from actions.runner import AnsibleRunnerAdapter
 from broker_helpers import capture_logs
-from conftest import FakeNetwork, FakeRunner, make_event, make_settings
+from conftest import FakeBlocklist, FakeNetwork, FakeRunner, make_event, make_settings
 from journal import Journal
 from verify import ScriptVerifier
 
 pytestmark = pytest.mark.anyio
 
 
-def ctx_for(http, settings=None, event=None, **extra) -> ActionContext:
+def ctx_for(http, settings=None, event=None, blocklist=None, **extra) -> ActionContext:
     settings = settings or make_settings()
     return ActionContext(
         settings=settings, http=http,
         docker=DockerProxy(http, settings.docker_proxy_url, settings.docker_allow_recreate),
-        runner=FakeRunner(), log=logging.getLogger("remediation-test"), event=event, incident_id="inc-1", extra=extra)
+        runner=FakeRunner(), log=logging.getLogger("remediation-test"), event=event, incident_id="inc-1", extra=extra,
+        blocklist=blocklist if blocklist is not None else FakeBlocklist())
 
 
 def client(net: FakeNetwork) -> httpx.AsyncClient:

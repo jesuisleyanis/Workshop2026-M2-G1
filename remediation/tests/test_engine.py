@@ -24,8 +24,8 @@ async def test_service_flood_blocks_ip_then_restarts_and_never_restores(make_env
     inc = env.incident(sub.incident_id)
 
     assert env.action_types(sub.incident_id) == ["waf_block_ip", "restart_service"]
-    assert [c[0] for c in env.runner.calls] == ["waf_deny_ip.yml"]  # jamais pg_restore
-    assert env.runner.calls[0][1]["deny_ip"] == "203.0.113.7"
+    assert env.blocklist.calls == [("203.0.113.7", "temporary", sub.incident_id)]
+    assert env.runner.calls == []  # jamais pg_restore, plus de playbook pour le WAF
     assert ("POST", "/containers/cid-payment-api/restart") in env.net.docker_calls()
     assert inc["status"] == "closed"
 
@@ -119,13 +119,13 @@ async def test_verification_retries_until_platform_is_healthy(make_env):
 async def test_cooldown_blocks_second_close_action(make_env):
     env = make_env(table=make_table(cooldown=60), verify=[True])
     first = await env.run(make_event("service_flood"))
-    actions_before = len(env.runner.calls)
+    actions_before = len(env.mutations)
     env.clock.advance(10)  # 10 s < 60 s
 
     second = await env.run(make_event("service_flood"))
     assert second.decision == "cooldown"
     assert second.incident_id == first.incident_id
-    assert len(env.runner.calls) == actions_before  # aucune ré-action
+    assert len(env.mutations) == actions_before  # aucune ré-action
     assert len(env.journal.list_incidents()) == 1
 
     env.clock.advance(61)  # cooldown écoulé -> nouvel incident autorisé
@@ -156,7 +156,7 @@ async def test_replayed_event_id_is_idempotent(make_env):
     first = await env.run(ev)
     again = await env.engine.handle_event(ev)
     assert again.decision == "replayed" and again.incident_id == first.incident_id
-    assert len(env.runner.calls) == 1
+    assert len(env.mutations) == 1
 
 
 async def test_max_attempts_triggers_escalation(make_env):
@@ -189,7 +189,7 @@ async def test_dry_run_executes_nothing_destructive(make_env):
     inc = env.incident(sub.incident_id)
 
     assert sub.dry_run is True
-    assert env.runner.calls == []          # ni WAF, ni pg_restore
+    assert env.mutations == []          # ni WAF, ni pg_restore
     assert env.net.docker_calls() == []    # ni restart
     assert env.verifier.calls == 0
     assert inc["status"] == "dry_run" and inc["dry_run"] is True
@@ -202,7 +202,7 @@ async def test_dry_run_forced_by_environment_cannot_be_disabled_by_table(make_en
 
     env = make_env(table=make_table(dry_run=False), settings=make_settings(dry_run=True))
     sub = await env.run(make_event("data_corruption", source_ip=None))
-    assert env.runner.calls == [] and env.incident(sub.incident_id)["status"] == "dry_run"
+    assert env.mutations == [] and env.incident(sub.incident_id)["status"] == "dry_run"
 
 
 async def test_dry_run_still_allows_read_only_actions(make_env):
@@ -210,7 +210,7 @@ async def test_dry_run_still_allows_read_only_actions(make_env):
     sub = await env.run(make_event("web_attack"))
     inc = env.incident(sub.incident_id)
     assert [a["result"] for a in inc["actions"]] == ["success", "dry_run"]  # confirm (lecture) vs blacklist (bloquée)
-    assert env.runner.calls == []
+    assert env.mutations == []
 
 
 # ---------------------------------------------------------------- sécurité des actions
@@ -219,7 +219,7 @@ async def test_waf_never_blocks_protected_or_missing_ips(make_env):
     sub = await env.run(make_event("service_flood", source_ip="192.168.137.1"))  # l'hôte lui-même
     first = env.incident(sub.incident_id)["actions"][0]
     assert first["result"] == "failure" and "protégée" in first["detail"]
-    assert env.runner.calls == []
+    assert env.mutations == []
 
     env2 = make_env(verify=[True])
     sub2 = await env2.run(make_event("service_flood", source_ip=None))

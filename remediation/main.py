@@ -21,6 +21,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from resilience_common import get_logger
 
 from actions.docker_proxy import DockerProxy
+from actions.blocklist import BlocklistFile
 from actions.runner import AnsibleRunnerAdapter
 from config import Settings
 from decision import DecisionTable, DecisionTableError, load_decision_table
@@ -62,6 +63,7 @@ def create_app(
             docker=DockerProxy(http, settings.docker_proxy_url, settings.docker_allow_recreate),
             runner=AnsibleRunnerAdapter(settings.ansible_private_data_dir),
             verifier=ScriptVerifier(settings.verify_tx_path, settings.verify_timeout_s),
+            blocklist=BlocklistFile(settings.blocklist_path, settings.blocklist_max_entries),
         )
     engine = RemediationEngine(table=table, settings=settings, journal=journal, broker=broker,
                                services=services, log=log)

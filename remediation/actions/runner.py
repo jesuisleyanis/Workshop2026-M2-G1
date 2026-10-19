@@ -5,9 +5,8 @@ variables ne viennent de l'événement entrant (pas d'exécution arbitraire).
 Les playbooks vivent dans infra/ansible/playbooks et sont montés en lecture seule sous
 `<ANSIBLE_PRIVATE_DATA_DIR>/project/`. Contrat attendu (à implémenter côté infra) :
 
-  waf_deny_ip.yml   extravars: deny_ip, deny_list (temporary|permanent), incident_id
-                    -> écrit l'IP dans le fichier de deny (idempotent : lineinfile)
-                       puis `nginx -s reload`. `changed=false` si déjà présente.
+  (le blocage d'IP du WAF n'est plus un playbook : le moteur écrit la liste lui-même, voir
+   actions/blocklist.py ; waf_deny_ip.yml ne sert plus qu'à l'opérateur, hors moteur.)
   pg_restore.yml    extravars: backup ("latest" | nom de dump), incident_id
                     -> pg_restore du dump planifié (réseau data).
 """
@@ -18,9 +17,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-PLAYBOOK_WAF_DENY = "waf_deny_ip.yml"
 PLAYBOOK_PG_RESTORE = "pg_restore.yml"
-ALLOWED_PLAYBOOKS = frozenset({PLAYBOOK_WAF_DENY, PLAYBOOK_PG_RESTORE})
+ALLOWED_PLAYBOOKS = frozenset({PLAYBOOK_PG_RESTORE})
 
 
 @dataclass

@@ -49,9 +49,10 @@ services:
       - "80:8080"
       - "443:8443"
     volumes:
-      # DOSSIER (pas le fichier) en lecture seule : la liste est écrite SUR L'HÔTE (playbook
-      # waf_deny_ip.yml, par renommage) ; un bind mount de fichier garderait l'ancien inode
-      # sur un hôte Linux. Un WAF compromis ne peut pas débloquer lui-même une source.
+      # DOSSIER (pas le fichier) en lecture seule : la liste est écrite par le moteur de
+      # remédiation (même dossier, monté en écriture là-bas) par renommage atomique ; un bind
+      # mount de fichier garderait l'ancien inode. Le WAF surveille le dossier et se recharge
+      # (98-blocklist-watch.sh). Un WAF compromis ne peut pas débloquer lui-même une source.
       - ../../security/waf/blocklist:/etc/nginx/blocklist:ro
       - waf-logs:/var/log/modsec            # journal d'audit ModSecurity -> waf-exporter
     depends_on: [front, payment-api, auth]
@@ -199,8 +200,15 @@ services:
   remediation:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: remediation/Dockerfile }
-    networks: [app]            # jamais sur edge
+    # jamais sur edge. `obs` : lecture de Loki (source du blocage, confirm_waf_block) — voir
+    # ROADMAP I14 (segmentation) : pas de port publié, Loki n'écoute que sur ce réseau interne.
+    networks: [app, obs]
+    volumes:
+      # Liste de blocage du WAF : seul dossier inscriptible du moteur avec son journal. Même
+      # dossier que le WAF (qui le monte en lecture seule). `make up` le prépare (droits).
+      - ../../security/waf/blocklist:/var/lib/waf-blocklist
     environment:
+      BLOCKLIST_PATH: /var/lib/waf-blocklist/blocked_ips.conf
       DOCKER_PROXY_URL: http://docker-socket-proxy:2375
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}

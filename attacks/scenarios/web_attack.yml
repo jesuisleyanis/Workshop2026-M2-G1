@@ -13,7 +13,7 @@ parametres:
   payloads: "charges CRS standards de test (ex. ?id=1' OR '1'='1, ../../etc/passwd)"
 signal_attendu:
   metrique: "resilience_waf_blocked_total{rule} en hausse"
-  loki: "{service=\"waf\"} |= \"waf_blocked\""
+  loki: "{service=\"waf-exporter\"} |= \"waf_blocked\""
 incident_type: web_attack
 remediation_attendue:
   - confirm_waf_block

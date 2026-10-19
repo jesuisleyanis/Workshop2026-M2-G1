@@ -75,6 +75,7 @@ class Services:
     docker: Any
     runner: Any
     verifier: Verifier
+    blocklist: Any = None  # BlocklistPort : liste de blocage du WAF
 
 
 def incident_key(event: IncomingEvent) -> str:
@@ -225,7 +226,8 @@ class RemediationEngine:
         s = self.settings
         ctx = ActionContext(settings=s, http=self.services.http, docker=self.services.docker,
                             runner=self.services.runner, log=self.log, event=inc.event,
-                            incident_id=inc.incident_id, dry_run=inc.dry_run, extra=extra or {})
+                            incident_id=inc.incident_id, dry_run=inc.dry_run, extra=extra or {},
+                            blocklist=self.services.blocklist)
         started = self.clock()
         first = inc.first_action_at is None
         if first:  # MTTD = détection -> première action

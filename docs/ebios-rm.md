@@ -166,7 +166,7 @@ Aucun risque Élevé ou Critique ne subsiste. Les quatre risques Moyens (SO1-SO5
 | Risque | Mesure | Type | Composant / preuve | Statut |
 |---|---|---|---|---|
 | SO1 | **Détection ML** du pic multi-signaux (score >= 0,6296 ou garde-fou z >= 12,97) puis événement `POST /events` | Détective | `ml/detector/core.py`, `ml/training/artifacts/v1.0.0/` (hash `sha256` vérifié au chargement) | [R] |
-| SO1 | **Blocage de la source** (deny-list WAF, `never_block_ips` protège l'hôte) puis **redémarrage** de `payment-api` via proxy (liste blanche `payment-api`, `auth`, `front`) | Correctif | `remediation/actions/waf.py`, `docker.py`, `docker_proxy.py` | [R] code ; playbook `waf_deny_ip.yml` et proxy [S] |
+| SO1 | **Blocage de la source** (deny-list WAF, `never_block_ips` protège l'hôte) puis **redémarrage** de `payment-api` via proxy (liste blanche `payment-api`, `auth`, `front`) | Correctif | `remediation/actions/waf.py`, `docker.py`, `docker_proxy.py` | [R] code + test e2e (liste écrite par le moteur, WAF rechargé seul) ; proxy [S] |
 | SO1, SO2, SO3 | **WAF** CRS : filtrage applicatif, seul point exposé, log JSON, métrique `resilience_waf_blocked_total` | Préventif, détectif | `security/waf/nginx.conf`, `waf_exporter.py` (5 tests verts) | [R] conf ; déploiement [S] |
 | SO2 | **Rate-limit** `/login` 10/min par IP, resserrable à chaud (x0,5, plancher 1/min). Le moteur envoie une `Idempotency-Key` = incident, mais **`auth` ne la dédoublonne pas encore** : une nouvelle tentative du moteur re-multiplie la limite (10 -> 5 -> 2 -> 1/min) | Préventif, correctif | `services/auth/.../ratelimit.py`, `remediation/actions/rate_limit.py` | [R] ; dédoublonnage [S], écart à corriger |
 | SO2 | Hachage des mots de passe, JWT 15 min à `alg` épinglé | Préventif | `services/auth`, `payment_api/security.py` | [R] |
@@ -200,7 +200,7 @@ Aucun risque Élevé ou Critique ne subsiste. Les quatre risques Moyens (SO1-SO5
 | Priorité | Action | Pilier | Échéance |
 |---|---|---|---|
 | P1 | Livrer `infra/compose` (3 réseaux, durcissement) et lancer `audit.sh` | Infra / Cyber | J2 |
-| P1 | Playbooks `waf_deny_ip.yml`, `pg_restore.yml` + **job de dump planifié** (condition du RPO) | Infra | J3 |
+| P1 | Playbook `pg_restore.yml` + **job de dump planifié** (condition du RPO) ; `waf_deny_ip.yml` n'est plus que le geste opérateur | Infra | J3 |
 | P1 | `scripts/verify_tx` et rejeu des 4 scénarios, relevé des MTTR | Dév / Infra | J3-J4 |
 | P2 | Clé age réelle + `secrets.enc.env` ; relecture `gitleaks` | Cyber | J2 |
 | P2 | Règles SOC Loki sur les `event` normalisés | Cyber / Infra | J3 |

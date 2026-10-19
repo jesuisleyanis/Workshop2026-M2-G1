@@ -14,14 +14,16 @@ RUN mkdir -p /var/log/modsec && chown nginx:nginx /var/log/modsec
 COPY --chown=root:root templates/conf.d/default.conf.template templates/conf.d/logging.conf.template \
      /etc/nginx/templates/conf.d/
 # Liste de blocage par défaut (vide). Le compose monte le DOSSIER security/waf/blocklist/
-# par-dessus (jamais le fichier seul : un bind mount de fichier garde l'ancien inode quand
-# l'hôte Linux réécrit le fichier par renommage, comme lineinfile d'Ansible -> la liste vue
-# par nginx ne bougerait plus, alors que l'action est marquée réussie).
+# par-dessus, en lecture seule (jamais le fichier seul : un bind mount de fichier garde
+# l'ancien inode quand l'écrivain réécrit le fichier par renommage -> la liste vue par nginx ne
+# bougerait plus, alors que l'action est marquée réussie). Le moteur de remédiation monte le
+# même dossier en écriture ; 98-blocklist-watch.sh recharge nginx quand le fichier change.
 COPY --chown=root:root blocklist/ /etc/nginx/blocklist/
-# Borne le journal d'audit (tmpfs) : lancé en tâche de fond par l'entrypoint de l'image.
+# Scripts lancés en tâche de fond par l'entrypoint de l'image : 97 borne le journal d'audit
+# (tmpfs), 98 recharge nginx quand le moteur de remédiation modifie la liste de blocage.
 # CRLF retirés : un checkout Windows (autocrlf) casserait le shebang.
-COPY --chown=root:root --chmod=0755 docker-entrypoint.d/97-audit-rotate.sh /docker-entrypoint.d/97-audit-rotate.sh
-RUN sed -i 's/\r$//' /docker-entrypoint.d/97-audit-rotate.sh
+COPY --chown=root:root --chmod=0755 docker-entrypoint.d/97-audit-rotate.sh docker-entrypoint.d/98-blocklist-watch.sh /docker-entrypoint.d/
+RUN sed -i 's/\r$//' /docker-entrypoint.d/97-audit-rotate.sh /docker-entrypoint.d/98-blocklist-watch.sh
 USER nginx
 
 ENV PORT=8080 \

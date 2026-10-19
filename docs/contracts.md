@@ -187,7 +187,7 @@ rules:
   - incident_type: web_attack
     actions:
       - { type: confirm_waf_block, params: {} }
-      - { type: waf_blacklist_ip,  params: { source: "from_event" } }
+      - { type: waf_blacklist_ip,  params: { source: "from_loki" } }
     verify: verify_tx
     escalation: notify_operator
 

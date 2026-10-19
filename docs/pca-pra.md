@@ -45,7 +45,7 @@ Contrainte de rétention : les gauges `resilience_mttd/mttr_seconds` ne gardent 
 | Borne par action | 300 s (`action_timeout_s`) | `remediation/config.py` |
 
 - `D` typique : 15 à 45 s (une à trois collectes avant que le score franchisse le seuil 0,6296) [M].
-- Reprise nominale : actions + vérification. Pour `service_flood` : playbook WAF + reload (estimé 5-10 s), `verify_tx`, redémarrage `payment-api` (estimé 5-15 s), `verify_tx` ; **MTTR estimé 15-30 s** [M].
+- Reprise nominale : actions + vérification. Pour `service_flood` : écriture de la liste + rechargement automatique du WAF (estimé 2-5 s), `verify_tx`, redémarrage `payment-api` (estimé 5-15 s), `verify_tx` ; **MTTR estimé 15-30 s** [M].
 - **Borne dure avant escalade** : 3 tentatives, 2 cooldowns de 60 s -> de l'ordre de **3 à 5 min** (estimation à confirmer [M]). Au-delà, le moteur journalise `remediation_failed` et notifie l'opérateur : la reprise **n'est plus** autonome.
 
 ### 3.2 Objectifs par service
@@ -114,7 +114,7 @@ Après >= 10 rejeux par scénario : `RTO_retenu = arrondi_sup(1,5 x p95(D + MTTR
 ### 5.1 `service_flood` et `auth_abuse` (automatique, sans perte de données)
 
 1. Détection : le detector émet `anomaly_detected` et un `POST /events` (token `REMEDIATION_TOKEN`) au format `docs/contracts.md` §3. Idempotence : un `event_id` rejoué ou un incident déjà en cours est ignoré ; le cooldown de 60 s évite la ré-action.
-2. Le moteur applique la règle : **blocage de l'IP source** (`waf_deny_ip.yml` : écriture dans `security/waf/blocklist/blocked_ips.conf`, idempotent, puis reload Nginx ; refus de bloquer `127.0.0.1`, `::1`, `192.168.137.1`). Pour `auth_abuse` : appel `POST /internal/tighten-rate-limit` (token `INTERNAL_TOKEN`).
+2. Le moteur applique la règle : **blocage de l'IP source** (le moteur écrit `security/waf/blocklist/blocked_ips.conf` — idempotent, renommage atomique —, le WAF détecte le changement et recharge Nginx seul, 1-2 s ; pour `web_attack` l'IP est lue dans Loki (`from_loki`) ; refus de bloquer `127.0.0.1`, `::1`, `192.168.137.1`). Pour `auth_abuse` : appel `POST /internal/tighten-rate-limit` (token `INTERNAL_TOKEN`).
 3. `service_flood` : **redémarrage** de `payment-api` via `docker-socket-proxy` (`POST /containers/{id}/restart`, services autorisés : `payment-api`, `auth`, `front`).
 4. `verify_tx` (jusqu'à 5 essais x 3 s) : OK -> incident clos, MTTR publié ; KO -> action suivante, puis nouvelle tentative après cooldown, puis **escalade** après 3.
 5. Remise en l'état de référence (après essai) : `attacks/reset.sh` vide la deny-list et re-seed. En exploitation réelle, **lever** les mesures (deny-list, rate-limit) est une décision humaine post-incident (§8, R5).
@@ -155,11 +155,11 @@ Déclencheurs : escalade `remediation_failed`, moteur ou proxy en panne, type `u
 
 | Playbook | Appelé par | Variables | État au 2026-10-19 |
 |---|---|---|---|
-| `waf_deny_ip.yml` | `waf_block_ip`, `waf_blacklist_ip` | `deny_ip`, `deny_list` (temporary / permanent), `incident_id` | [S] `infra/ansible/playbooks/` vide |
+| `waf_deny_ip.yml` | **opérateur seulement** (plus appelé par le moteur : voir `remediation/actions/blocklist.py`) | `deny_ip`, `deny_list`, `incident_id` | [R] `infra/ansible/playbooks/` |
 | `pg_restore.yml` | `restore_pg_dump` | `backup`, `incident_id` | [S] idem |
 | playbooks de déploiement et de reprise (R6) | opérateur / `make up` | — | [S] |
 
-`ALLOWED_PLAYBOOKS` ne contient **que** ces deux noms : tout autre playbook est refusé par le moteur.
+`ALLOWED_PLAYBOOKS` ne contient **que** `pg_restore.yml` : tout autre playbook est refusé par le moteur. Le blocage d'IP du WAF n'est plus un playbook (ADR 0004).
 **À trancher à l'écriture** : le mécanisme de rechargement de Nginx. `docker-socket-proxy` n'autorise que `restart` ; **ne pas élargir le proxy à `exec`** pour y parvenir (cela ouvrirait une exécution arbitraire dans les conteneurs). Privilégier un volume partagé pour la deny-list et un signal/restart du seul WAF.
 
 ## 6. Responsabilités

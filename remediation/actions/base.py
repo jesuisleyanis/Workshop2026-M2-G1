@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 if TYPE_CHECKING:  # pragma: no cover
     import httpx
 
+    from actions.blocklist import BlocklistPort
     from actions.docker_proxy import DockerProxy
     from actions.runner import AnsibleRunnerPort
     from config import Settings
@@ -50,6 +51,7 @@ class ActionContext:
     incident_id: str
     dry_run: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
+    blocklist: "BlocklistPort | None" = None  # écriture de la liste de blocage du WAF
 
 
 class Action(ABC):
