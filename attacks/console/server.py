@@ -17,6 +17,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 from fastapi import FastAPI, HTTPException
@@ -37,6 +38,14 @@ STATIC = Path(__file__).resolve().parent / "static"
 MAX_DURATION = 60
 MAX_RATE = 100
 DEFAULT_TARGET = os.environ.get("RESILIENCE_TARGET", "https://192.168.137.1")
+# Périmètre offensif du projet (CLAUDE.md : « pas d'action offensive hors du réseau du projet »).
+# Seuls ces hôtes sont des cibles valides ; surchargeable par ATTACK_ALLOWED_HOSTS (séparateur
+# espace/virgule) pour un autre banc d'essai INTERNE. Toute autre cible -> 422 (fail closed).
+_DEFAULT_ALLOWED_HOSTS = "192.168.137.1 127.0.0.1 localhost waf"
+ALLOWED_HOSTS = {
+    h for h in re.split(r"[\s,]+", os.environ.get("ATTACK_ALLOWED_HOSTS", _DEFAULT_ALLOWED_HOSTS))
+    if h
+}
 # Scénarios lançables depuis la console (data_corruption est opérateur-only : exclu).
 LAUNCHABLE = {"service_flood", "auth_abuse", "web_attack"}
 DRY = os.environ.get("RESILIENCE_CONSOLE_DRY") == "1"
@@ -103,6 +112,13 @@ def validate_target(target: str) -> str:
     target = (target or "").strip() or DEFAULT_TARGET
     if not _TARGET_RE.match(target):
         raise HTTPException(422, f"Cible invalide : {target!r} (URL http(s) attendue)")
+    host = urlsplit(target).hostname or ""
+    if host not in ALLOWED_HOSTS:
+        raise HTTPException(
+            422,
+            f"Cible hors périmètre projet : {host!r} "
+            f"(autorisés : {', '.join(sorted(ALLOWED_HOSTS))} ; cf. ATTACK_ALLOWED_HOSTS)",
+        )
     return target.rstrip("/")
 
 

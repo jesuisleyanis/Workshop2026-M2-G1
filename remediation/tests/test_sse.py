@@ -6,7 +6,6 @@ import asyncio
 import json
 
 import pytest
-
 from conftest import make_event
 from timeline import frame, sse_stream
 

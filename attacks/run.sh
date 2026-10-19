@@ -59,6 +59,20 @@ done
 (( DURATION > 60 )) && DURATION=60
 (( RATE > 100 )) && RATE=100
 
+# Garde de périmètre : la cible DOIT appartenir au réseau du projet (CLAUDE.md : « pas d'action
+# offensive hors du réseau du projet »). Surchargeable via ATTACK_ALLOWED_HOSTS (liste d'hôtes
+# séparés par des espaces) pour un autre banc d'essai interne. Hors liste -> refus (fail closed).
+ALLOWED_HOSTS="${ATTACK_ALLOWED_HOSTS:-192.168.137.1 127.0.0.1 localhost waf}"
+ALLOWED_HOSTS="${ALLOWED_HOSTS//,/ }"   # tolère la virgule comme séparateur (cf. console)
+target_host="${TARGET#*://}"      # retire le schéma
+target_host="${target_host%%/*}"  # retire le chemin
+target_host="${target_host%%:*}"  # retire le port
+# -F : comparaison littérale (les points de l'IP ne doivent pas être pris pour des métacaractères).
+if ! printf ' %s ' ${ALLOWED_HOSTS} | grep -qF " ${target_host} "; then
+  echo "Cible hors périmètre projet : ${target_host} (autorisés : ${ALLOWED_HOSTS} ; cf. ATTACK_ALLOWED_HOSTS)" >&2
+  exit 2
+fi
+
 echo "$(date -Iseconds) START ${SCENARIO} target=${TARGET} duration=${DURATION}s rate=${RATE}/s" | tee -a "${RUNLOG}"
 : > "${PIDFILE}"
 

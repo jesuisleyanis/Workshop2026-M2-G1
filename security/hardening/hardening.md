@@ -7,11 +7,11 @@
 | Mesure | Détail | Vérifié par |
 |---|---|---|
 | Image slim | `python:3.12-slim`, `nginx:alpine`, multi-stage pour les fronts | revue Dockerfile |
-| Utilisateur non-root | `USER app` (uid ≥ 1000), pas de process en root | `audit.sh` |
-| Capabilities | `cap_drop: ALL` ; ajout explicite uniquement si indispensable (aucun `cap_add` à ce jour, voir ci-dessous) | `audit.sh` compose, `infra/tests/test_compose_hardening.py` |
-| `no-new-privileges` | `security_opt: ["no-new-privileges:true"]` | compose |
+| Utilisateur non-root | `USER app` (uid ≥ 1000), pas de process en root | revue Dockerfile |
+| Capabilities | `cap_drop: ALL` ; ajout explicite uniquement si indispensable (aucun `cap_add` à ce jour, voir ci-dessous) | `audit.sh` (ancre présente), `infra/tests/test_compose_hardening.py` (par service) |
+| `no-new-privileges` | `security_opt: ["no-new-privileges:true"]` | compose, `infra/tests/test_compose_hardening.py` |
 | Système de fichiers | `read_only: true` + `tmpfs` pour les écritures nécessaires | compose |
-| Limites ressources | `cpus`, `mem_limit` par service (16 Go partagés) | compose |
+| Limites ressources | `mem_limit` par service ; `cpus` sur les services Python (ancre `x-pylimits`) — 16 Go partagés | compose |
 | Healthcheck | `/health` sur chaque service ; `HEALTHCHECK` dans le Dockerfile | Dockerfile |
 | Réseau | services internes sur `app`/`data`/`obs` ; `data` en `internal: true` ; **seul le WAF** publie des ports | `audit.sh` |
 | Secrets | via SOPS uniquement, injectés en env au runtime ; aucun secret en image | gitleaks + `audit.sh` |

@@ -7,7 +7,6 @@ import stat
 
 import httpx
 import pytest
-
 from actions import REGISTRY, build_action
 from actions.base import ActionContext, ActionError, ActionParamError
 from actions.docker_proxy import DockerProxy, DockerProxyError
@@ -116,7 +115,7 @@ class RecreateNet(FakeNetwork):
 
     def handler(self, request):
         self.requests.append(request)
-        p, m = request.url.path, request.method
+        p = request.url.path
         if p == "/containers/json":
             return httpx.Response(200, json=[{"Id": "old1234567890"}])
         if p == "/containers/old1234567890/json":

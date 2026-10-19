@@ -8,7 +8,6 @@ Sauté si fastapi n'est pas installé (voir attacks/console/requirements.txt).
 from __future__ import annotations
 
 import importlib
-import os
 import sys
 from pathlib import Path
 
@@ -65,6 +64,15 @@ def test_invalid_target_is_rejected(client):
     c, _ = client
     assert c.post("/api/run", json={"scenario": "service_flood",
                                     "target": "file:///etc/passwd"}).status_code == 422
+
+
+def test_offperimeter_target_is_rejected(client):
+    # Garde de périmètre : une URL http(s) bien formée mais hors réseau du projet est refusée.
+    c, _ = client
+    r = c.post("/api/run", json={"scenario": "service_flood",
+                                 "target": "https://example.com"})
+    assert r.status_code == 422
+    assert "périmètre" in r.json()["detail"]
 
 
 def test_no_concurrent_runs(client):

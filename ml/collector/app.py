@@ -12,8 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from prometheus_client import Counter, Gauge, REGISTRY
-
+from prometheus_client import REGISTRY, Counter, Gauge
 from resilience_common import get_logger
 from resilience_common.metrics import instrument
 

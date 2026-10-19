@@ -13,22 +13,21 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
+import http_metrics
 import httpx
+from actions.docker_proxy import DockerProxy
+from actions.runner import AnsibleRunnerAdapter
+from alertmanager import AlertmanagerPayload, to_events
+from config import Settings
+from decision import DecisionTable, DecisionTableError, load_decision_table
+from engine import RemediationEngine, Services
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from resilience_common import get_logger
-
-from actions.docker_proxy import DockerProxy
-from alertmanager import AlertmanagerPayload, to_events
-from actions.runner import AnsibleRunnerAdapter
-from config import Settings
-from decision import DecisionTable, DecisionTableError, load_decision_table
-import http_metrics
-from engine import RemediationEngine, Services
 from journal import Journal
 from models import IncomingEvent
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from resilience_common import get_logger
 from timeline import Broker, sse_stream
 from verify import ScriptVerifier
 

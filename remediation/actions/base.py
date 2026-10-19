@@ -15,11 +15,11 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:  # pragma: no cover
     import httpx
+    from config import Settings
+    from models import IncomingEvent
 
     from actions.docker_proxy import DockerProxy
     from actions.runner import AnsibleRunnerPort
-    from config import Settings
-    from models import IncomingEvent
 
 
 class ActionError(RuntimeError):

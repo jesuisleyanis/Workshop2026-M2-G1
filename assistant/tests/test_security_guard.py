@@ -9,11 +9,10 @@ import re
 from pathlib import Path
 
 import pytest
-from fastapi.routing import APIRoute
-from fastapi.testclient import TestClient
-
 from app.main import create_app
 from app.store import open_store
+from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 
 APP_DIR = Path(__file__).parent.parent / "app"
 ROOT = APP_DIR.parent

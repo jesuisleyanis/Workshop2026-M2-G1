@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import pytest
 import yaml
-from resilience_common import IncidentType
-
 from conftest import TABLE_PATH, make_table
 from decision import DecisionTableError, load_decision_table, parse_decision_table
+from resilience_common import IncidentType
 
 EXPECTED = {
     IncidentType.SERVICE_FLOOD: ["waf_block_ip", "restart_service"],

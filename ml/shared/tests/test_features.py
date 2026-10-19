@@ -3,8 +3,8 @@
 import math
 
 import pytest
-
 from resilience_common import IncidentType
+
 from ml.shared.features import (
     FEATURE_NAMES,
     N_FEATURES,
