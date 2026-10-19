@@ -7,9 +7,8 @@ import time
 from datetime import datetime, timezone
 
 import pytest
-from fastapi.testclient import TestClient
-
 from conftest import TOKEN, Env, make_event, make_settings, make_table
+from fastapi.testclient import TestClient
 from main import create_app
 
 AUTH = {"Authorization": f"Bearer {TOKEN}"}

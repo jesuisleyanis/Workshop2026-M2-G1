@@ -99,6 +99,10 @@ services:
     networks: [app]
     environment:
       VITE_API_BASE: "/api/v1"
+    # nginx non-root n'écrit que dans /tmp (pid + temp paths, voir services/front/docker/nginx.conf) :
+    # racine en lecture seule possible, comme le dashboard.
+    read_only: true
+    tmpfs: ["/tmp"]
     mem_limit: 128m
 
   payment-api:
@@ -201,7 +205,10 @@ services:
     networks: [app]
     volumes:
       - ../../remediation/proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro   # socket monté UNIQUEMENT ici, en lecture seule
+      # `:ro` n'empêche AUCUN appel d'API sur un socket Unix : la restriction effective vient
+      # de la liste blanche haproxy (5 couples). Ce montage sert cette médiation ; le moteur
+      # de remédiation, lui, ne monte jamais le socket et parle HTTP au proxy.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     mem_limit: 64m
 
   remediation:
@@ -290,6 +297,8 @@ services:
     networks: [obs]
     volumes:
       - ../promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      # Accès API complet au démon (découverte des logs de conteneurs) : `:ro` ne le limite pas.
+      # Risque accepté — hors moteur de remédiation, réseau `obs` interne uniquement.
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command: ["-config.file=/etc/promtail/config.yml"]
     mem_limit: 128m
@@ -299,7 +308,7 @@ services:
     image: grafana/grafana:11.3.0
     networks: [obs]
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD requis (voir security/sops/secrets.example.env) — jamais de repli silencieux sur "admin"}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - ../grafana/provisioning:/etc/grafana/provisioning:ro
@@ -327,7 +336,7 @@ services:
     networks: [obs]
     volumes:
       - /:/rootfs:ro
-      - /var/run:/var/run:ro
+      - /var/run:/var/run:ro   # expose aussi docker.sock à cadvisor (métriques) ; réseau `obs` interne
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
     mem_limit: 128m

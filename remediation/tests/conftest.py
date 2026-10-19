@@ -11,7 +11,6 @@ from typing import Any, Callable
 import httpx
 import pytest
 import yaml
-
 from actions.docker_proxy import DockerProxy
 from actions.runner import RunnerResult
 from broker_helpers import capture_logs  # noqa: F401  (réexporté pour les tests)

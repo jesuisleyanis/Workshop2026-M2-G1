@@ -26,8 +26,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
-
-from resilience_common import AnomalyEvent, anomaly_score as anomaly_score_gauge, get_logger
+from resilience_common import AnomalyEvent, get_logger
+from resilience_common import anomaly_score as anomaly_score_gauge
 
 from ml.detector.events import build_event
 from ml.detector.model import LoadedModel

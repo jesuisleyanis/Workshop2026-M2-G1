@@ -17,6 +17,7 @@
 | `REMEDIATION_TOKEN` | auth de `POST /events` | detector → remediation |
 | `INTERNAL_TOKEN` | auth de `/internal/*` | remediation → auth |
 | `SEED_PASSWORD` | mot de passe des comptes fictifs du seed | `make seed`, `scripts/verify_tx`, remediation (verify) |
+| `GRAFANA_PASSWORD` | mot de passe admin Grafana (requis : le compose échoue sans, plus de repli `admin`) | grafana |
 
 ## Mise en place (une fois par poste)
 
