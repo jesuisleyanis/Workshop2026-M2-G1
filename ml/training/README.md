@@ -77,16 +77,16 @@ il faut tout recapturer.
 
 | # | Commande | Effet |
 |---|---|---|
-| 1 | `make capture-baseline DURATION=30m` | joue 30 min de trafic légitime (`scripts/gen_normal_traffic.py`) puis écrit `data/baseline_real.csv` |
+| 1 | `make capture-baseline` (`DURATION=60m` par défaut) | joue 60 min de trafic légitime (`scripts/gen_normal_traffic.py`), capture dans un `.tmp` et ne remplace `data/baseline_real.csv` que s'il contient au moins 200 fenêtres (50 min à 15 s) |
 | 2 | `make train` | modèle sur la baseline réelle (held-out chronologique) |
-| 3 | `make capture-attack SC=service_flood` (puis `auth_abuse`, `web_attack`, `data_corruption`) | joue le scénario sur fond de trafic normal, ajoute ses fenêtres à `data/attacks_real.csv` (`label` = scénario) |
+| 3 | `make capture-attack SC=service_flood` (puis `auth_abuse`, `web_attack`, `data_corruption`) | joue le scénario (`ATTACK_S=20` s) sur fond de trafic normal ; étiquette **seulement** la fenêtre attaque + 30 s (retombée des `rate()`) et l'ajoute à `data/attacks_real.csv` via un `.tmp` |
 | 4 | `make calibrate` | seuil entre le normal et le pic le plus faible des attaques ; MTTD par scénario ; écrit `data/calibration.json` |
 | 5 | `make train` | ré-entraîne avec la calibration ; rapport `attaques RÉELLES` (détection, score max, routage) |
 | 6 | `git add ml/training/data/*.csv ml/training/data/calibration.json` puis `docker compose -f infra/compose/docker-compose.yml build detector` | l'image du detector embarque le modèle réel |
 
 Lecture des résultats de `calibrate` (code retour) :
 - **0** : séparable et MTTD <= `--max-mttd` (20 s) pour chaque passage de chaque scénario.
-- **1 — non séparable** : un scénario ne dépasse jamais le normal. Rien n'est écrit. Leviers : capturer un normal plus long/varié
+- **1 — non séparable** : un scénario ne dépasse jamais le normal. `calibration.json` n'est pas écrit, mais `data/calibration.report.json` l'est toujours et marque `"separable": false` sur le(s) scénario(s) en cause. Leviers : capturer un normal plus long/varié
   (débits différents via `--rps`), vérifier que le scénario produit bien ses métriques (`missing` dans le CSV), `--n-estimators`.
   Jamais un `if` codé en dur (R8).
 - **2 — MTTD trop long** : seuil écrit, mais un scénario met trop de fenêtres à franchir le seuil. Leviers : `--margin` plus bas

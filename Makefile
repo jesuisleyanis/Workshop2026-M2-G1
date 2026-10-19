@@ -11,7 +11,13 @@ LOADENV := set -a; [ -f .env ] && . ./.env; set +a;
         traffic train capture-baseline capture-attack calibrate
 
 ML_DATA  := ml/training/data
-DURATION ?= 30m
+# Baseline : 60 min = 240 fenêtres de 15 s (minimum MIN_ROWS = ml.training.dataset.MIN_TRAINING_ROWS)
+DURATION ?= 60m
+MIN_ROWS := 200
+# Durée d'un scénario (attacks/run.sh --duration, max 60) ; RATE_LAG = PROM_RATE_WINDOW,
+# délai avant que les rate() retombent après l'attaque
+ATTACK_S ?= 20
+RATE_LAG := 30
 
 help: ## Affiche cette aide
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -55,23 +61,39 @@ reset: ## Remet la cible à l'état "avant"
 	attacks/reset.sh
 
 # ---- ML : ré-entraînement sur vraies séries Prometheus (ml/training/README.md §6) ----
-traffic: ## Trafic légitime réaliste (DURATION=30m) — baseline et temps 1 de la démo
+traffic: ## Trafic légitime réaliste (DURATION=60m) — baseline et temps 1 de la démo
 	python3 scripts/gen_normal_traffic.py --duration $(DURATION)
 
-capture-baseline: ## Joue DURATION de trafic normal puis capture la baseline réelle
+# Les captures écrivent dans un .tmp et ne remplacent/complètent le CSV que si elles ont
+# réussi : un échec ne détruit jamais une capture précédente.
+capture-baseline: ## Joue DURATION (60m) de trafic normal puis capture la baseline réelle
 	python3 scripts/gen_normal_traffic.py --duration $(DURATION)
 	$(COMPOSE) exec -T collector python -m ml.collector.capture --last $(DURATION) \
-	  --label normal > $(ML_DATA)/baseline_real.csv
+	  --label normal > $(ML_DATA)/baseline_real.csv.tmp
+	@rows=$$(( $$(wc -l < $(ML_DATA)/baseline_real.csv.tmp) - 1 )); \
+	  if [ $$rows -lt $(MIN_ROWS) ]; then \
+	    echo "capture: $$rows fenêtres < $(MIN_ROWS) requises (DURATION trop courte ?) — baseline inchangée"; \
+	    rm -f $(ML_DATA)/baseline_real.csv.tmp; exit 1; fi; \
+	  mv $(ML_DATA)/baseline_real.csv.tmp $(ML_DATA)/baseline_real.csv; \
+	  echo "baseline : $$rows fenêtres -> $(ML_DATA)/baseline_real.csv"
 
-capture-attack: ## Joue le scénario SC (sur fond de trafic normal) et ajoute ses fenêtres
+# Fenêtre étiquetée = durée de l'attaque + RATE_LAG s (le temps que les rate() retombent),
+# pas les 90 s de trafic de fond : sinon le detection_rate réel serait dilué.
+capture-attack: ## Joue le scénario SC (ATTACK_S s, sur fond de trafic normal) et ajoute ses fenêtres
 	@test -n "$(SC)" || { echo "SC=<scenario> requis"; exit 1; }
-	@start=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+	@start_s=$$(date -u +%s); \
 	  python3 scripts/gen_normal_traffic.py --duration 90s & \
-	  attacks/run.sh $(SC); sleep 30; wait; \
-	  end=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
-	  hdr=$$( [ -s $(ML_DATA)/attacks_real.csv ] && echo --no-header ); \
-	  $(COMPOSE) exec -T collector python -m ml.collector.capture --start $$start --end $$end \
-	    --label $(SC) $$hdr >> $(ML_DATA)/attacks_real.csv
+	  attacks/run.sh $(SC) --duration $(ATTACK_S); sleep $(RATE_LAG); wait; \
+	  end_s=$$(( start_s + $(ATTACK_S) + $(RATE_LAG) )); \
+	  $(COMPOSE) exec -T collector python -m ml.collector.capture \
+	    --start $$(date -u -d @$$start_s +%Y-%m-%dT%H:%M:%SZ) \
+	    --end $$(date -u -d @$$end_s +%Y-%m-%dT%H:%M:%SZ) \
+	    --label $(SC) > $(ML_DATA)/attacks_real.csv.tmp || { rm -f $(ML_DATA)/attacks_real.csv.tmp; exit 1; }; \
+	  if [ -s $(ML_DATA)/attacks_real.csv ]; then \
+	    tail -n +2 $(ML_DATA)/attacks_real.csv.tmp >> $(ML_DATA)/attacks_real.csv; \
+	    rm -f $(ML_DATA)/attacks_real.csv.tmp; \
+	  else mv $(ML_DATA)/attacks_real.csv.tmp $(ML_DATA)/attacks_real.csv; fi; \
+	  echo "$(SC) ajouté à $(ML_DATA)/attacks_real.csv"
 
 train: ## Entraîne le modèle (vraie baseline + calibration si présentes)
 	python3 -m ml.training.train --version $(or $(VERSION),1.1.0) \

@@ -78,6 +78,9 @@ def test_not_separable_writes_nothing(setup, tmp_path):
     rc = main(["--normal", str(normal_csv), "--attacks", str(weak),
                "--model-dir", str(model_dir), "--out", str(out)])
     assert rc == 1 and not out.exists()
+    report = json.loads((tmp_path / "calibration.report.json").read_text(encoding="utf-8"))
+    assert report["separable"] is False and report["threshold"] is None
+    assert report["attacks"]["service_flood"]["separable"] is False  # le coupable est nommé
 
 
 def test_cli_end_to_end_calibrate_then_retrain(setup, tmp_path, capsys):
@@ -91,6 +94,8 @@ def test_cli_end_to_end_calibrate_then_retrain(setup, tmp_path, capsys):
     assert rc == 0
     calib = json.loads(out.read_text(encoding="utf-8"))
     assert calib["separable"] and calib["model_version"] == "c"
+    assert all(r["separable"] for r in calib["attacks"].values())
+    assert (tmp_path / "calibration.report.json").exists()
 
     # ré-entraînement avec la calibration : même modèle -> pas d'alerte d'empreinte
     capsys.readouterr()
