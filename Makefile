@@ -7,7 +7,7 @@ ROOT    := $(shell pwd)
 # Charge .env (produit par `make decrypt`) dans l'environnement d'une cible : SEED_PASSWORD, tokens...
 LOADENV := set -a; [ -f .env ] && . ./.env; set +a;
 
-.PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt
+.PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt model
 
 help: ## Affiche cette aide
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -15,10 +15,18 @@ help: ## Affiche cette aide
 decrypt: ## Déchiffre les secrets SOPS vers .env
 	scripts/decrypt-secrets.sh
 
-up: decrypt ## Lève la stack (profil démo minimal)
+model: ## Entraîne le modèle ML si l'artefact est absent (requis avant le build du detector)
+	@if [ -f ml/training/artifacts/model.joblib ] && [ -f ml/training/artifacts/baseline_stats.json ]; then \
+	  echo "== Modèle présent (ml/training/artifacts/) — pas de ré-entraînement =="; \
+	else \
+	  echo "== Entraînement du modèle (python -m ml.training.train) =="; \
+	  $(PYTHON) -m ml.training.train; \
+	fi
+
+up: decrypt model ## Lève la stack (profil démo minimal)
 	$(COMPOSE) --profile demo up -d --build
 
-up-full: decrypt ## Lève la stack complète (observabilité + full)
+up-full: decrypt model ## Lève la stack complète (observabilité + full)
 	$(COMPOSE) --profile demo --profile full up -d --build
 
 down: ## Arrête et nettoie la stack

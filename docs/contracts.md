@@ -56,13 +56,17 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `db_error` | payment-api | Erreur base de données |
 | `waf_blocked` | waf (via log Nginx/ModSec) | Requête bloquée par le CRS |
 | `anomaly_detected` | detector | Le score dépasse le seuil |
+| `model_version_drift` | detector | Version scikit-learn chargée ≠ version d'entraînement du modèle |
 | `remediation_started` | remediation | Début d'une action corrective |
 | `remediation_action` | remediation | Action unitaire exécutée |
 | `remediation_verified` | remediation | `verify_tx` repassé OK après action |
 | `remediation_failed` | remediation | Échec / escalade |
 | `assistant_index_built` | assistant | Index RAG (re)construit |
+| `assistant_index_empty` | assistant | Aucune source trouvée : index RAG vide |
+| `assistant_store_error` | assistant | Vector store (Chroma) non chargé / en erreur |
 | `assistant_question_answered` | assistant | Réponse fournie à une question opérateur |
 | `assistant_llm_unavailable` | assistant | Ollama injoignable — mode dégradé (lecture seule) |
+| `assistant_http_request` | assistant | Trace d'une requête HTTP sortante de l'assistant |
 
 ### Exemple
 

@@ -40,6 +40,11 @@ doit être recréé (`docker compose down -v` puis `make up`) ; les playbooks (`
 - Accès Docker **médié par `docker-socket-proxy`** (HAProxy, `remediation/proxy/haproxy.cfg`, ADR 0002) : liste blanche stricte de 5 couples méthode/chemin (`GET _ping`, `GET containers/json`, `GET containers/{id}/json`, `POST containers/{id}/restart`, `POST containers/{id}/kill?signal=HUP`), tout le reste → 403. Le socket est monté en lecture seule **uniquement** dans le proxy.
 - API `/events` du moteur **authentifiée** (token `REMEDIATION_TOKEN`), service **non exposé** sur `edge`.
 - Garde-fous applicatifs : `cooldown`, `max_attempts`, `dry_run` (voir `remediation/decision_table.yml`).
+- **Racine en lecture seule** (`read_only: true`, comme payment-api/auth) : les seuls points inscriptibles sont `/tmp` (tmpfs, artefacts ansible-runner) et le **volume nommé `remediation-journal`** monté sur `/var/lib/remediation`. Le journal d'incidents SQLite **survit donc au redémarrage** du conteneur, conformément à la CDC §5.4 (ticket #22).
+
+## Assistant RAG (profil `ai`)
+
+- `ollama` porte désormais l'ancre de durcissement commune (`no-new-privileges:true` + `cap_drop: ALL`) : le serveur tourne en user space et n'a besoin d'aucune capability (ticket #22). Image épinglée (plus de `:latest`, R5).
 
 ## Outils
 

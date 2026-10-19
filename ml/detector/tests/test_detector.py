@@ -1,13 +1,14 @@
 """Tests du detector : score, seuil, AnomalyEvent conforme au schéma, POST remédiation mocké."""
 
 import asyncio
+import io
 import json
+import logging
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
-
 from resilience_common import AnomalyEvent, IncidentType
 from resilience_common.events import SCHEMA_VERSION
 
@@ -213,6 +214,37 @@ def test_load_model_rejects_feature_mismatch(model_dir, tmp_path):
     (tmp_path / "model.joblib").write_bytes((model_dir / "model.joblib").read_bytes())
     with pytest.raises(ModelLoadError, match="feature_names"):
         load_model(tmp_path)
+
+
+def test_load_model_warns_on_sklearn_version_drift(model_dir, tmp_path):
+    # #23 : une version scikit-learn différente de celle d'entraînement peut changer les scores.
+    # On ne refuse pas (le sha256 garantit l'intégrité) mais on journalise un avertissement explicite,
+    # AU FORMAT JSON DU CONTRAT (event réservé) pour qu'il soit indexable par Promtail/Loki.
+    from resilience_common.logging import JsonFormatter
+
+    stats = json.loads((model_dir / "baseline_stats.json").read_text())
+    # La version est enregistrée sous stats["training"] par ml/training/train.py.
+    stats.setdefault("training", {})["sklearn_version"] = "0.0.0-entrainement-fictif"
+    (tmp_path / "baseline_stats.json").write_text(json.dumps(stats))
+    (tmp_path / "model.joblib").write_bytes((model_dir / "model.joblib").read_bytes())
+
+    # Le logger "detector" a propagate=False : on attache un handler JSON dédié pour le capturer.
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(JsonFormatter("detector"))
+    logger = logging.getLogger("detector")
+    logger.addHandler(handler)
+    try:
+        model = load_model(tmp_path)  # charge quand même
+    finally:
+        logger.removeHandler(handler)
+
+    assert isinstance(model, LoadedModel)
+    records = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
+    drift = [r for r in records if r.get("event") == "model_version_drift"]
+    assert drift, f"aucun log JSON 'model_version_drift' émis : {records}"
+    assert drift[0]["service"] == "detector"
+    assert "0.0.0-entrainement-fictif" in drift[0]["message"]
 
 
 # --- HTTP : collector -> detector -> remédiation --------------------------------

@@ -56,3 +56,31 @@ def test_incident_types_are_frozen():
         "data_corruption",
         "unknown",
     }
+
+
+def test_reserved_events_match_contract_table():
+    """RESERVED_EVENTS = exactement les `event` réservés par docs/contracts.md §1.
+
+    Garde-fou anti-dérive : tout événement ajouté/retiré dans le contrat doit l'être ici
+    (et réciproquement), sinon les règles SOC et le test de conformité des composants mentent.
+    """
+    import re
+    from pathlib import Path
+
+    from resilience_common.events import RESERVED_EVENTS
+
+    doc = (Path(__file__).resolve().parents[4] / "docs" / "contracts.md").read_text(
+        encoding="utf-8"
+    )
+    section = doc.split("### Événements normalisés", 1)[1].split("### Exemple", 1)[0]
+    # Lignes de tableau « | `event_name` | service | sens | » (on ignore l'en-tête/séparateur).
+    documented = {
+        m.group(1)
+        for line in section.splitlines()
+        if (m := re.match(r"\|\s*`([a-z_]+)`\s*\|", line))
+    } - {"event"}  # en-tête du tableau « | `event` | Service | … | »
+    assert documented, "aucun événement extrait du contrat (format du tableau modifié ?)"
+    assert documented == set(RESERVED_EVENTS), (
+        f"désaccord contrat/RESERVED_EVENTS : "
+        f"contrat seul={documented - set(RESERVED_EVENTS)}, code seul={set(RESERVED_EVENTS) - documented}"
+    )

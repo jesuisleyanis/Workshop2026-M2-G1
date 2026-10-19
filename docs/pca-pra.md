@@ -4,7 +4,7 @@
 > Analyse de risques associée : `docs/ebios-rm.md`. Cadre réglementaire : `docs/nis2-dora.md`.
 
 **Légende** : **[R]** réalisé dans le dépôt · **[S]** spécifié mais composant pas encore livré · **[M]** à mesurer en recette.
-Dépendances **encore non livrées** dont dépendent les objectifs : `infra/compose`, `infra/ansible/playbooks/{waf_deny_ip,pg_restore}.yml`, **job de dump Postgres planifié** (aucune implémentation de sauvegarde dans le dépôt, seul le contrat `restore_pg_dump` existe), `scripts/verify_tx`.
+Dépendances **livrées** [R] dont dépendent les objectifs : `infra/compose`, `infra/ansible/playbooks/remediation/{waf_deny_ip,pg_restore}.yml`, `infra/ansible/playbooks/pg_backup.yml` (création d'un dump), `scripts/verify_tx`. Dépendance **encore non livrée** [S] : la **planification périodique** du dump (le playbook `pg_backup.yml` existe, mais aucun job ne le lance toutes les 5 min) et la copie hors hôte des dumps. Le RPO de 5 min n'est donc **pas** tenu aujourd'hui.
 
 ---
 
@@ -54,7 +54,7 @@ Contrainte de rétention : les gauges `resilience_mttd/mttr_seconds` ne gardent 
 |---|---|---|---|
 | **S1 Paiement** (`service_flood`) | **<= 60 s** nominal ; **<= 5 min** borne avant escalade | **0** (aucune donnée perdue : redémarrage sans restauration) | `D` <= 30 s + MTTR <= 30 s ; cohérent avec la contrainte du Clip Chrono (<= 60 s, attaque -> vérification) |
 | **S2 Authentification** (`auth_abuse`) | **<= 60 s** (login dégradé, pas d'arrêt du paiement) | 0 (pas de restauration) ; comptes créés après le dernier dump perdus en cas de restauration S3 | action = blocage + appel HTTP interne, plus rapide qu'un redémarrage |
-| **S3 Données** (`data_corruption`) | **<= 2 min** sur le jeu de démo ; **dépend de la taille** en réel : `RTO = D + playbook + durée pg_restore + verify` | **<= 5 min** (dump toutes les 5 min [S], **condition non remplie tant que le job de dump n'existe pas**) | données fictives de petite taille ; la restauration est la seule réponse valable (intégrité, pas disponibilité) |
+| **S3 Données** (`data_corruption`) | **<= 2 min** sur le jeu de démo ; **dépend de la taille** en réel : `RTO = D + playbook + durée pg_restore + verify` | **<= 5 min** (playbook `pg_backup.yml` livré [R] ; **planification périodique toutes les 5 min à activer [S]**, condition non remplie tant qu'elle n'est pas câblée) | données fictives de petite taille ; la restauration est la seule réponse valable (intégrité, pas disponibilité) |
 | **S4 WAF** (conf, deny-list) | **<= 30 s** (reload/restart) | **0** pour la configuration (code versionné) ; deny-list reconstructible depuis le journal d'incidents | `nginx -s reload` ou restart conteneur |
 | **S5 Chaîne de reprise** | **<= 5 min** (redémarrage manuel ou Compose) | **0** pour le modèle (artefact versionné, `sha256` vérifié au chargement, ré-entraînable : `python -m ml.training.train --seed 42`) ; journal `incidents.db` : **dernier volume** | hors chemin critique du paiement |
 | **S6 Supervision / assistant** | best effort <= 15 min | non critique | |
@@ -96,7 +96,7 @@ Après >= 10 rejeux par scénario : `RTO_retenu = arrondi_sup(1,5 x p95(D + MTTR
 
 | Sinistre | Pourquoi | Palliatif |
 |---|---|---|
-| **Panne simple d'un conteneur** (non attaque) | pas de type d'incident dédié : classé `unknown` donc rapport + escalade, pas d'action | healthcheck + politique de redémarrage Compose [S] ; à éprouver au **chaos engineering J4** |
+| **Panne simple d'un conteneur** (non attaque) | pas de type d'incident dédié : classé `unknown` donc rapport + escalade, pas d'action | healthcheck + politique de redémarrage Compose [R] (`infra/compose/docker-compose.yml`) ; à éprouver au **chaos engineering J4** |
 | **Perte de l'hôte / des volumes** | un seul hôte, dumps sur le même hôte | PRA §3.3 (reconstruction manuelle) |
 | **Panne du moteur de remédiation ou du proxy Docker** | SPOF de l'autonomie | runbook manuel §5.5 |
 | **Compromission d'un secret** (`JWT_SECRET`...) | pas de détection ni d'action dédiée | rotation manuelle : régénérer via SOPS, redéployer `auth` et `payment-api` (invalide toutes les sessions) |
@@ -130,7 +130,7 @@ Action : `restore_pg_dump` (`remediation/actions/postgres.py`), paramètre `back
 
 **Après restauration, au-delà de `verify_tx`** (le sujet précise que des données incohérentes = problème non résolu) : contrôler les invariants : `balance_cents >= 0` (contrainte DB), somme des soldes = somme du dump de référence, clés étrangères valides, absence de transaction `created` orpheline. `verify_tx` ne prouve qu'**une** transaction de bout en bout.
 
-**Dump de référence** [S] : `pg_dump -Fc` toutes les **5 min**, rétention >= 12 dumps (1 h) pour pouvoir remonter plus loin que `latest`, stockés hors du conteneur Postgres. Choix de conception à trancher par le pilier Infra : conteneur dédié `pg-backup` sur le réseau `data`, ou playbook `pg_backup.yml` planifié.
+**Dump de référence** : le playbook `infra/ansible/playbooks/pg_backup.yml` est livré [R] (`pg_dump --format=custom`, un fichier horodaté par exécution dans `infra/ansible/backups/`, monté en lecture seule dans le conteneur remediation, contrôle de taille non nulle). Restent à câbler [S] : la **planification périodique** (cible `pg_dump -Fc` toutes les **5 min**) et la rétention >= 12 dumps (1 h) pour pouvoir remonter plus loin que `latest` (le playbook n'implémente pas de rotation). Les dumps restent sur l'hôte (copie hors hôte : §3.3).
 
 **Perte attendue** : toutes les transactions entre le dernier dump et l'incident (<= RPO). Réconciliation possible **partielle** : l'événement `transaction_created` journalise l'`id` et l'utilisateur, **pas le montant ni les comptes** ; les opérations perdues sont identifiables mais pas rejouables (voir §8, R1).
 
@@ -142,7 +142,7 @@ Action : `restore_pg_dump` (`remediation/actions/postgres.py`), paramètre `back
 
 1. `git clone` du dépôt ; récupérer la **clé age** par le canal privé (jamais dans l'archive).
 2. `export SOPS_AGE_KEY_FILE=...` puis `scripts/decrypt-secrets.sh` (produit le `.env` local ignoré par git).
-3. `make up` (Compose, [S]) ; playbooks de déploiement Ansible (R6, [S]).
+3. `make up` (Compose, [R]) ; playbook de déploiement Ansible `deploy.yml` (R6, [R]).
 4. Restaurer le dernier dump **copié hors hôte** (§3.3).
 5. `make verify` (`scripts/verify_tx`, code 0 = OK) puis contrôle des invariants §5.2.
 6. Régénérer la deny-list depuis le journal d'incidents si nécessaire.
@@ -155,12 +155,12 @@ Déclencheurs : escalade `remediation_failed`, moteur ou proxy en panne, type `u
 
 | Playbook | Appelé par | Variables | État au 2026-10-19 |
 |---|---|---|---|
-| `waf_deny_ip.yml` | `waf_block_ip`, `waf_blacklist_ip` | `deny_ip`, `deny_list` (temporary / permanent), `incident_id` | [S] `infra/ansible/playbooks/` vide |
-| `pg_restore.yml` | `restore_pg_dump` | `backup`, `incident_id` | [S] idem |
-| playbooks de déploiement et de reprise (R6) | opérateur / `make up` | — | [S] |
+| `waf_deny_ip.yml` | `waf_block_ip`, `waf_blacklist_ip` | `deny_ip`, `deny_list` (temporary / permanent), `incident_id` | [R] `infra/ansible/playbooks/remediation/waf_deny_ip.yml` |
+| `pg_restore.yml` | `restore_pg_dump` | `backup`, `incident_id` | [R] `infra/ansible/playbooks/remediation/pg_restore.yml` |
+| playbooks de déploiement et de reprise (R6) : `deploy.yml`, `pg_backup.yml` | opérateur / `make up` | — | [R] `infra/ansible/playbooks/` ; planification de `pg_backup.yml` [S] |
 
 `ALLOWED_PLAYBOOKS` ne contient **que** ces deux noms : tout autre playbook est refusé par le moteur.
-**À trancher à l'écriture** : le mécanisme de rechargement de Nginx. `docker-socket-proxy` n'autorise que `restart` ; **ne pas élargir le proxy à `exec`** pour y parvenir (cela ouvrirait une exécution arbitraire dans les conteneurs). Privilégier un volume partagé pour la deny-list et un signal/restart du seul WAF.
+**Rechargement de Nginx (tranché à l'écriture, [R])** : deny-list en volume partagé `waf-deny`, puis signal `SIGHUP` au seul conteneur WAF via `docker-socket-proxy` (liste fermée de couples méthode/chemin, voir `infra/compose/docker-compose.yml`). **Ne pas élargir le proxy à `exec`** (cela ouvrirait une exécution arbitraire dans les conteneurs).
 
 ## 6. Responsabilités
 

@@ -142,7 +142,7 @@ L'origine du dashboard doit figurer dans `FRAME_ANCESTORS` (sinon l'iframe est r
 
 ## Logs, métriques, sondes
 
-- Logs JSON du contrat (`service: "assistant"`), `request_id` (reprend `X-Request-ID` ou en génère un). Événements émis : `assistant_index_built`, `assistant_index_empty`, `assistant_store_error`, `assistant_http_request`, `assistant_question_answered`, `assistant_llm_unavailable`. **Ces noms ne figurent pas encore dans `docs/contracts.md §1`** : à y ajouter (le contrat demande de les déclarer) ; ils ne sont pas utilisés par les règles d'alerte.
+- Logs JSON du contrat (`service: "assistant"`), `request_id` (reprend `X-Request-ID` ou en génère un). Événements émis : `assistant_index_built`, `assistant_index_empty`, `assistant_store_error`, `assistant_http_request`, `assistant_question_answered`, `assistant_llm_unavailable`. Ces noms sont **déclarés dans `docs/contracts.md §1`** et dans `resilience_common.RESERVED_EVENTS` ; `test_event_contract.py` échoue si l'assistant en émet un hors contrat. Ils ne sont pas utilisés par les règles d'alerte SOC.
 - `/metrics` : `resilience_http_requests_total`, `resilience_http_request_duration_seconds`.
 - `GET /health` (liveness), `GET /ready` (200 si Chroma chargé et non vide ; Ollama sondé, absence tolérée -> `mode: "degraded"`).
 - Erreurs : `{"error": {"code", "message", "request_id"}}`.

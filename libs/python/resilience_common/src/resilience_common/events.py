@@ -14,6 +14,39 @@ from pydantic import BaseModel, Field
 
 SCHEMA_VERSION = "1.0"
 
+#: Noms d'événements (`event`) réservés par le contrat `docs/contracts.md §1`. Ces noms
+#: alimentent les règles d'alerte SOC et les features ML : n'en émettre aucun autre sans mettre
+#: à jour le contrat ET cet ensemble (test de conformité dans chaque composant qui émet des logs).
+RESERVED_EVENTS: frozenset[str] = frozenset(
+    {
+        # auth
+        "auth_login_success",
+        "auth_login_failed",
+        "auth_rate_limited",
+        # payment-api
+        "transaction_created",
+        "transaction_rejected",
+        "db_error",
+        # waf
+        "waf_blocked",
+        # detector
+        "anomaly_detected",
+        "model_version_drift",
+        # remediation
+        "remediation_started",
+        "remediation_action",
+        "remediation_verified",
+        "remediation_failed",
+        # assistant
+        "assistant_index_built",
+        "assistant_index_empty",
+        "assistant_store_error",
+        "assistant_question_answered",
+        "assistant_llm_unavailable",
+        "assistant_http_request",
+    }
+)
+
 
 class IncidentType(str, Enum):
     """Énumération figée faisant le pont détection -> table de décision (contrat §3).
