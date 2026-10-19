@@ -130,6 +130,13 @@ services:
     <<: *hardening
     image: postgres:16-alpine
     networks: [data]
+    # Démarre directement en utilisateur postgres (uid 70 de l'image alpine) : l'entrypoint
+    # saute alors chown/gosu et cap_drop ALL suffit (aucun cap_add). Le volume NOMMÉ pgdata
+    # hérite à sa création du propriétaire postgres du dossier de l'image (un bind mount
+    # appartenant à root, lui, ne marcherait pas).
+    user: postgres
+    read_only: true
+    tmpfs: ["/var/run/postgresql", "/tmp"]   # socket unix + fichiers temporaires
     environment:
       POSTGRES_DB: resilience
       POSTGRES_USER: resilience
