@@ -123,10 +123,10 @@ Après >= 10 rejeux par scénario : `RTO_retenu = arrondi_sup(1,5 x p95(D + MTTR
 
 Action : `restore_pg_dump` (`remediation/actions/postgres.py`), paramètre `backup` = `latest` ou nom de dump simple (regex sans `/` ni `..`, pas de traversée de chemin). Elle lance **uniquement** le playbook nommé `pg_restore.yml` (variables `backup`, `incident_id` ; ni le playbook ni ses variables ne viennent de l'événement). Idempotente : restaurer deux fois le même dump donne le même état.
 
-**Exigences pour `infra/ansible/playbooks/pg_restore.yml`** [S] (à vérifier à la livraison) :
+**Exigences pour `infra/ansible/playbooks/remediation/pg_restore.yml`** [R] (réalisées, ticket #8 ; exécuté dans le conteneur remediation, voir `infra/ansible/README.md`) :
 - `pg_restore --clean --if-exists --single-transaction` : atomique, un échec laisse l'état précédent, jamais un état à moitié restauré ;
-- vérifier l'intégrité du dump **avant** de toucher à la base (`pg_restore --list`) ;
-- travailler sur le réseau `data` uniquement ; secrets via `POSTGRES_PASSWORD` (SOPS), jamais en clair dans le playbook.
+- intégrité du dump vérifiée **avant** de toucher à la base (`pg_restore --list`) ; tables en quarantaine (`*__corrupted`) purgées d'abord ;
+- réseau `data` uniquement ; secrets via `POSTGRES_PASSWORD` (SOPS → environnement), jamais en clair dans le playbook ; contrôle `SELECT count(*)` sur `users/accounts/transactions` après restauration.
 
 **Après restauration, au-delà de `verify_tx`** (le sujet précise que des données incohérentes = problème non résolu) : contrôler les invariants : `balance_cents >= 0` (contrainte DB), somme des soldes = somme du dump de référence, clés étrangères valides, absence de transaction `created` orpheline. `verify_tx` ne prouve qu'**une** transaction de bout en bout.
 

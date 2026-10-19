@@ -38,7 +38,7 @@ Exigences voisines servies : R2 (via `verify_tx`), R4/R20 (flux SSE pour la supe
 | **Table de décision** | `decision_table.yml` (chemin : `DECISION_TABLE`), schéma `version / defaults / rules`. Validée au démarrage : table invalide → le service **refuse de démarrer**. Exposée en lecture par `GET /decision-table`. | `contracts.md` §4 |
 | **`verify_tx`** | Script exécuté sans shell, avec timeout ; exit 0 = retour à la normale. | `contracts.md` « Codes retour scripts » |
 | **docker-socket-proxy** | HTTP vers `DOCKER_PROXY_URL` (défaut `http://docker-socket-proxy:2375`). | §5 |
-| **Ansible (ansible-runner)** | Playbooks nommés `waf_deny_ip.yml` et `pg_restore.yml` sous `ANSIBLE_PRIVATE_DATA_DIR/project/`. | §5.5 |
+| **Ansible (ansible-runner)** | Playbooks nommés `waf_deny_ip.yml` et `pg_restore.yml` (`infra/ansible/playbooks/remediation/`, copiés dans `ANSIBLE_PROJECT_DIR`), exécutés **dans le conteneur** (`hosts: localhost`) ; artefacts dans `ANSIBLE_PRIVATE_DATA_DIR` (tmpfs). | §5.5, `infra/ansible/README.md` |
 | **API interne du service `auth`** | `POST {AUTH_URL}/internal/tighten-rate-limit`, headers `X-Internal-Token` (= `INTERNAL_TOKEN`) et `Idempotency-Key` (= `incident_id`). | action `tighten_rate_limit` |
 | **Loki** | `GET {LOKI_URL}/loki/api/v1/query_range`, lecture seule (action `confirm_waf_block`). | action `confirm_waf_block` |
 | **Webhook opérateur** (optionnel) | `POST NOTIFY_WEBHOOK_URL` à l'escalade. | action `notify_operator` |
@@ -84,9 +84,9 @@ Principe : le moteur est un composant **puissant par nature** (il redémarre des
 - Monter `/var/run/docker.sock` dans un conteneur revient à lui donner **root sur l'hôte** : l'API Docker permet de créer un conteneur privilégié avec `/` monté. Un moteur de remédiation compromis (ou simplement bogué) deviendrait un pivot total.
 - Le moteur **ne monte jamais le socket** : l'image ne déclare aucun volume `docker.sock`, le service Compose ne le monte pas. Il parle **HTTP** à un `docker-socket-proxy` qui est le **seul** conteneur à monter le socket (en lecture seule).
 - **Défense en profondeur côté client** (`actions/docker_proxy.py`) : même si le proxy était trop permissif, le client du moteur applique sa propre liste blanche `(méthode, chemin)` et lève `DockerProxyError` pour tout autre appel. Profil par défaut = **restart seul** :
-  - `GET /_ping`, `GET /containers/json`, `GET /containers/{id}/json`, `POST /containers/{id}/restart`.
+  - `GET /_ping`, `GET /containers/json`, `GET /containers/{id}/json`, `POST /containers/{id}/restart`, `POST /containers/{id}/kill` **uniquement avec `signal=HUP`** (rechargement à chaud du WAF ; `KILL`/`TERM` refusés par le client *et* par le proxy).
 - Le profil « recreate » (`stop`, `rename`, `create`, `start`, `DELETE`) n'est actif que si `DOCKER_PROXY_ALLOW_RECREATE=true` **et** que le proxy a été élargi en conséquence. Il est **désactivé par défaut** et `recreate_service` n'est référencé par aucune règle de la table livrée.
-- `remediation/proxy/haproxy.cfg` fournit une configuration de proxy **stricte** (HAProxy) : seuls 4 couples méthode/chemin passent (`GET _ping`, `GET containers/json`, `GET containers/{id}/json`, `POST containers/{id}/restart`), tout le reste renvoie 403. Elle documente pourquoi les variables `CONTAINERS=1 + POST=1` de `tecnativa/docker-socket-proxy` sont plus larges (elles ouvrent des *sections* entières de l'API, donc `POST /containers/create`). Voir §10 pour l'état de son câblage dans Compose.
+- `remediation/proxy/haproxy.cfg` fournit une configuration de proxy **stricte** (HAProxy) : seuls 5 couples méthode/chemin passent (`GET _ping`, `GET containers/json`, `GET containers/{id}/json`, `POST containers/{id}/restart`, `POST containers/{id}/kill?signal=HUP`), tout le reste renvoie 403. Elle documente pourquoi les variables `CONTAINERS=1 + POST=1` de `tecnativa/docker-socket-proxy` sont plus larges (elles ouvrent des *sections* entières de l'API, donc `POST /containers/create`). Voir §10 pour l'état de son câblage dans Compose.
 - **Liste blanche de services** : `restart_service` / `recreate_service` n'agissent que sur `RESTARTABLE_SERVICES` (défaut `payment-api, auth, front`). Le moteur ne touche ni `postgres`, ni le proxy, ni lui-même, même si la table le demandait (`ActionError`).
 - Le nom de service et l'image sont validés par regex ; les conteneurs sont résolus par label Compose `com.docker.compose.service`.
 
@@ -110,7 +110,7 @@ Image `python:3.12-slim` multi-stage (aucun outil de build dans l'image finale),
 
 ### 5.5 Autres bornes de privilège
 
-- **Ansible** : seuls les playbooks `waf_deny_ip.yml` et `pg_restore.yml` (`ALLOWED_PLAYBOOKS`) peuvent être lancés ; ni le nom du playbook ni ses variables ne viennent de l'événement (autre playbook → refus, `rc=-1`).
+- **Ansible** : seuls les playbooks `waf_deny_ip.yml` et `pg_restore.yml` (`ALLOWED_PLAYBOOKS`) peuvent être lancés ; ni le nom du playbook ni ses variables ne viennent de l'événement (autre playbook → refus, `rc=-1`). Ils s'exécutent **dans le conteneur du moteur** (`hosts: localhost`), jamais sur l'hôte ni via `docker exec` : le moteur n'obtient que les accès strictement nécessaires (volume `waf-deny` partagé avec le WAF, réseau `data` + client Postgres pour la restauration, dumps en lecture seule).
 - **Blocage IP** : l'IP vient de `source_ip` (validée comme IP littérale unique : ni réseau, ni nom, ni texte libre, car elle finit dans une configuration Nginx). Refus de bloquer `NEVER_BLOCK_IPS` (défaut : `127.0.0.1`, `::1`, `192.168.137.1`, l'hôte du réseau `RESILIENCE-G1`), ni boucle locale / non spécifiée / multicast.
 - **Restauration** : `backup` = `latest` ou un nom simple (regex, pas de `/`, pas de `..` : pas de path traversal).
 - **`verify_tx`** : lancé sans shell (`create_subprocess_exec`), groupe de processus dédié, timeout qui tue aussi les enfants.
@@ -149,7 +149,7 @@ Le sujet (§2, §3.4) impose de ne pas confondre **restaurer la disponibilité**
    - `data_corruption` **doit** contenir `restore_pg_dump` et **ne doit pas** contenir `restart_service` / `recreate_service` ;
    - `restore_pg_dump` est **réservé** à `data_corruption` (interdit dans toute autre règle, donc jamais dans `service_flood`) ;
    - sélection de règle exacte par type, sans repli.
-3. **Dans les privilèges** : `restore_pg_dump` passe par le playbook Ansible `pg_restore.yml` (accès réseau `data`), `restart_service` par le docker-socket-proxy ; ce sont deux canaux distincts.
+3. **Dans les privilèges** : `restore_pg_dump` passe par le playbook Ansible `pg_restore.yml` (exécuté dans le conteneur, `pg_restore` direct sur le réseau `data`), `restart_service` par le docker-socket-proxy ; ce sont deux canaux distincts.
 
 Pourquoi : redémarrer un service après une corruption de données **ne corrige rien** (les données corrompues survivent au redémarrage) et masquerait l'incident ; à l'inverse, restaurer une base pour un simple pic de charge détruirait des données saines. Les tests couvrent les deux sens (`test_decision_table.py`, `test_engine.py`).
 
@@ -183,14 +183,15 @@ Pourquoi : redémarrer un service après une corruption de données **ne corrige
 
 ## 10. Limites et écarts connus (constatés dans le dépôt)
 
-Documentés tels quels, sans correction (phase fondations) :
+Écarts **résolus** (J3, tickets #3 et #8) : le proxy strict `proxy/haproxy.cfg` est celui câblé dans Compose (I1) ; `verify_tx` et les playbooks sont embarqués dans l'image et exécutés dans le conteneur (plus de `docker exec`, variables `deny_ip`/`deny_list`/`backup`/`incident_id` alignées, inventaire portable) ; la double déclaration des métriques HTTP qui faisait crasher le boot est supprimée.
 
-- **Proxy Docker dans Compose** : `infra/compose/docker-compose.yml` utilise `tecnativa/docker-socket-proxy` avec `CONTAINERS: 1` et `POST: 1`, ce que `proxy/haproxy.cfg` identifie comme plus large que nécessaire (`POST /containers/create` serait permis côté proxy). La liste blanche côté client du moteur reste active, mais la configuration stricte `proxy/haproxy.cfg` n'est pas, à ce jour, celle câblée dans Compose.
-- **Variables d'environnement Compose** : le service `remediation` de Compose définit `VERIFY_TX_CMD`, alors que `config.py` lit `VERIFY_TX_PATH` ; il ne définit ni `INCIDENTS_DB` explicite, ni montage Ansible. Les valeurs par défaut de l'image (`VERIFY_TX_PATH=/opt/scripts/verify_tx`, `ANSIBLE_PRIVATE_DATA_DIR=/opt/ansible`, `INCIDENTS_DB=/var/lib/remediation/incidents.db`) s'appliquent donc.
-- **Noms de playbooks** : le moteur attend `waf_deny_ip.yml` et `pg_restore.yml` ; `infra/ansible/playbooks/` contient `block_ip.yml` et `restore_pg_dump.yml`. Alignement à faire côté infra.
+Écarts restants :
+
+- **Validation live** : le plan d'exécution (SIGHUP du WAF via le proxy, `pg_restore` sur le réseau `data`) est testé unitairement et par exécution réelle du playbook WAF, mais la boucle complète KO → action → OK reste à rejouer stack levée (`tests/e2e`).
+- **Dump sain** : `restore_pg_dump` suppose un dump produit au préalable par `playbooks/pg_backup.yml` (opérateur, côté hôte) ; pas encore de job de sauvegarde planifié.
 - **Champ `source_ip`** : extension additive du contrat §3 (absente du schéma contractuel), à émettre par le detector / Alertmanager pour que `source: from_event` fonctionne ; sans lui, `waf_block_ip` / `waf_blacklist_ip` échouent proprement (« aucune IP source »).
 - **Authentification** : bearer statique partagé (`REMEDIATION_TOKEN`), et non le JWT HS256 décrit dans « Conventions d'API REST » ; pas de préfixe `/api/v1` sur les routes. Choix volontaire pour une API service-à-service interne.
 - **Idempotence de `tighten_rate_limit`** : repose sur le service `auth`, qui doit dédoublonner sur `Idempotency-Key`.
 - **`GET /stream`** est protégé par le Bearer ; un `EventSource` navigateur ne pouvant pas poser de header, le dashboard passe par son reverse-proxy nginx qui l'injecte.
 - **Journal** : SQLite local mono-processus (un seul écrivain) ; pas de haute disponibilité du moteur.
-- **Tests** : `recreate_service` est implémenté et testé mais volontairement hors de la table livrée ; pas de test automatisé de l'intégration Ansible réelle (mockée).
+- **Tests** : `recreate_service` est implémenté et testé mais volontairement hors de la table livrée ; l'intégration Ansible réelle est couverte pour `waf_deny_ip.yml` (ansible-runner sur fichier temporaire), `pg_restore.yml` n'est validé que par `--syntax-check` hors stack.
