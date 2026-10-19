@@ -69,7 +69,7 @@ Le prototype ne produit pas le rapport, mais il **capture les données que le ra
 | Dépendance | Rôle | Criticité | Stratégie de sortie / remarque |
 |---|---|---|---|
 | Images `python:3.12-slim`, `nginx:alpine`, `postgres:16` | base de tous les services | Haute | images épinglées par version/digest ; registre local pour le PRA |
-| `tecnativa/docker-socket-proxy` | seul accès du moteur à Docker | **Haute (sécurité)** | alternative : proxy maison ; surveiller les vulnérabilités |
+| `haproxy` (docker-socket-proxy, liste blanche stricte `remediation/proxy/haproxy.cfg`) | seul accès du moteur à Docker | **Haute (sécurité)** | image officielle épinglée ; surveiller les vulnérabilités |
 | ModSecurity + OWASP CRS | WAF | Haute | règles versionnées ; le WAF est le seul point exposé |
 | FastAPI, SQLAlchemy, scikit-learn, joblib, ansible-runner | code applicatif, ML, exécution de playbooks | Haute | `joblib` désérialise du code : **modèle vérifié par `sha256`** avant chargement (`ml/detector/model.py`) |
 | Prometheus, Loki, Promtail, Grafana, Alertmanager, cAdvisor | observabilité, SOC | Moyenne | Elastic écarté pour la charge mémoire |

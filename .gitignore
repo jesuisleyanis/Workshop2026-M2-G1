@@ -39,3 +39,6 @@ infra/ansible/backups/*
 .DS_Store
 .idea/
 .vscode/
+
+# Livrables générés (scripts/package_deliverables.sh) — produits à la demande, jamais commités
+Workshop2026-M2-G1-*

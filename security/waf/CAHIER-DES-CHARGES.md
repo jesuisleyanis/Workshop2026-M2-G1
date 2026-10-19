@@ -13,7 +13,7 @@ Pare-feu applicatif en frontal, **seul point exposé** de la plateforme. Couvre 
 - TLS auto-signé généré au build de l'image (environnement de labo fermé).
 - Image officielle OWASP CRS (nginx *unprivileged*, non-root) : écoute 8080/8443, publiée 80/443 par Compose.
 - **Liste de blocage IP rechargeable à chaud** (`deny/blocked_ips.conf`, volume partagé `waf-deny`), pilotée par le moteur de remédiation (écriture par playbook, reload par SIGHUP via le docker-socket-proxy).
-- `waf_exporter.py` : transforme les blocages ModSecurity en métrique `resilience_waf_blocked_total{rule}` et en log event `waf_blocked` (contrat §1).
+- **`waf-exporter`** (`waf_exporter.py`, conteneur dédié `Dockerfile.exporter`) : suit l'audit log ModSecurity (JSON, volume partagé `waf-logs`) et transforme chaque blocage en métrique `resilience_waf_blocked_total{rule}` (`/metrics` :9188, réseau `obs`) et en log event `waf_blocked` (contrat §1).
 
 Hors périmètre : terminaison TLS de production, gestion de certificats signés, répartition de charge.
 
@@ -24,7 +24,8 @@ Hors périmètre : terminaison TLS de production, gestion de certificats signés
 | HTTP 80/443 | entrée | Seul point exposé ; transmet `X-Forwarded-For` |
 | `deny/blocked_ips.conf` (volume `waf-deny`) | entrée (remédiation) | `waf_block_ip`/`waf_blacklist_ip` ajoutent `"<ip> 1;"` (playbook in-container) puis SIGHUP au conteneur = `nginx -s reload` |
 | access log JSON `json_waf` | sortie | Récupéré par Promtail → Loki (fonction SOC) |
-| `resilience_waf_blocked_total{rule}` | sortie | Métrique §2, alimente `waf_blocked_per_s` du vecteur ML |
+| audit log ModSecurity (volume `waf-logs`) | sortie (interne) | JSON Serial, blocages 4xx/5xx ; lu en lecture seule par `waf-exporter` |
+| `resilience_waf_blocked_total{rule}` | sortie | Métrique §2 exposée par `waf-exporter` (:9188, `obs`), scrappée par Prometheus ; alimente `waf_blocked_per_s` du vecteur ML et la règle SOC `soc-waf-blocks` |
 
 ## Contraintes de sécurité
 

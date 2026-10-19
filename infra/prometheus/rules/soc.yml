@@ -1,0 +1,52 @@
+# Règles d'alerte SOC — format Prometheus (ticket #13, point d'intégration I6).
+# MIROIR des règles Grafana `infra/grafana/provisioning/alerting/soc-rules.yml` (mêmes expressions,
+# mêmes seuils, mêmes `incident_type`) : Grafana sert à l'affichage SOC, Prometheus → Alertmanager
+# sert au ROUTAGE vers le moteur de remédiation (`POST /events/alertmanager`, Bearer interne).
+# Cohérence Grafana ⇔ Prometheus vérifiée par `infra/tests/test_soc_rules.py`.
+#
+# Labels consommés par l'adaptateur (remediation/alertmanager.py) :
+#   incident_type (obligatoire, énumération §3), service (sinon service par défaut de l'incident_type).
+# Annotation `expr` : reprise dans evidence.prometheus_query de l'AnomalyEvent.
+groups:
+  - name: resilience-soc
+    interval: 10s
+    rules:
+      - alert: SocAuthAbuse
+        expr: sum(rate(resilience_auth_logins_total{result="failed"}[1m])) > 5
+        for: 30s
+        labels: { severity: warning, incident_type: auth_abuse, service: auth }
+        annotations:
+          summary: "Plus de 5 échecs de login/s — possible abus d'authentification"
+          expr: 'sum(rate(resilience_auth_logins_total{result="failed"}[1m]))'
+          value: "{{ $value }}"
+          feature: auth_failed_per_s
+
+      - alert: SocServiceFlood
+        expr: sum(rate(resilience_http_requests_total{service="payment-api",status=~"5.."}[1m])) > 2
+        for: 30s
+        labels: { severity: critical, incident_type: service_flood, service: payment-api }
+        annotations:
+          summary: "Taux de 5xx élevé — possible saturation du service"
+          expr: 'sum(rate(resilience_http_requests_total{service="payment-api",status=~"5.."}[1m]))'
+          value: "{{ $value }}"
+          feature: ratio_5xx
+
+      - alert: SocWafBlocks
+        expr: sum(rate(resilience_waf_blocked_total[1m])) > 1
+        for: 30s
+        labels: { severity: warning, incident_type: web_attack, service: waf }
+        annotations:
+          summary: "Rafale de blocages WAF — attaque web en cours"
+          expr: 'sum(rate(resilience_waf_blocked_total[1m]))'
+          value: "{{ $value }}"
+          feature: waf_blocked_per_s
+
+      - alert: SocDataCorruption
+        expr: sum(rate(resilience_db_errors_total[1m])) > 0
+        for: 30s
+        labels: { severity: critical, incident_type: data_corruption, service: payment-api }
+        annotations:
+          summary: "Erreurs base de données — corruption/compromission suspectée"
+          expr: 'sum(rate(resilience_db_errors_total[1m]))'
+          value: "{{ $value }}"
+          feature: db_errors_per_s

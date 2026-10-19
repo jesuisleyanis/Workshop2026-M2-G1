@@ -18,6 +18,7 @@ Une plateforme de paiement **fictive** et conteneurisée subit une attaque lanc�
 - [Prérequis](#prérequis)
 - [Installation et déploiement](#installation-et-déploiement)
 - [Vérifier le système](#vérifier-le-système)
+- [Tests](#tests)
 - [Scénario de démonstration](#scénario-de-démonstration)
 - [Structure du dépôt](#structure-du-dépôt)
 - [Gestion des secrets](#gestion-des-secrets)
@@ -89,6 +90,28 @@ cd Workshop2026-M2-G1
 
 *À compléter : URLs des services, comptes de test fictifs, commande de transaction de vérification.*
 
+## Tests
+
+`make test` lance **un process pytest par composant** (`libs`, `services/*`, `ml`, `remediation`,
+`assistant`) puis les répertoires de tests de contrat (`security/waf/tests`, `attacks/tests`,
+`scripts/tests`, `infra/tests`, `tests/e2e`), et enfin Vitest (`services/front`, `dashboard`).
+Un seul process pour tout le dépôt n'est pas possible : chaque service déclare ses métriques
+Prometheus à l'import (`DuplicateTimeseries`).
+
+Les tests Python exigent un interpréteur **3.12** où les dépendances de *tous* les composants sont
+installées, y compris les libs partagées `resilience_common` / `resilience_db` :
+
+```bash
+uv venv --python 3.12 .venv && source .venv/bin/activate     # ou python3.12 -m venv .venv
+uv pip install -e "libs/python/resilience_common[fastapi,test]" -e "libs/python/resilience_db[test]" \
+  -e services/auth -e services/payment-api \
+  -r remediation/requirements-dev.txt -r assistant/requirements-dev.txt
+( cd ml && uv pip install -r requirements-dev.txt )   # chemin relatif ../libs dans le fichier
+make test                                             # ou : make test-py PYTHON=.venv/bin/python
+```
+
+Chaque composant reste testable seul depuis son répertoire (`cd remediation && pytest`), voir son `README.md`.
+
 ## Scénario de démonstration
 
 1. **Avant** — le service est nominal, une transaction fictive est exécutée avec succès.
@@ -144,6 +167,12 @@ Dossier de rendu : `Workshop2026-M2-G1`
 | `Workshop2026-M2-G1-Pres.pptx` | Support de présentation |
 | `Workshop2026-M2-G1-VidChrono.mp4` | Clip Chrono — 60 s max, sans coupe |
 | `Workshop2026-M2-G1-Code.zip` | Archive du dépôt Git (sources, IaC, scripts, tests, doc, README) |
+
+Génération de l'archive : `make package` (ou `scripts/package_deliverables.sh`). Le script lance d'abord
+`security/hardening/audit.sh`, exclut `.git`, dépendances (`node_modules`, venv), artefacts de build
+(`dist`, caches, `*.egg-info`), journaux locaux, dumps et **tout secret déchiffré** (`.env`, `keys.txt`,
+`*.age`), puis re-scanne l'archive (noms **et** contenu : clé age / clé privée) et l'efface en cas de doute.
+La clé age de démo est remise **hors archive**. Les fichiers `Workshop2026-M2-G1-*` sont ignorés par git.
 
 ## Équipe
 

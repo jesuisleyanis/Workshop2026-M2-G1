@@ -44,7 +44,8 @@ remediation/
 ## Architecture interne
 
 ```
-POST /events ──► main.py (auth Bearer) ──► engine.handle_event ──► journal (incident) + timeline
+POST /events ───────────────► main.py (auth Bearer) ──► engine.handle_event ──► journal (incident) + timeline
+POST /events/alertmanager ──► alertmanager.py (webhook → AnomalyEvent) ──┘
                                               │  admission : replay (event_id) / duplicate (clé) / cooldown
                                               ▼
                                    tâche asyncio _run(incident)
@@ -81,6 +82,7 @@ API sur le port **8005** (interne, réseau `app` ; jamais publié). Sauf sondes,
 | Méthode | Chemin | Auth | Description |
 |---|---|---|---|
 | `POST` | `/events` | oui | Reçoit un `AnomalyEvent` (+ `source_ip` optionnel). `202` `{incident_id, decision, dry_run, detail}` avec `decision` ∈ `started`, `duplicate`, `replayed`, `cooldown`. `422` si le corps est invalide. |
+| `POST` | `/events/alertmanager` | oui | **Webhook Alertmanager** (chemin SOC, secondaire — #13). Corps = webhook v4 `{alerts:[…]}` ; chaque alerte `firing` portant un label `incident_type` (§3) est traduite en `AnomalyEvent` (`alertmanager.py`) et soumise comme `/events`. `202` `{accepted:[{alertname, incident_id, decision, dry_run, detail}], skipped:[{alertname, reason}]}`. `422` si le corps n'est pas un webhook. |
 | `GET` | `/incidents?limit=50` | oui | Derniers incidents (`limit` 1 à 500). |
 | `GET` | `/incidents/{incident_id}` | oui | Détail : incident + `actions` + `verifications` + `timeline`. `404 incident_not_found`. |
 | `GET` | `/decision-table` | oui | Table de décision chargée (JSON). |
@@ -219,6 +221,7 @@ pytest -q
 | `tests/test_actions.py` | Catalogue d'actions, liste blanche du client Docker (dont `kill` limité à `signal=HUP`), `waf_block_ip` (playbook + reload seulement si changé, échec explicite si le proxy refuse), recreate + rollback, `tighten_rate_limit`, `confirm_waf_block`, `notify_operator`, validation des paramètres, liste blanche de playbooks, contrat de `verify_tx`, reprise des incidents orphelins. |
 | `tests/test_playbooks.py` | Contrat moteur ↔ playbooks (`hosts: localhost`, extravars déclarées, jamais `docker exec`), `--syntax-check` de tous les playbooks, **exécution réelle** de `waf_deny_ip.yml` par ansible-runner (deny-list écrite, idempotence, IP invalide refusée). |
 | `tests/test_api.py` | Authentification (401, token en query refusé, fail closed), `POST /events` bout en bout, erreurs au format du contrat, `/incidents`, `/decision-table`, `/stream` avec `Last-Event-ID`, sondes, `/metrics`. |
+| `tests/test_alertmanager.py` | Chemin SOC : adaptateur Alertmanager → `AnomalyEvent` (firing/résolue, `incident_type` absent ou inconnu ignoré, service par défaut, `source_ip` invalide ignorée, `event_id` stable par occurrence), route `/events/alertmanager` (401, 202 accepted/skipped, rejeu idempotent, 422). |
 | `tests/test_sse.py` | Flux SSE en direct après rejeu, keepalive, format de trame. |
 | `tests/conftest.py`, `tests/broker_helpers.py` | Faux horloge, vérificateur, runner Ansible, réseau ; capture de logs. |
 

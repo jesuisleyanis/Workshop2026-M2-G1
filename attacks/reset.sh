@@ -17,10 +17,19 @@ if "${COMPOSE[@]}" ps --status running waf >/dev/null 2>&1; then
 fi
 
 # Annule une éventuelle corruption data_corruption (renommage inverse, idempotent).
-if command -v ansible-playbook >/dev/null 2>&1; then
-  ansible-playbook -i "${ROOT}/infra/ansible/inventory/hosts.ini" \
-    "${ROOT}/infra/ansible/playbooks/db_corrupt_fake.yml" -e mode=revert \
-    >/dev/null 2>&1 || echo "(revert data_corruption : ignoré si non applicable)"
+# Inventaire OBLIGATOIRE (#14) : sans `-i`, le groupe [host] est vide et la play est un no-op
+# silencieux. Sortie visible et échec PROPAGÉ (set -e) : plus de `|| echo` qui avale une erreur.
+# Ne s'applique que si la base tourne ; sinon on le dit et on passe (reset idempotent hors stack).
+if "${COMPOSE[@]}" ps --status running postgres 2>/dev/null | grep -q postgres; then
+  if command -v ansible-playbook >/dev/null 2>&1; then
+    ansible-playbook -i "${ROOT}/infra/ansible/inventory/hosts.ini" \
+      "${ROOT}/infra/ansible/playbooks/db_corrupt_fake.yml" -e mode=revert
+  else
+    echo "ansible-playbook introuvable : revert data_corruption impossible" >&2
+    exit 1
+  fi
+else
+  echo "(revert data_corruption : base non démarrée, rien à annuler)"
 fi
 
 # Re-seed des données fictives + redéploiement (délégués au Makefile racine).

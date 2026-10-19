@@ -44,8 +44,13 @@ attacks/run.sh service_flood --target https://192.168.137.1 --duration 20 --rate
 
 ```bash
 attacks/run.sh --stop        # arrête tout scénario en cours (SIGTERM aux générateurs)
-attacks/reset.sh             # remet la cible à l'état "avant" (re-seed + redéploiement)
+attacks/reset.sh             # remet la cible à l'état "avant" (deny-list vidée, revert data_corruption, re-seed)
 ```
+
+`reset.sh` annule aussi une corruption `data_corruption` en cours (renommage inverse via
+`db_corrupt_fake.yml -e mode=revert`, inventaire `hosts.ini` explicite). Il ne masque pas les erreurs :
+un échec Ansible fait sortir le script en code non nul (`set -e`). Si la base n'est pas démarrée, le
+revert est simplement signalé comme sans objet.
 
 Chaque exécution journalise début/fin horodatés dans `attacks/.runlog` pour corréler avec le MTTD/MTTR mesuré côté Blue Team.
 

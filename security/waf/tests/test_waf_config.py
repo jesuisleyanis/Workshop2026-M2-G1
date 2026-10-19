@@ -99,3 +99,38 @@ def test_compose_publishes_80_443_to_unprivileged_ports_with_valid_healthcheck()
     test = waf["healthcheck"]["test"]
     assert test[0] == "CMD-SHELL" and "8443/healthz" in test[1], "healthcheck exec-form malformé (ticket #10)"
     assert all("ports" not in svc for name, svc in services.items() if name != "waf"), "seul le WAF publie des ports"
+
+
+# --------------------------------------------------------------------------- #12 waf-exporter
+EXPORTER_DOCKERFILE = (WAF / "Dockerfile.exporter").read_text(encoding="utf-8")
+PROMETHEUS = (ROOT / "infra" / "prometheus" / "prometheus.yml").read_text(encoding="utf-8")
+
+
+def test_waf_writes_modsec_audit_log_to_the_shared_volume():
+    yaml = pytest.importorskip("yaml")
+    waf = yaml.safe_load(COMPOSE)["services"]["waf"]
+    env = waf["environment"]
+    assert env["MODSEC_AUDIT_LOG_FORMAT"] == "JSON" and env["MODSEC_AUDIT_LOG_TYPE"] == "Serial"
+    assert env["MODSEC_AUDIT_LOG"].startswith("/var/log/modsec/")
+    assert "waf-logs:/var/log/modsec:rw" in waf["volumes"]
+    assert re.search(r"mkdir -p /var/log/modsec && chown nginx:nginx /var/log/modsec", DOCKERFILE)
+
+
+def test_waf_exporter_service_reads_the_audit_log_and_is_scraped():
+    yaml = pytest.importorskip("yaml")
+    services = yaml.safe_load(COMPOSE)["services"]
+    exp = services["waf-exporter"]
+    assert exp["build"] == {"context": "../..", "dockerfile": "security/waf/Dockerfile.exporter"}
+    assert "waf-logs:/var/log/modsec:ro" in exp["volumes"], "lecture seule du journal"
+    assert "ports" not in exp and exp["networks"] == ["obs"], "jamais exposé : scrappé sur obs uniquement"
+    assert exp["cap_drop"] == ["ALL"] and exp["read_only"] is True
+    assert "9188/metrics" in exp["healthcheck"]["test"][-1]
+    targets = yaml.safe_load(PROMETHEUS)["scrape_configs"]
+    job = next(j for j in targets if j["job_name"] == "waf-exporter")
+    assert job["static_configs"][0]["targets"] == ["waf-exporter:9188"]
+
+
+def test_waf_exporter_image_is_non_root_and_bundles_shared_lib():
+    assert re.search(r"^USER 10006:10006", EXPORTER_DOCKERFILE, re.M)
+    assert "libs/python/resilience_common" in EXPORTER_DOCKERFILE
+    assert 'CMD ["python", "/app/waf_exporter.py"]' in EXPORTER_DOCKERFILE

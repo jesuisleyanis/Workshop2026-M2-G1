@@ -67,3 +67,19 @@ def test_scenario_points_to_the_trigger() -> None:
     assert scenario["incident_type"] == "data_corruption"
     # La remédiation attendue reste la restauration (pas un simple redémarrage).
     assert scenario["remediation_attendue"] == ["restore_pg_dump"]
+
+
+# ------------------------------------------------------------------ reset.sh (#14)
+RESET = ROOT / "attacks" / "reset.sh"
+
+
+def test_reset_reverts_corruption_with_inventory_and_without_swallowing_errors() -> None:
+    text = RESET.read_text(encoding="utf-8")
+    call_start = text.index("ansible-playbook -i")
+    call = text[call_start: text.index("\n\n", call_start)]
+    # Inventaire explicite (sans lui, [host] est vide : no-op silencieux) + mode revert.
+    assert "infra/ansible/inventory/hosts.ini" in call and "db_corrupt_fake.yml" in call
+    assert "-e mode=revert" in call
+    # L'échec doit être visible et propagé : ni redirection vers /dev/null, ni `|| echo`.
+    assert ">/dev/null" not in call and "|| echo" not in call and "|| true" not in call
+    assert "set -euo pipefail" in text

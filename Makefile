@@ -1,6 +1,7 @@
 # RESILIENCE-ALPHA — orchestration du monorepo.
 # Flow du projet : on code, on teste, on documente, on met à jour la roadmap.
 
+SHELL := /bin/bash   # pipefail dans les recettes de tests
 COMPOSE := docker compose -f infra/compose/docker-compose.yml
 ROOT    := $(shell pwd)
 # Charge .env (produit par `make decrypt`) dans l'environnement d'une cible : SEED_PASSWORD, tokens...
@@ -48,18 +49,38 @@ package: ## Construit l'archive Code.zip du rendu
 	scripts/package_deliverables.sh
 
 # ---- Tests : chaque composant teste son périmètre -------------------------------
+# Un process pytest PAR composant (ticket #19) : les services déclarent chacun leurs métriques
+# Prometheus au niveau module ; les importer dans un seul process lève `DuplicateTimeseries`.
+# Chaque composant a sa propre config pytest (pytest.ini / pyproject) et ses dépendances :
+# `PYTHON` doit pointer sur un interpréteur où elles sont installées (voir README racine, § Tests).
+PYTHON ?= python3
+# Composants testés DEPUIS leur répertoire (config pytest locale, imports relatifs à la racine du composant).
+PY_COMPONENTS := libs/python/resilience_common libs/python/resilience_db \
+                 services/auth services/payment-api ml remediation assistant
+# Répertoires de tests "plats" (contrats statiques), lancés depuis la racine du dépôt.
+PY_TEST_DIRS  := security/waf/tests attacks/tests scripts/tests infra/tests tests/e2e
+
 test: test-py test-front ## Lance tous les tests
 
-test-py: ## Tests Python (lib partagée + services + ml + remediation + cyber + scripts)
-	@echo "== Tests Python =="
-	@python3 -m pytest -q \
-	  libs/python/resilience_common \
-	  services ml remediation assistant \
-	  security/waf/tests attacks/tests scripts/tests 2>/dev/null || \
-	  echo "(certains composants nécessitent leur venv — voir leur README)"
+test-py: ## Tests Python, un process pytest par composant (échec si l'un d'eux échoue)
+	@echo "== Tests Python ($(PYTHON)) =="
+	@set -o pipefail; rc=0; \
+	for c in $(PY_COMPONENTS); do \
+	  printf '%-34s ' "$$c"; \
+	  (cd $$c && $(PYTHON) -m pytest -q -p no:cacheprovider 2>&1 | tail -1) || rc=1; \
+	done; \
+	for d in $(PY_TEST_DIRS); do \
+	  printf '%-34s ' "$$d"; \
+	  ($(PYTHON) -m pytest -q -p no:cacheprovider $$d 2>&1 | tail -1) || rc=1; \
+	done; \
+	[ $$rc -eq 0 ] || { echo "== Tests Python : ÉCHEC (voir ci-dessus ; dépendances : README § Tests)"; exit 1; }; \
+	echo "== Tests Python : OK"
 
 test-front: ## Tests front (front + dashboard)
 	@echo "== Tests front =="
-	@for app in services/front dashboard; do \
-	  if [ -f $$app/package.json ]; then (cd $$app && npm run test --silent 2>/dev/null || true); fi; \
-	done
+	@rc=0; \
+	for app in services/front dashboard; do \
+	  if [ -f $$app/package.json ]; then (cd $$app && npm run test --silent) || rc=1; fi; \
+	done; \
+	[ $$rc -eq 0 ] || { echo "== Tests front : ÉCHEC"; exit 1; }; \
+	echo "== Tests front : OK"

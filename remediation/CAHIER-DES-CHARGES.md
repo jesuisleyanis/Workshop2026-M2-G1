@@ -35,6 +35,7 @@ Exigences voisines servies : R2 (via `verify_tx`), R4/R20 (flux SSE pour la supe
 | Interface | Détail | Référence |
 |---|---|---|
 | **Événement d'anomalie** | `POST /events`, corps = `AnomalyEvent` (`schema_version`, `event_id`, `ts`, `source`, `service`, `anomaly_score`, `threshold`, `incident_type`, `features_top[]`, `evidence`). Modèle `IncomingEvent` = `AnomalyEvent` (lib `resilience_common`) + **un champ optionnel additif `source_ip`** (une seule IP littérale, validée par `ipaddress`). Les champs inconnus sont ignorés (`extra="ignore"`). | `contracts.md` §3 |
+| **Webhook Alertmanager** (chemin SOC, secondaire) | `POST /events/alertmanager`, corps = webhook Alertmanager v4 (`{alerts:[{status, labels, annotations, startsAt, fingerprint}]}`). Adaptateur `alertmanager.py` : alerte `firing` + label `incident_type` (énumération §3) → `IncomingEvent` (`source: alertmanager`, `service` = label ou défaut par type, score/seuil 1.0, `event_id` = uuid5(fingerprint, startsAt) ⇒ ré-émissions rejouées idempotemment, `source_ip` optionnelle, `evidence.prometheus_query` = annotation `expr`). Alertes résolues, sans `incident_type` ou hors énumération : ignorées (jamais mappées sur `unknown`). Même Bearer, mêmes garde-fous que `/events`. | `contracts.md` §3, `infra/prometheus/rules/soc.yml`, `infra/alertmanager/alertmanager.yml` |
 | **Table de décision** | `decision_table.yml` (chemin : `DECISION_TABLE`), schéma `version / defaults / rules`. Validée au démarrage : table invalide → le service **refuse de démarrer**. Exposée en lecture par `GET /decision-table`. | `contracts.md` §4 |
 | **`verify_tx`** | Script exécuté sans shell, avec timeout ; exit 0 = retour à la normale. | `contracts.md` « Codes retour scripts » |
 | **docker-socket-proxy** | HTTP vers `DOCKER_PROXY_URL` (défaut `http://docker-socket-proxy:2375`). | §5 |
@@ -50,6 +51,7 @@ Service FastAPI, port interne **8005**. Détail des endpoints dans le [`README.m
 | Endpoint | Auth | Rôle |
 |---|---|---|
 | `POST /events` | Bearer | Admission d'un `AnomalyEvent` → `202` `{incident_id, decision, dry_run, detail}` ; la remédiation tourne en tâche de fond. |
+| `POST /events/alertmanager` | Bearer | Webhook Alertmanager → adaptateur → mêmes admissions que `/events` ; `202` `{accepted[], skipped[]}`. |
 | `GET /incidents`, `GET /incidents/{id}` | Bearer | Journal des incidents (actions, vérifications, timeline). |
 | `GET /decision-table` | Bearer | Table de décision chargée. |
 | `GET /stream` | Bearer | Timeline temps réel en **SSE** (consommée par le dashboard). |
@@ -183,13 +185,13 @@ Pourquoi : redémarrer un service après une corruption de données **ne corrige
 
 ## 10. Limites et écarts connus (constatés dans le dépôt)
 
-Écarts **résolus** (J3, tickets #3 et #8) : le proxy strict `proxy/haproxy.cfg` est celui câblé dans Compose (I1) ; `verify_tx` et les playbooks sont embarqués dans l'image et exécutés dans le conteneur (plus de `docker exec`, variables `deny_ip`/`deny_list`/`backup`/`incident_id` alignées, inventaire portable) ; la double déclaration des métriques HTTP qui faisait crasher le boot est supprimée.
+Écarts **résolus** (J3, tickets #3, #8 et #13 — chemin SOC `POST /events/alertmanager` câblé et authentifié, I6 fermé) : le proxy strict `proxy/haproxy.cfg` est celui câblé dans Compose (I1) ; `verify_tx` et les playbooks sont embarqués dans l'image et exécutés dans le conteneur (plus de `docker exec`, variables `deny_ip`/`deny_list`/`backup`/`incident_id` alignées, inventaire portable) ; la double déclaration des métriques HTTP qui faisait crasher le boot est supprimée.
 
 Écarts restants :
 
 - **Validation live** : le plan d'exécution (SIGHUP du WAF via le proxy, `pg_restore` sur le réseau `data`) est testé unitairement et par exécution réelle du playbook WAF, mais la boucle complète KO → action → OK reste à rejouer stack levée (`tests/e2e`).
 - **Dump sain** : `restore_pg_dump` suppose un dump produit au préalable par `playbooks/pg_backup.yml` (opérateur, côté hôte) ; pas encore de job de sauvegarde planifié.
-- **Champ `source_ip`** : extension additive du contrat §3 (absente du schéma contractuel), à émettre par le detector / Alertmanager pour que `source: from_event` fonctionne ; sans lui, `waf_block_ip` / `waf_blacklist_ip` échouent proprement (« aucune IP source »).
+- **Champ `source_ip`** : extension additive du contrat §3 (absente du schéma contractuel), à émettre par le detector (ou en label `source_ip` d'une alerte SOC) pour que `source: from_event` fonctionne ; sans lui, `waf_block_ip` / `waf_blacklist_ip` échouent proprement (« aucune IP source »). Les règles SOC Prometheus livrées n'ont pas d'IP source (agrégats) : par le chemin SOC, les actions de blocage IP échouent proprement et la règle poursuit (restart / rate-limit / restore).
 - **Authentification** : bearer statique partagé (`REMEDIATION_TOKEN`), et non le JWT HS256 décrit dans « Conventions d'API REST » ; pas de préfixe `/api/v1` sur les routes. Choix volontaire pour une API service-à-service interne.
 - **Idempotence de `tighten_rate_limit`** : repose sur le service `auth`, qui doit dédoublonner sur `Idempotency-Key`.
 - **`GET /stream`** est protégé par le Bearer ; un `EventSource` navigateur ne pouvant pas poser de header, le dashboard passe par son reverse-proxy nginx qui l'injecte.
