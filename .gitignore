@@ -39,3 +39,6 @@ infra/ansible/backups/*
 .DS_Store
 .idea/
 .vscode/
+
+# venv de travail cyber (local)
+.venv-cyber/

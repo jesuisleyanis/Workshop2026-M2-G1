@@ -23,6 +23,8 @@ PC Attaquant (autre PC du groupe)            PC Hôte (192.168.137.1)
 > **Procédure complète pas-à-pas depuis le PC Attaquant : [`RUNBOOK-PC-ATTAQUANT.md`](RUNBOOK-PC-ATTAQUANT.md)** (pré-vol, lancement, observation, MTTD/MTTR, kill-switch, ordre pour le Clip Chrono).
 >
 > **Pannes NON-attaque (chaos engineering) : [`chaos/README.md`](chaos/README.md)** — crash/gel bornés et réversibles pour prouver la résilience intrinsèque (restart policy, healthchecks), distincte de la chaîne Red Team.
+>
+> **Console de pilotage locale : [`console/README.md`](console/README.md)** — UI web (local-only, PC Attaquant) pour lancer les scénarios, suivre la chaîne de reprise et le journal, kill-switch/reset. Garde-fous côté serveur.
 
 ## Mise en place
 

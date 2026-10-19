@@ -76,6 +76,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | Règles SOC Loki/Grafana | `infra/grafana`, `infra/loki` | Louis | 🟨 | 4 règles (couvre les 4 incident_type) corrigées (uid datasource, reduce, +data_corruption) ; 5 tests contrat verts. **Routage→remédiation ouvert** : endpoint `/events/alertmanager` absent côté moteur + wiring Prometheus/Alertmanager manquant (voir README-SOC.md) |
 | Dashboard (états, score, timeline, MTTD/MTTR, SSE) | `dashboard/` | R4,R20 | — | ✅ | CDC+README+src+tests ; design « ZTR Supervision » ; **branché sur l'enveloppe réelle du moteur** (#9 : adaptateur `event: timeline` → kinds internes, testé sur des trames capturées sur le moteur, aucune trame droppée), score/santé lus dans Prometheus via proxy nginx same-origin (`/prometheus/api/v1/query`, GET seul), compose corrigé (variables runtime, Bearer SOPS, healthcheck) — 121 tests verts, build OK, mock aligné |
 | Scénarios d'attaque v1 (depuis PC Attaquant) | `attacks/` | R10 | Louis | ✅ | 4 scénarios ; validateur + runbook PC Attaquant ; déclencheur `data_corruption` (pg_backup + db_corrupt_fake réversible) — 10 tests contrat verts |
+| Console Red Team (UI de pilotage locale) | `attacks/console/` | R10 | Louis | ✅ | FastAPI + UI (lancement, chaîne de reprise, journal SSE, kill-switch, liaison Bleu optionnelle MTTD/MTTR) ; garde-fous côté serveur ; 9 tests dry-run verts |
 | RAG : indexation docs + journal, UI onglet | `assistant/` | R9 | — | ✅ | 97 tests verts |
 
 ## J4 — Jeudi : recette, chaos, clip, gel du code (17h)
