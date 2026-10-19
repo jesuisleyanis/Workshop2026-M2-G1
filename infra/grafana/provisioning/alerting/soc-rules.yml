@@ -14,6 +14,7 @@ groups:
         data:
           - refId: A
             datasourceUid: prometheus
+            relativeTimeRange: { from: 300, to: 0 }   # obligatoire : sinon [0s,0s] => Grafana refuse la règle et redémarre en boucle
             model:
               expr: 'sum(rate(resilience_auth_logins_total{result="failed"}[1m]))'
           - refId: C
@@ -32,6 +33,7 @@ groups:
         data:
           - refId: A
             datasourceUid: prometheus
+            relativeTimeRange: { from: 300, to: 0 }   # obligatoire : sinon [0s,0s] => Grafana refuse la règle et redémarre en boucle
             model:
               expr: 'sum(rate(resilience_http_requests_total{service="payment-api",status=~"5.."}[1m]))'
           - refId: C
@@ -50,6 +52,7 @@ groups:
         data:
           - refId: A
             datasourceUid: prometheus
+            relativeTimeRange: { from: 300, to: 0 }   # obligatoire : sinon [0s,0s] => Grafana refuse la règle et redémarre en boucle
             model:
               expr: 'sum(rate(resilience_waf_blocked_total[1m]))'
           - refId: C

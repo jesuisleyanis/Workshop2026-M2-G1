@@ -1,11 +1,19 @@
 apiVersion: 1
+# Supprimées puis recréées à chaque démarrage : un volume grafana-data antérieur les connaît
+# sous un uid aléatoire, et Grafana refuse de changer l'uid d'une source existante
+# ("data source not found" -> redémarrage en boucle). Sources 100 % provisionnées : rien à perdre.
+deleteDatasources:
+  - { name: Prometheus, orgId: 1 }
+  - { name: Loki, orgId: 1 }
 datasources:
   - name: Prometheus
+    uid: prometheus          # référencé par datasourceUid des règles SOC (alerting/soc-rules.yml)
     type: prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true
   - name: Loki
+    uid: loki
     type: loki
     access: proxy
     url: http://loki:3100
