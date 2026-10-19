@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { buildTimeline, derivePhase, incidentMttr, initialState, latestIncident, reducer, scoreLevel, HISTORY_MAX, type Action } from './state'
+import { buildTimeline, derivePhase, incidentMttr, initialState, latestIncident, reducer, scoreLevel, scoredServices, HISTORY_MAX, PLAYBOOKS, type Action } from './state'
 import { parseStreamMessage } from './parse'
 import { FULL_SEQUENCE, INCIDENT_ID } from '../test/fixtures'
-import type { DashboardState } from '../types/events'
+import { INCIDENT_TYPES, type DashboardState } from '../types/events'
 
 function play(seq: [string, unknown][], from: DashboardState = initialState): DashboardState {
   return seq.reduce((s, [name, data]) => {
@@ -54,7 +54,7 @@ describe('phase AVANT / PENDANT / APRÈS (R20)', () => {
     expect(latestIncident(next)?.id).toBe('inc-002')
   })
 
-  it('reset ramène à AVANT et conserve connexion et santé', () => {
+  it('reset ramène à AVANT et conserve connexion, santé et courbe de score', () => {
     const s = reducer(
       { ...play([['health', { services: [{ name: 'waf', status: 'up' }] }, ], ...FULL_SEQUENCE]), connection: 'open' },
       { type: 'reset' },
@@ -62,7 +62,16 @@ describe('phase AVANT / PENDANT / APRÈS (R20)', () => {
     expect(derivePhase(s)).toBe('before')
     expect(s.connection).toBe('open')
     expect(s.services.find((x) => x.name === 'waf')?.status).toBe('up')
-    expect(s.history).toEqual([])
+    expect(s.history).toHaveLength(1)
+  })
+  it('après reset, les événements tardifs de l’incident écarté ne le recréent pas', () => {
+    const s = reducer(play(FULL_SEQUENCE.slice(0, 2)), { type: 'reset' })
+    const late = play(FULL_SEQUENCE.slice(2), s)
+    expect(late.incidents).toEqual([])
+    expect(derivePhase(late)).toBe('before')
+    // Un nouvel incident reste détecté normalement.
+    const next = play([['anomaly_detected', { ...(FULL_SEQUENCE[0]![1] as object), incident_id: 'inc-002' }]], late)
+    expect(latestIncident(next)?.id).toBe('inc-002')
   })
 })
 
@@ -138,6 +147,20 @@ describe('robustesse', () => {
     const s = play([FULL_SEQUENCE[0]!, again])
     expect(s.incidents).toHaveLength(1)
     expect(s.incidents[0]!.detectedAt).toBe('2026-10-21T09:14:35.000Z')
+  })
+  it('scoredServices : services distincts dans l’ordre d’apparition', () => {
+    const s = play([
+      ['score', { service: 'payment-api', anomaly_score: 0.1 }],
+      ['score', { service: 'auth', anomaly_score: 0.2 }],
+      ['score', { service: 'payment-api', anomaly_score: 0.3 }],
+    ])
+    expect(scoredServices(s.history)).toEqual(['payment-api', 'auth'])
+  })
+  it('PLAYBOOKS reflète la table de décision : data_corruption restaure, ne redémarre pas', () => {
+    const byType = Object.fromEntries(PLAYBOOKS.map((p) => [p.type, p.actions]))
+    expect(byType.data_corruption).toEqual(['restore_pg_dump'])
+    expect(byType.service_flood).toContain('restart_service')
+    expect(PLAYBOOKS.map((p) => p.type).sort()).toEqual([...INCIDENT_TYPES].sort())
   })
   it('health fusionne par nom de service', () => {
     const s = play([['health', { services: [{ name: 'payment-api', status: 'down' }] }]])

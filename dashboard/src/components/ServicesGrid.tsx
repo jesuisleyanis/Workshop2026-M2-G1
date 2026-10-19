@@ -1,26 +1,29 @@
 import type { ServiceHealth, ServiceStatus } from '../types/events'
-import { Panel } from './Panel'
+import { Panel, Pill, TONE, type Tone } from './Panel'
 
-const UI: Record<ServiceStatus, { text: string; dot: string; label: string }> = {
-  up: { text: 'OPÉRATIONNEL', dot: 'bg-emerald-400', label: 'text-emerald-300' },
-  degraded: { text: 'DÉGRADÉ', dot: 'bg-amber-400', label: 'text-amber-300' },
-  down: { text: 'HORS SERVICE', dot: 'bg-red-500', label: 'text-red-300' },
-  unknown: { text: 'INCONNU', dot: 'bg-slate-600', label: 'text-slate-500' },
+const UI: Record<ServiceStatus, { text: string; tone: Tone }> = {
+  up: { text: 'Opérationnel', tone: 'ok' },
+  degraded: { text: 'Dégradé', tone: 'warn' },
+  down: { text: 'Hors service', tone: 'ko' },
+  unknown: { text: 'Inconnu', tone: 'mute' },
 }
 
 export function ServicesGrid({ services }: { services: ServiceHealth[] }) {
+  const known = services.some((s) => s.status !== 'unknown')
+  const up = services.filter((s) => s.status === 'up').length
   return (
-    <Panel title="État des services">
-      <ul className="grid grid-cols-2 gap-3">
+    <Panel title="État des services" aside={<span className="text-xs text-mute-2">{known ? `${up}/${services.length} opérationnels` : 'en attente de health'}</span>}>
+      <ul className="flex flex-col">
         {services.map((s) => {
           const ui = UI[s.status]
+          const t = TONE[ui.tone]
           return (
-            <li key={s.name} data-service={s.name} data-status={s.status} className="rounded-xl bg-slate-950/60 px-4 py-3" title={s.detail}>
-              <p className="flex items-center gap-2 text-lg font-bold text-slate-100">
-                <span className={`h-3.5 w-3.5 rounded-full ${ui.dot}`} aria-hidden />
-                {s.name}
-              </p>
-              <p className={`text-sm font-bold tracking-widest ${ui.label}`}>{ui.text}</p>
+            <li key={s.name} data-service={s.name} data-status={s.status} title={s.detail} className="flex items-center justify-between border-b border-[#1f1f23] py-[9px] last:border-b-0">
+              <span className="flex items-center gap-2.5">
+                <span className={`h-2 w-2 rounded-full ${t.solid}`} style={{ boxShadow: '0 0 0 3px rgb(255 255 255 / 0.04)' }} aria-hidden />
+                <span className="font-mono text-[13px]">{s.name}</span>
+              </span>
+              <Pill tone={ui.tone}>{ui.text}</Pill>
             </li>
           )
         })}

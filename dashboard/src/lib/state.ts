@@ -11,7 +11,8 @@ import type {
   VerifyTx,
 } from '../types/events'
 
-export const HISTORY_MAX = 90
+/** 2 min à 1 point/s pour ~3 services scorés. */
+export const HISTORY_MAX = 360
 export const INCIDENTS_MAX = 20
 export const DEFAULT_THRESHOLD = 0.6
 
@@ -28,6 +29,7 @@ export const initialState: DashboardState = {
   incidents: [],
   lastVerification: null,
   rejected: 0,
+  dismissed: [],
 }
 
 export type Action =
@@ -80,14 +82,25 @@ export function reducer(state: DashboardState, action: Action): DashboardState {
     case 'rejected':
       return { ...state, rejected: state.rejected + 1 }
     case 'reset':
-      // Remise à zéro de la vue (reprise de clip) : on garde la connexion et la santé courante.
-      return { ...initialState, connection: state.connection, services: state.services }
+      // Remise à zéro de la vue (reprise de clip) : on écarte les incidents affichés et on
+      // garde le contexte (connexion, santé, courbes de score, dernière vérification).
+      return {
+        ...state,
+        incidents: [],
+        dismissed: [...state.dismissed, ...state.incidents.map((i) => i.id)].slice(-INCIDENTS_MAX),
+      }
     case 'message':
       return applyMessage(state, action.message)
   }
 }
 
 function applyMessage(state: DashboardState, m: StreamMessage): DashboardState {
+  if ('incidentId' in m && state.dismissed.includes(m.incidentId)) {
+    // Incident écarté : seul le score d'une anomalie reste utile à la courbe.
+    return m.kind === 'anomaly_detected'
+      ? pushScore(state, { ts: m.event.ts, service: m.event.service, score: m.event.anomaly_score, threshold: m.event.threshold })
+      : state
+  }
   switch (m.kind) {
     case 'health': {
       const byName = new Map(state.services.map((s) => [s.name, s]))
@@ -291,6 +304,23 @@ export function scoreLevel(score: number, threshold: number): ScoreLevel {
 export function currentThreshold(state: Pick<DashboardState, 'score'>): number {
   return state.score?.threshold ?? DEFAULT_THRESHOLD
 }
+
+/** Services ayant émis un score, dans l'ordre d'apparition (onglets de la courbe). */
+export function scoredServices(history: ScoreSample[]): string[] {
+  return [...new Set(history.map((h) => h.service))]
+}
+
+/**
+ * Miroir d'affichage de remediation/decision_table.yml (contrat §4). La décision réelle est
+ * prise par le moteur ; le panneau surligne la règle et les actions effectivement annoncées.
+ */
+export const PLAYBOOKS: { type: IncidentType; actions: string[]; nature: string }[] = [
+  { type: 'service_flood', actions: ['waf_block_ip', 'restart_service'], nature: 'disponibilité' },
+  { type: 'auth_abuse', actions: ['waf_block_ip', 'tighten_rate_limit'], nature: 'disponibilité' },
+  { type: 'web_attack', actions: ['confirm_waf_block', 'waf_blacklist_ip'], nature: 'compromission' },
+  { type: 'data_corruption', actions: ['restore_pg_dump'], nature: 'intégrité' },
+  { type: 'unknown', actions: ['dry_run_report'], nature: 'escalade' },
+]
 
 export function verifyOk(v: VerifyTx | null): boolean | null {
   return v ? v.ok : null
