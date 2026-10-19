@@ -1,0 +1,23 @@
+# Documents du sujet (non versionnés)
+*.pdf
+*.pptx
+
+# OS / éditeurs
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dépendances / builds
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
