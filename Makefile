@@ -3,6 +3,10 @@
 
 COMPOSE := docker compose -f infra/compose/docker-compose.yml
 ROOT    := $(shell pwd)
+# Interpréteur des scripts hôtes (seed, verify_tx, trafic) : sous Windows, `python3` est
+# souvent le raccourci du Microsoft Store (il échoue sans rien lancer) -> repli sur
+# `python`. Forçable : make seed PYTHON=py
+PYTHON  ?= $(shell python3 -c "" >/dev/null 2>&1 && echo python3 || echo python)
 
 .PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt \
         traffic train capture-baseline capture-attack calibrate ml-tools test-ml
@@ -38,10 +42,10 @@ down: ## Arrête et nettoie la stack
 	$(COMPOSE) --profile demo --profile full --profile attack --profile ai down
 
 seed: ## Peuple les données fictives
-	python3 scripts/seed.py
+	$(PYTHON) scripts/seed.py
 
 verify: ## Transaction de contrôle (exit 0 = OK)
-	@python3 scripts/verify_tx
+	@$(PYTHON) scripts/verify_tx
 
 demo: ## Joue les 5 temps de la démo (SC=<scenario>)
 	scripts/demo.sh $(or $(SC),service_flood)
@@ -57,7 +61,7 @@ reset: ## Remet la cible à l'état "avant"
 
 # ---- ML : ré-entraînement sur vraies séries Prometheus (ml/training/README.md §6) ----
 traffic: ## Trafic légitime réaliste (DURATION=60m) — baseline et temps 1 de la démo
-	python3 scripts/gen_normal_traffic.py --duration $(DURATION)
+	$(PYTHON) scripts/gen_normal_traffic.py --duration $(DURATION)
 
 # Pendant une capture, le detector est ARRÊTÉ puis relancé quoi qu'il arrive (succès, échec,
 # Ctrl-C) : sinon l'ancien modèle déclencherait des remédiations (redémarrages, limites,
@@ -65,16 +69,39 @@ traffic: ## Trafic légitime réaliste (DURATION=60m) — baseline et temps 1 de
 # aussi le trafic de fond (même IP que l'attaque). La remédiation reste up pour Alertmanager.
 # Les captures écrivent dans un .tmp et ne remplacent/complètent le CSV que si elles ont
 # réussi : un échec ne détruit jamais une capture précédente.
-DETECTOR_OFF = echo "detector arrêté pendant la capture"; $(COMPOSE) stop detector >/dev/null;   trap 'rm -f $(ML_DATA)/*.csv.tmp; $(COMPOSE) start detector >/dev/null; echo "detector relancé"' EXIT;   trap 'exit 130' INT TERM
+DETECTOR_OFF = echo "detector arrêté pendant la capture"; $(COMPOSE) stop detector >/dev/null; \
+  trap 'rm -f $(ML_DATA)/*.csv.tmp; $(COMPOSE) start detector >/dev/null; echo "detector relancé"' EXIT; \
+  trap 'exit 130' INT TERM
 
 capture-baseline: ## Joue DURATION (60m) de trafic normal puis capture la baseline réelle (detector arrêté)
-	@set -e; $(DETECTOR_OFF); 	  python3 scripts/gen_normal_traffic.py --duration $(DURATION); 	  $(COMPOSE) exec -T collector python -m ml.collector.capture --last $(DURATION) 	    --label normal > $(ML_DATA)/baseline_real.csv.tmp; 	  rows=$$(( $$(wc -l < $(ML_DATA)/baseline_real.csv.tmp) - 1 )); 	  if [ $$rows -lt $(MIN_ROWS) ]; then 	    echo "capture: $$rows fenêtres < $(MIN_ROWS) requises (DURATION trop courte ?) — baseline inchangée"; 	    exit 1; fi; 	  mv $(ML_DATA)/baseline_real.csv.tmp $(ML_DATA)/baseline_real.csv; 	  echo "baseline : $$rows fenêtres -> $(ML_DATA)/baseline_real.csv"
+	@set -e; $(DETECTOR_OFF); \
+	  $(PYTHON) scripts/gen_normal_traffic.py --duration $(DURATION); \
+	  $(COMPOSE) exec -T collector python -m ml.collector.capture --last $(DURATION) \
+	    --label normal > $(ML_DATA)/baseline_real.csv.tmp; \
+	  rows=$$(( $$(wc -l < $(ML_DATA)/baseline_real.csv.tmp) - 1 )); \
+	  if [ $$rows -lt $(MIN_ROWS) ]; then \
+	    echo "capture: $$rows fenêtres < $(MIN_ROWS) requises (DURATION trop courte ?) — baseline inchangée"; \
+	    exit 1; fi; \
+	  mv $(ML_DATA)/baseline_real.csv.tmp $(ML_DATA)/baseline_real.csv; \
+	  echo "baseline : $$rows fenêtres -> $(ML_DATA)/baseline_real.csv"
 
 # Fenêtre étiquetée = durée de l'attaque + RATE_LAG s (le temps que les rate() retombent),
 # pas les 90 s de trafic de fond : sinon le detection_rate réel serait dilué.
 capture-attack: ## Joue le scénario SC (ATTACK_S s, sur fond de trafic normal) et ajoute ses fenêtres (detector arrêté)
 	@test -n "$(SC)" || { echo "SC=<scenario> requis"; exit 1; }
-	@set -e; $(DETECTOR_OFF); 	  start_s=$$(date -u +%s); 	  python3 scripts/gen_normal_traffic.py --duration 90s & 	  attacks/run.sh $(SC) --duration $(ATTACK_S); sleep $(RATE_LAG); wait; 	  end_s=$$(( start_s + $(ATTACK_S) + $(RATE_LAG) )); 	  $(COMPOSE) exec -T collector python -m ml.collector.capture 	    --start $$(date -u -d @$$start_s +%Y-%m-%dT%H:%M:%SZ) 	    --end $$(date -u -d @$$end_s +%Y-%m-%dT%H:%M:%SZ) 	    --label $(SC) > $(ML_DATA)/attacks_real.csv.tmp; 	  if [ -s $(ML_DATA)/attacks_real.csv ]; then 	    tail -n +2 $(ML_DATA)/attacks_real.csv.tmp >> $(ML_DATA)/attacks_real.csv; 	  else cp $(ML_DATA)/attacks_real.csv.tmp $(ML_DATA)/attacks_real.csv; fi; 	  echo "$(SC) ajouté à $(ML_DATA)/attacks_real.csv"
+	@set -e; $(DETECTOR_OFF); \
+	  start_s=$$(date -u +%s); \
+	  $(PYTHON) scripts/gen_normal_traffic.py --duration 90s & \
+	  attacks/run.sh $(SC) --duration $(ATTACK_S); sleep $(RATE_LAG); wait; \
+	  end_s=$$(( start_s + $(ATTACK_S) + $(RATE_LAG) )); \
+	  $(COMPOSE) exec -T collector python -m ml.collector.capture \
+	    --start $$(date -u -d @$$start_s +%Y-%m-%dT%H:%M:%SZ) \
+	    --end $$(date -u -d @$$end_s +%Y-%m-%dT%H:%M:%SZ) \
+	    --label $(SC) > $(ML_DATA)/attacks_real.csv.tmp; \
+	  if [ -s $(ML_DATA)/attacks_real.csv ]; then \
+	    tail -n +2 $(ML_DATA)/attacks_real.csv.tmp >> $(ML_DATA)/attacks_real.csv; \
+	  else cp $(ML_DATA)/attacks_real.csv.tmp $(ML_DATA)/attacks_real.csv; fi; \
+	  echo "$(SC) ajouté à $(ML_DATA)/attacks_real.csv"
 
 # train / calibrate / test-ml tournent dans l'image `ml-tools` (étape du Dockerfile detector) :
 # même Python 3.12 et même scikit-learn que le build du detector. Le modèle calibré est donc
@@ -108,7 +135,7 @@ test: test-py test-front ## Lance tous les tests
 
 test-py: ## Tests Python (lib partagée + services + ml + remediation + cyber)
 	@echo "== Tests Python =="
-	@python3 -m pytest -q \
+	@$(PYTHON) -m pytest -q \
 	  libs/python/resilience_common \
 	  services ml remediation assistant \
 	  security/waf/tests attacks/tests scripts/tests 2>/dev/null || \
