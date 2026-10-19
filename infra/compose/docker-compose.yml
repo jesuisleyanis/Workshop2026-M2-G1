@@ -3,6 +3,8 @@
 # Secrets injectés depuis ../../.env (produit par scripts/decrypt-secrets.sh à partir de SOPS).
 # Durcissement : non-root (Dockerfiles), cap_drop ALL, no-new-privileges, limites ressources,
 # seul le WAF publie des ports. Voir ../../security/hardening/hardening.md.
+# Reproductibilité (R5) : toutes les images tierces sont épinglées à une version précise (aucun
+# `:latest`) — un rebuild ultérieur ne doit pas tirer un major différent (Grafana/Loki/Prometheus…).
 
 name: resilience-g1
 
@@ -34,6 +36,7 @@ secrets:
 
 volumes:
   pgdata:
+  remediation-journal:  # journal d'incidents SQLite du moteur (/var/lib/remediation), persistant
   waf-deny:        # deny-list Nginx partagée WAF (lecture) <-> remediation (écriture via playbook)
   waf-logs:        # audit log ModSecurity (JSON) : WAF (écriture) -> waf-exporter (lecture)
   grafana-data:
@@ -225,8 +228,12 @@ services:
     volumes:
       - waf-deny:/etc/resilience/waf-deny:rw                 # écrite par waf_deny_ip.yml
       - ../../infra/ansible/backups:/opt/backups:ro          # dumps sains (pg_backup.yml côté hôte)
+      - remediation-journal:/var/lib/remediation:rw          # journal d'incidents SQLite (persistant, survit au redémarrage)
     group_add: ["101"]         # groupe nginx du WAF : droit d'écrire dans le volume waf-deny
     depends_on: [docker-socket-proxy, postgres]
+    # Racine en lecture seule (CDC §5.4) : seuls points inscriptibles = volume journal, volume
+    # waf-deny partagé, et /tmp (tmpfs) pour les artefacts ansible-runner (ANSIBLE_HOME/LOCAL_TEMP/PRIVATE_DATA_DIR).
+    read_only: true
     tmpfs: ["/tmp"]            # artefacts ansible-runner
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8005/health').status==200 else 1)"]
@@ -260,7 +267,7 @@ services:
   # ---------------------------------------------------------------- observabilité
   prometheus:
     <<: *hardening
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.54.1
     networks: [app, obs]
     volumes:
       - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -270,7 +277,7 @@ services:
 
   loki:
     <<: *hardening
-    image: grafana/loki:latest
+    image: grafana/loki:3.2.1
     networks: [obs]
     volumes:
       - ../loki/loki-config.yml:/etc/loki/local-config.yaml:ro
@@ -279,7 +286,7 @@ services:
 
   promtail:
     <<: *hardening
-    image: grafana/promtail:latest
+    image: grafana/promtail:3.2.1
     networks: [obs]
     volumes:
       - ../promtail/promtail-config.yml:/etc/promtail/config.yml:ro
@@ -289,7 +296,7 @@ services:
 
   grafana:
     <<: *hardening
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.3.0
     networks: [obs]
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
@@ -305,7 +312,7 @@ services:
     # POST /events/alertmanager (Bearer interne via le secret `remediation_token`). Réseau `app`
     # requis pour joindre le moteur ; aucun port publié.
     <<: *hardening
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.27.0
     profiles: [full]
     networks: [obs, app]
     volumes:
@@ -315,7 +322,7 @@ services:
 
   cadvisor:
     <<: *hardening
-    image: gcr.io/cadvisor/cadvisor:latest
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
     profiles: [full]
     networks: [obs]
     volumes:
@@ -327,7 +334,7 @@ services:
 
   pg-exporter:
     <<: *hardening
-    image: prometheuscommunity/postgres-exporter:latest
+    image: prometheuscommunity/postgres-exporter:v0.15.0
     profiles: [full]
     networks: [data, obs]
     environment:
@@ -337,13 +344,15 @@ services:
 
   # ---------------------------------------------------------------- assistant RAG (profil ai)
   ollama:
-    image: ollama/ollama:latest
+    # Durcissement comme les autres conteneurs (no-new-privileges + cap_drop ALL) : le serveur
+    # Ollama tourne en user space et n'a besoin d'aucune capability.
+    <<: *hardening
+    image: ollama/ollama:0.3.14
     profiles: [ai]
     networks: [app]
     volumes:
       - ollama-models:/root/.ollama
     mem_limit: 8g          # lourd — déporter sur le PC IA si la RAM est serrée
-    restart: unless-stopped
 
   assistant:
     <<: [*hardening, *pylimits]
@@ -361,7 +370,7 @@ services:
 
   # ---------------------------------------------------------------- banc d'essai (profil attack)
   attacker:
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.10.1
     profiles: [attack]
     networks: [edge]       # rejoue depuis le PC Hôte en dev ; en démo : PC Attaquant physique
     entrypoint: ["sleep", "infinity"]

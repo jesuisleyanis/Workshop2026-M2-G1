@@ -61,8 +61,11 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `remediation_verified` | remediation | `verify_tx` repassé OK après action |
 | `remediation_failed` | remediation | Échec / escalade |
 | `assistant_index_built` | assistant | Index RAG (re)construit |
+| `assistant_index_empty` | assistant | Aucune source trouvée : index RAG vide |
+| `assistant_store_error` | assistant | Vector store (Chroma) non chargé / en erreur |
 | `assistant_question_answered` | assistant | Réponse fournie à une question opérateur |
 | `assistant_llm_unavailable` | assistant | Ollama injoignable — mode dégradé (lecture seule) |
+| `assistant_http_request` | assistant | Trace d'une requête HTTP sortante de l'assistant |
 
 ### Exemple
 

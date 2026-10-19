@@ -79,7 +79,7 @@ Erreurs : `{"error":{"code","message","request_id"}}`. Montants en **centimes en
 | B12 | Migrations Alembic au démarrage | `test_lifespan_runs_alembic_migrations` |
 | B13 | **PostgreSQL réel** : virements concurrents sans découvert (optionnel, `TEST_POSTGRES_URL`) | `test_payment_postgres_integration.py` |
 
-Écart connu (hors périmètre du service) : `test_http_metrics_follow_contract_names_and_labels` est en `xfail(strict)` — `resilience_common.metrics.instrument` ne produit pas exactement les noms/labels HTTP du contrat §2 (voir README, « Écarts »).
+Métriques HTTP conformes au contrat §2 : `resilience_common.metrics.instrument` produit les noms/labels exacts (`resilience_http_requests_total{service,method,path,status}`). Le test `test_http_metrics_follow_contract_names_and_labels` est actif et vert (l'ancien `xfail` est retiré).
 
 ## 7. Hors périmètre / limites assumées
 

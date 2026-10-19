@@ -1,0 +1,8 @@
+# Dépendances d'entraînement de l'IsolationForest (ml/training).
+# Les versions DOIVENT être identiques à celles du detector (ml/detector/requirements.txt) :
+# un artefact produit avec une version scikit-learn/numpy différente peut, une fois rechargé,
+# produire des scores silencieusement différents. `baseline_stats.json` enregistre la version
+# utilisée (`sklearn_version`) et le detector journalise un avertissement en cas de divergence.
+scikit-learn==1.9.1
+numpy==2.5.4
+joblib==1.6.0

@@ -42,3 +42,18 @@ MODEL_DIR=ml/training/artifacts REMEDIATION_TOKEN=... \
 cd ml && python -m pytest detector                              # tests (POST remédiation mocké)
 docker build -f ml/detector/Dockerfile -t resilience/detector . # image (artefacts requis dans ml/training/artifacts/)
 ```
+
+## Modèle : artefact requis au build (reproductibilité)
+
+Le modèle n'est **pas commité** (`ml/training/artifacts/` est dans `.gitignore`). Le `Dockerfile`
+du detector fait `COPY ml/training/artifacts/model.joblib …` : **l'image ne builde donc pas** tant
+que l'artefact n'a pas été produit. Stratégie retenue (étape documentée et dans `make`, ticket #23) :
+
+- **`make up` / `make up-full` dépendent de la cible `make model`** qui lance `python -m ml.training.train`
+  si l'artefact est absent (sinon no-op). Le modèle est donc toujours présent avant le build du detector.
+  Pour (ré)entraîner à la demande : `make model` (ou `python -m ml.training.train`).
+- **Versions épinglées** : `scikit-learn==1.9.1`, `numpy`, `joblib` sont figés **à l'identique** côté
+  entraînement (`ml/training/requirements.txt`) et detector (`ml/detector/requirements.txt`). Une dérive fausserait silencieusement les scores.
+- **Vérifications au chargement** (`ml/detector/model.py`) : `feature_names` == `ml.shared.features`,
+  `sha256(model.joblib)` == `baseline_stats.json.model_sha256` (refus sinon), et **avertissement
+  journalisé** si la version scikit-learn installée diffère de `sklearn_version` enregistrée à l'entraînement.

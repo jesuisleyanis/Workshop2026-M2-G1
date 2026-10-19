@@ -4,7 +4,7 @@
 > Périmètre : plateforme de paiement **fictive** d'une entité financière fictive, telle que décrite dans `CAHIER-DES-CHARGES.md` §4 et `docs/contracts.md`. Aucune donnée réelle.
 
 **Légende de statut des mesures (honnêteté de preuve)** : **[R]** réalisé et présent dans le dépôt au 2026-10-19 · **[S]** spécifié (contrat / CDC) mais composant pas encore livré · **[M]** valeur à mesurer en recette.
-État du dépôt au 2026-10-19 : `services/*`, `ml/*`, `remediation/*`, `security/*`, `attacks/*` existent ; `infra/compose`, `infra/ansible/playbooks`, `infra/{prometheus,loki,grafana,alertmanager}`, `dashboard/`, `scripts/verify_tx` sont encore vides ou absents.
+État du dépôt au 2026-10-19 : `services/*`, `ml/*`, `remediation/*`, `security/*`, `attacks/*`, `infra/*` (dont `infra/compose`, les playbooks Ansible `waf_deny_ip.yml`, `pg_restore.yml`, `pg_backup.yml`, les règles SOC Prometheus/Grafana), `dashboard/` et `scripts/verify_tx` existent. Restent à livrer : la clé age réelle et `secrets.enc.env`, la planification périodique du dump et la copie hors hôte des dumps.
 
 ---
 
@@ -40,20 +40,20 @@ Ordre de grandeur **pédagogique** (hypothèses fictives, à valider par la dire
 
 | Id | Bien support | Exposition / privilèges | Valeurs portées | Réf. |
 |---|---|---|---|---|
-| **BS1** | **WAF** Nginx + ModSecurity + CRS | **Seul** composant exposé (80/443, TLS auto-signé) ; porte la deny-list IP | VM1, VM4 | `security/waf/` [R] (conf), déploiement [S] |
+| **BS1** | **WAF** Nginx + ModSecurity + CRS | **Seul** composant exposé (80/443, TLS auto-signé) ; porte la deny-list IP | VM1, VM4 | `security/waf/` [R] (conf), déploiement via `infra/compose` [R] |
 | **BS2** | **front** (React, Nginx) | derrière le WAF ; en-têtes de sécurité | VM1 | `services/front/` [R] |
 | **BS3** | **payment-api** (FastAPI) | réseau `app` ; valide le JWT localement (HS256 épinglé, `exp`/`sub` requis) | VM1, VM2 | `services/payment-api/` [R] |
 | **BS4** | **auth** (FastAPI) | réseau `app` ; bcrypt, rate-limit `10/minute` par IP (stockage mémoire), API interne `/internal/tighten-rate-limit` | VM4, VM1 | `services/auth/` [R] |
-| **BS5** | **Postgres 16** + dumps | réseau `data` `internal: true`, jamais exposé | VM2, VM1 | `libs/python/resilience_db` [R] ; dumps planifiés [S] |
-| **BS6** | **Moteur de remédiation** | **privilèges élevés par nature** ; API authentifiée (token), hors réseau `edge`, accès Docker via `docker-socket-proxy` (restart seul), playbooks Ansible nommés | VM3, (VM1, VM2 en cas d'abus) | `remediation/` [R] ; proxy et compose [S] |
-| **BS7** | **Chaîne d'observabilité et de détection** : Prometheus, Loki, Promtail, collector, detector (IsolationForest v1.0.0), Alertmanager | réseau `obs`/`app` | VM3 | `ml/*` [R] ; `infra/*` [S] |
+| **BS5** | **Postgres 16** + dumps | réseau `data` `internal: true`, jamais exposé | VM2, VM1 | `libs/python/resilience_db` [R] ; playbook `pg_backup.yml` [R] ; dumps planifiés [S] (planification à activer) |
+| **BS6** | **Moteur de remédiation** | **privilèges élevés par nature** ; API authentifiée (token), hors réseau `edge`, accès Docker via `docker-socket-proxy` (liste blanche stricte de 5 couples méthode/chemin : inspection, restart, reload à chaud du WAF), playbooks Ansible nommés | VM3, (VM1, VM2 en cas d'abus) | `remediation/` [R] ; proxy et compose [R] |
+| **BS7** | **Chaîne d'observabilité et de détection** : Prometheus, Loki, Promtail, collector, detector (IsolationForest v1.0.0), Alertmanager | réseau `obs`/`app` | VM3 | `ml/*` [R] ; `infra/*` [R] |
 | **BS8** | **Secrets** SOPS + age | clé privée age **hors git** | VM4 | `security/sops/` [R] (règles ; `.sops.yaml` contient encore une clé publique d'exemple, `secrets.enc.env` à créer) |
 | **BS9** | **Hôte** (PC `192.168.137.1`, Docker Desktop, hotspot `RESILIENCE-G1`) | point unique de déploiement | tous | `CAHIER-DES-CHARGES.md` §4 |
 | **BS10** | **Assistant RAG** (Ollama) | non privilégié, séparé de l'automate (sujet §3.3) | aucune valeur critique | `assistant/` [R] |
 
 ### 1.5 Socle de sécurité : mesures en place et écarts assumés
 
-En place : réseaux `edge`/`app`/`data`/`obs` avec `data` interne [S compose] ; conteneurs non-root, `cap_drop: ALL`, `read_only`, limites ([S], `security/hardening/hardening.md` + `audit.sh` [R]) ; logs JSON normalisés avec `request_id` ; JWT à `alg` épinglé ; mots de passe hachés ; validation stricte des paramètres d'actions.
+En place : réseaux `edge`/`app`/`data`/`obs` avec `data` interne [R compose] ; conteneurs non-root, `cap_drop: ALL`, `read_only`, limites ([R] dans `infra/compose`, `security/hardening/hardening.md` + `audit.sh` [R]) ; logs JSON normalisés avec `request_id` ; JWT à `alg` épinglé ; mots de passe hachés ; validation stricte des paramètres d'actions.
 **Écarts connus** (à lire comme risques résiduels, cf. atelier 5) : pas de MFA ; secret JWT **symétrique partagé** entre `auth` et `payment-api` ; rate-limit en mémoire (perdu au redémarrage) ; TLS auto-signé ; pas de sauvegarde hors hôte ; un seul hôte, un seul WAF, un seul Postgres.
 
 ---
@@ -108,9 +108,9 @@ Correspondance **1 pour 1** avec `attacks/scenarios/*.yml`, validée par `attack
 | **SO3** | `web_attack` | Exploitation d'application exposée (T1190) : charges CRS de test (`' OR '1'='1`, `../../etc/passwd`) | <= 20 req/s, 20 s | `resilience_waf_blocked_total{rule}` ; `waf_blocked` | `waf_blocked_per_s` | `web_attack` -> `confirm_waf_block` + `waf_blacklist_ip` | 403 sur les requêtes malveillantes, source en liste noire, `verify_tx` OK |
 | **SO4** | `data_corruption` | Manipulation de données stockées (T1565.001), altération contrôlée et réversible de données fictives | altération bornée aux données fictives | `resilience_db_errors_total` ; `db_error` ; `verify_tx` KO | `db_errors_per_s` | `data_corruption` -> `restore_pg_dump(latest)` **seul** | données cohérentes restaurées, `verify_tx` OK |
 | SO5 | (pas de scénario rejoué) | Secret exposé (T1552) / compte valide (T1078) | n/a | n/a | n/a | **mesures préventives** (SOPS, gitleaks, `audit.sh`) | `audit.sh` conforme, aucun secret dans l'archive |
-| SO6 | (pas de scénario rejoué) | Abus du moteur (token volé, appel Docker/Ansible hors périmètre) | n/a | `remediation_action` anormale | n/a | **mesures préventives** (voir 5.2) | refus des appels hors liste blanche (tests à écrire [S]) |
+| SO6 | (pas de scénario rejoué) | Abus du moteur (token volé, appel Docker/Ansible hors périmètre) | n/a | `remediation_action` anormale | n/a | **mesures préventives** (voir 5.2) | refus des appels hors liste blanche (tests dans `remediation/tests/` [R]) |
 
-**Point de conception à défendre (sujet §2, §3.4)** : SO1 et SO4 reçoivent des réponses **volontairement différentes**. La disponibilité se rétablit en coupant la source et en redémarrant (état conservé) ; la corruption exige de **restaurer** un état sain. Ce n'est pas qu'une convention : `remediation/decision.py` **refuse de charger la table** (fail closed) si `data_corruption` contient `restart/recreate`, ou si `restore_pg_dump` apparaît dans une autre règle, ou si la règle `unknown` contient une action destructive. Ces invariants sont dans le code ; leurs tests unitaires (`remediation/tests/`, vide au 2026-10-19) sont à écrire [S].
+**Point de conception à défendre (sujet §2, §3.4)** : SO1 et SO4 reçoivent des réponses **volontairement différentes**. La disponibilité se rétablit en coupant la source et en redémarrant (état conservé) ; la corruption exige de **restaurer** un état sain. Ce n'est pas qu'une convention : `remediation/decision.py` **refuse de charger la table** (fail closed) si `data_corruption` contient `restart/recreate`, ou si `restore_pg_dump` apparaît dans une autre règle, ou si la règle `unknown` contient une action destructive. Ces invariants sont dans le code ; leurs tests unitaires sont livrés dans `remediation/tests/` (`test_decision_table.py`, `test_engine.py`, `test_actions.py`…) [R].
 
 **Qualité de la détection (honnêteté)** : modèle IsolationForest v1.0.0, seuil 0,6296 (quantile 99,9 % de la baseline). Sur le jeu d'évaluation : 0/2000 faux positifs sur trafic normal ; détection modèle seul : `service_flood` 100 %, `auth_abuse` 98,6 %, `web_attack` 95,7 %, `data_corruption` 100 % ; 100 % avec le garde-fou statistique (z >= 12,97). **Limite** : baseline et attaques sont **synthétiques** (`ml/training/dataset.py`), pas du trafic réel ; le type d'incident est étiqueté par une heuristique de routage (`classify_incident`), pas par le modèle (limite assumée, `docs/contracts.md` §3).
 
@@ -166,16 +166,16 @@ Aucun risque Élevé ou Critique ne subsiste. Les quatre risques Moyens (SO1-SO5
 | Risque | Mesure | Type | Composant / preuve | Statut |
 |---|---|---|---|---|
 | SO1 | **Détection ML** du pic multi-signaux (score >= 0,6296 ou garde-fou z >= 12,97) puis événement `POST /events` | Détective | `ml/detector/core.py`, `ml/training/artifacts/v1.0.0/` (hash `sha256` vérifié au chargement) | [R] |
-| SO1 | **Blocage de la source** (deny-list WAF, `never_block_ips` protège l'hôte) puis **redémarrage** de `payment-api` via proxy (liste blanche `payment-api`, `auth`, `front`) | Correctif | `remediation/actions/waf.py`, `docker.py`, `docker_proxy.py` | [R] code ; playbook `waf_deny_ip.yml` et proxy [S] |
-| SO1, SO2, SO3 | **WAF** CRS : filtrage applicatif, seul point exposé, log JSON, métrique `resilience_waf_blocked_total` | Préventif, détectif | `security/waf/nginx.conf`, `waf_exporter.py` (5 tests verts) | [R] conf ; déploiement [S] |
+| SO1 | **Blocage de la source** (deny-list WAF, `never_block_ips` protège l'hôte) puis **redémarrage** de `payment-api` via proxy (liste blanche `payment-api`, `auth`, `front`) | Correctif | `remediation/actions/waf.py`, `docker.py`, `docker_proxy.py` | [R] code, playbook `waf_deny_ip.yml` et proxy |
+| SO1, SO2, SO3 | **WAF** CRS : filtrage applicatif, seul point exposé, log JSON, métrique `resilience_waf_blocked_total` | Préventif, détectif | `security/waf/nginx.conf`, `waf_exporter.py` (5 tests verts) | [R] conf et déploiement compose |
 | SO2 | **Rate-limit** `/login` 10/min par IP, resserrable à chaud (x0,5, plancher 1/min). Le moteur envoie une `Idempotency-Key` = incident, mais **`auth` ne la dédoublonne pas encore** : une nouvelle tentative du moteur re-multiplie la limite (10 -> 5 -> 2 -> 1/min) | Préventif, correctif | `services/auth/.../ratelimit.py`, `remediation/actions/rate_limit.py` | [R] ; dédoublonnage [S], écart à corriger |
 | SO2 | Hachage des mots de passe, JWT 15 min à `alg` épinglé | Préventif | `services/auth`, `payment_api/security.py` | [R] |
 | SO3 | Validation d'entrée, ORM paramétré, `confirm_waf_block` (lecture Loki) puis blacklist permanente | Préventif, correctif | `payment_api/schemas.py`, `remediation/actions/waf.py` | [R] |
-| SO4 | **Restauration** du dernier dump (`restore_pg_dump`, playbook `pg_restore.yml`), contrainte `balance_cents >= 0`, transferts atomiques, vérification `verify_tx` | Correctif | `remediation/actions/postgres.py`, `resilience_db/models.py`, `ledger.py` | [R] code ; **dump planifié et playbook [S]** |
+| SO4 | **Restauration** du dernier dump (`restore_pg_dump`, playbook `pg_restore.yml`), contrainte `balance_cents >= 0`, transferts atomiques, vérification `verify_tx` | Correctif | `remediation/actions/postgres.py`, `resilience_db/models.py`, `ledger.py` | [R] code et playbook `pg_restore.yml` ; playbook `pg_backup.yml` [R] ; **planification périodique du dump [S]** |
 | SO5 | **SOPS + age**, clé privée hors git, `*_FILE` pour les secrets du moteur, `gitleaks` pre-commit, `audit.sh` avant packaging | Préventif | `security/sops/`, `remediation/config.py`, `security/hardening/audit.sh` | [R] ; clé age réelle et `secrets.enc.env` [S] |
-| SO6 | **docker-socket-proxy** (restart seul) **+ liste blanche côté client** (méthode+chemin) ; playbooks **nommés** uniquement (`ALLOWED_PLAYBOOKS`) ; API par token (>= 16 car.) ; hors `edge` ; `never_block_ips` ; `dry_run` forçable ; cooldown/`max_attempts` ; actions sérialisées | Préventif | `remediation/actions/docker_proxy.py`, `runner.py`, `config.py`, `engine.py` | [R] code ; proxy et isolation réseau [S] |
-| Tous | **Durcissement** conteneurs (non-root, `cap_drop: ALL`, `read_only`, `no-new-privileges`, limites, healthchecks) | Préventif | `security/hardening/hardening.md`, `audit.sh` | [R] doc+audit ; application compose [S] |
-| Tous | **Fonction SOC** : règles Loki/Grafana sur les `event` normalisés (`auth_login_failed`, `waf_blocked`, `db_error`...), journal d'incident et timeline | Détective | `docs/contracts.md` §1, `remediation/journal.py`, `timeline.py` | journal [R] ; règles Loki [S] |
+| SO6 | **docker-socket-proxy** (liste blanche 5 couples : inspection + restart + reload WAF) **+ liste blanche côté client** (méthode+chemin) ; playbooks **nommés** uniquement (`ALLOWED_PLAYBOOKS`) ; API par token (>= 16 car.) ; hors `edge` ; `never_block_ips` ; `dry_run` forçable ; cooldown/`max_attempts` ; actions sérialisées | Préventif | `remediation/actions/docker_proxy.py`, `runner.py`, `config.py`, `engine.py` | [R] code, proxy et isolation réseau (compose) |
+| Tous | **Durcissement** conteneurs (non-root, `cap_drop: ALL`, `read_only`, `no-new-privileges`, limites, healthchecks) | Préventif | `security/hardening/hardening.md`, `audit.sh` | [R] doc+audit ; application compose [R] |
+| Tous | **Fonction SOC** : règles Loki/Grafana sur les `event` normalisés (`auth_login_failed`, `waf_blocked`, `db_error`...), journal d'incident et timeline | Détective | `docs/contracts.md` §1, `remediation/journal.py`, `timeline.py` | journal [R] ; règles SOC (`infra/prometheus/rules/soc.yml`, `infra/grafana/provisioning/alerting/soc-rules.yml`) [R] |
 
 ### 5.2 Décision de traitement
 
@@ -193,15 +193,15 @@ Aucun risque Élevé ou Critique ne subsiste. Les quatre risques Moyens (SO1-SO5
 1. **Détection calibrée sur données synthétiques** : les taux (0 faux positif, >= 95 % de détection) ne se transposent pas tels quels à du trafic réel ; un faux positif déclenche un redémarrage inutile de `payment-api`.
 2. **Corruption silencieuse** (sans `db_error`) non détectée par le signal retenu ; et un dump déjà corrompu serait restauré par `latest` (voir `docs/pca-pra.md` §8).
 3. **Pas de retour arrière automatique** des mesures (deny-list sans expiration implémentée côté moteur, rate-limit durci levé seulement au redémarrage de `auth`, et re-durci à chaque nouvelle tentative faute de dédoublonnage) : un faux positif ou plusieurs tentatives peuvent pénaliser des utilisateurs légitimes (jusqu'au plancher de 1 tentative/min).
-4. **Moteur de remédiation** : c'est à la fois la meilleure défense et la cible de plus forte valeur ; son périmètre de privilèges est **spécifié et testé en code**, mais l'isolation réseau et la configuration du proxy ne seront prouvées qu'avec `infra/compose`.
+4. **Moteur de remédiation** : c'est à la fois la meilleure défense et la cible de plus forte valeur ; son périmètre de privilèges est **spécifié et testé en code**, et l'isolation réseau et la configuration du proxy sont désormais câblées dans `infra/compose` [R] ; leur preuve d'exécution reste à établir en recette [M].
 
 ### 5.4 Plan d'action priorisé (sprint)
 
 | Priorité | Action | Pilier | Échéance |
 |---|---|---|---|
-| P1 | Livrer `infra/compose` (3 réseaux, durcissement) et lancer `audit.sh` | Infra / Cyber | J2 |
-| P1 | Playbooks `waf_deny_ip.yml`, `pg_restore.yml` + **job de dump planifié** (condition du RPO) | Infra | J3 |
-| P1 | `scripts/verify_tx` et rejeu des 4 scénarios, relevé des MTTR | Dév / Infra | J3-J4 |
+| P1 | `infra/compose` (réseaux, durcissement) livré [R] ; lancer `audit.sh` dessus | Infra / Cyber | J2 |
+| P1 | Playbooks `waf_deny_ip.yml`, `pg_restore.yml`, `pg_backup.yml` livrés [R] ; reste la **planification périodique du dump** (condition du RPO) [S] | Infra | J3 |
+| P1 | `scripts/verify_tx` livré [R] ; rejeu des 4 scénarios et relevé des MTTR [M] | Dév / Infra | J3-J4 |
 | P2 | Clé age réelle + `secrets.enc.env` ; relecture `gitleaks` | Cyber | J2 |
-| P2 | Règles SOC Loki sur les `event` normalisés | Cyber / Infra | J3 |
+| P2 | Règles SOC sur les `event` normalisés : livrées [R] (`soc.yml`, `soc-rules.yml`) | Cyber / Infra | J3 |
 | P3 | Mettre à jour cette cotation avec les MTTR mesurés et les incidents du chaos engineering | Transformation | J4 |

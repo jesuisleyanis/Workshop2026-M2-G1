@@ -44,7 +44,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | Cahier des charges maître | `CAHIER-DES-CHARGES.md` | tous | — | ✅ | — |
 | Librairie partagée (logs/métriques/événement) | `libs/python/resilience_common` | R8 | — | ✅ | 4 tests verts |
 | `.claude/` (settings, agents, skills, commandes) | `.claude/` | — | — | ✅ | settings + 3 agents + skill + 2 cmds |
-| Compose : 4 réseaux + profils + socket-proxy | `infra/compose` | R5,R19,R15 | — | ✅ | `docker-compose.yml` |
+| Compose : 4 réseaux + profils + socket-proxy | `infra/compose` | R5,R19,R15 | — | ✅ | `docker-compose.yml` ; **images tierces épinglées (R5, #21 : plus de `:latest`)** |
 | SOPS + age + `.sops.yaml` + `.gitignore` | `security/sops` | R13 | Louis | ✅ | README + decrypt-secrets.sh ; `.env` déchiffré ignoré, exemples factices seulement (audit §3-4 OK) |
 | gitleaks + ruff pre-commit | `.pre-commit-config.yaml` | R13 | Louis | ✅ | gitleaks v8.18.4 + check-added-large-files ; relancé (config présente) |
 | **EBIOS RM v1** (valeurs métier, sources de risque, scénarios) | `docs/ebios-rm.md` | R16 | — | ✅ | docs/ebios-rm.md |
@@ -60,7 +60,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | seed + verify_tx | `scripts/` | R2 | — | ✅ | **réalignés sur le contrat** (#4/#5) : `verify_tx` résout les ids de comptes via l'API et poste `TransactionIn` (3 entiers) ; seed unique = `resilience_db.seed` (comptes financés, `SEED_PASSWORD` SOPS), `scripts/seed.py` délègue ; 11 tests `scripts/tests` verts ; `scripts/README.md` |
 | Observabilité provisionnée (Prom/Loki/Grafana/Alert) | `infra/*` | R7 | — | ✅ | configs + provisioning |
 | WAF Nginx+ModSec+CRS devant le front | `security/waf` | R11 | — | 🟨 | `Dockerfile` ajouté (#6 : image CRS épinglée, non-root 8080/8443, TLS auto-signé au build) ; upstream corrigé `front:8080` (#7) ; healthcheck `CMD-SHELL curl -fsk https://127.0.0.1:8443/healthz` (#10 : forme shell, `curl` présent dans l'image CRS, `/healthz` servi sans upstream, testé) ; **`waf-exporter` réel** (#12 : conteneur dédié, audit ModSecurity JSON sur volume `waf-logs`, `/metrics` :9188 sur `obs`, cible Prometheus `waf-exporter:9188`, log `waf_blocked`) ; 25 tests (exporteur : parseur, métrique exposée, suivi du journal ; contrat de config) verts. **Reste : build + smoke live (`make up`) sur une machine avec Docker — vérifier que `waf_blocked_per_s` devient non nul pendant `web_attack`** |
-| Durcissement conteneurs (non-root, cap_drop, read_only) | `security/hardening` | R14 | Louis | ✅ | hardening.md + audit.sh **enrichi** (7 contrôles : +exposition réseau WAF-only, +ancre durcissement, +data interne) — exit 0 ; **Postgres non-root** (#11 : `user: "70:70"`, `cap_drop: ALL` sans `cap_add`, choix documenté) + 3 tests contrat `infra/tests/test_compose_hardening.py` — init sur volume vierge à valider live |
+| Durcissement conteneurs (non-root, cap_drop, read_only) | `security/hardening` | R14 | Louis | ✅ | hardening.md + audit.sh **enrichi** (7 contrôles : +exposition réseau WAF-only, +ancre durcissement, +data interne) — exit 0 ; **Postgres non-root** (#11 : `user: "70:70"`, `cap_drop: ALL` sans `cap_add`, choix documenté) + 3 tests contrat `infra/tests/test_compose_hardening.py` — init sur volume vierge à valider live ; **remediation `read_only`+volume journal, `ollama` durci (#22)** |
 | collector (features) + training (IsolationForest) | `ml/collector`, `ml/training` | R8 | — | ✅ | 50 tests ML verts |
 | EBIOS v2 + début NIS2/DORA | `docs/` | R16,R18 | — | ✅ | ebios-rm.md, nis2-dora.md |
 
@@ -68,7 +68,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 
 | Tâche | Composant | Réf. | Propriétaire | Statut | Preuve |
 |---|---|---|---|---|---|
-| detector : score temps réel + émission événement | `ml/detector` | R8 | — | ✅ | detector tests (AnomalyEvent validé) |
+| detector : score temps réel + émission événement | `ml/detector` | R8 | — | ✅ | detector tests (AnomalyEvent validé) ; **modèle via `make model` + versions sklearn épinglées + garde-fou de dérive (#23)** |
 | Moteur de remédiation + table de décision | `remediation/` | R3,R15 | — | ✅ | 91 tests verts (dont exécution réelle du playbook WAF par ansible-runner) ; boot corrigé (#3) ; **plan d'exécution câblé au conteneur** (#8) : `verify_tx` + playbooks embarqués, exécution in-container (`hosts: localhost`), deny-list WAF en volume partagé + reload SIGHUP via le proxy (5e couple), `pg_restore` en direct sur le réseau `data` (client PG 16, dumps ro), variables alignées, inventaire portable. Reste : validation live `make up` (pas de Docker sur le poste de dev) |
 | docker-socket-proxy + API authentifiée | `remediation/`, `infra/compose` | R15 | — | ✅ | haproxy strict câblé (5 couples, `kill` limité à `signal=HUP`) + Bearer statique (ADR 0002) |
 | Playbooks Ansible (deploy + remédiation) | `infra/ansible` | R6 | — | ✅ | opérateur : deploy, pg_backup, db_corrupt_fake (hôte) ; automate : `playbooks/remediation/{waf_deny_ip,pg_restore}.yml` (in-container) ; `--syntax-check` + run réel en tests ; `infra/ansible/README.md` |
@@ -79,7 +79,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | Console Red Team (UI de pilotage locale) | `attacks/console/` | R10 | Louis | ✅ | FastAPI + UI (lancement, chaîne de reprise, journal SSE, kill-switch, liaison Bleu optionnelle MTTD/MTTR) ; garde-fous côté serveur |
 | Campagne multi-étapes (Opération Triade) | `attacks/campaign.sh` | R10 | Louis | ✅ | 3 vagues corrélées auth→web→flood (bornées, réversibles, kill-switch) + bouton console ; teste la corrélation SOC |
 | Techniques avancées (rotation, pulse, recon, replay, slow) | `attacks/run.sh`, `attacks/ATTACKS.md` | R10 | Louis | ✅ | 5 techniques éprouvant des facettes ciblées (robustesse remédiation, seuils temporels, largeur détection, intégrité, lenteur) + panneau console + doc pédagogique |
-| RAG : indexation docs + journal, UI onglet | `assistant/` | R9 | — | ✅ | 97 tests verts |
+| RAG : indexation docs + journal, UI onglet | `assistant/` | R9 | — | ✅ | 97 tests verts ; **événements déclarés au contrat §1 + allowlist (#24)** |
 
 ## J4 — Jeudi : recette, chaos, clip, gel du code (17h)
 
@@ -118,11 +118,21 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 
 | # | Écart | Résolution | Preuve |
 |---|---|---|---|
-| I1 | Proxy Docker | **haproxy** retenu (liste blanche stricte 4 chemins) ; tecnativa retiré ; câblé dans compose | ADR 0002 maj, `docker-compose.yml` |
+| I1 | Proxy Docker | **haproxy** retenu (liste blanche stricte, 5 couples méthode/chemin) ; tecnativa retiré ; câblé dans compose | ADR 0002 maj, `docker-compose.yml` |
 | I2 | Variable verify_tx | compose aligné sur `VERIFY_TX_PATH` | `docker-compose.yml` |
 | I3 | Noms de playbooks | `block_ip.yml`→`waf_deny_ip.yml`, `restore_pg_dump.yml`→`pg_restore.yml` ; déplacés dans `playbooks/remediation/` (exécution in-container, #8) | `infra/ansible/playbooks/remediation/` |
 | I4 | Auth moteur | **Bearer statique interne** acté (service non exposé) | `contracts.md §API`, ADR 0002 |
 | I5 | Métriques HTTP lib | `instrument()` réécrit (middleware) → `resilience_http_requests_total{service,method,path,status}` ; `xfail` retirés ; conftests nettoyés | auth 35/35, payment-api 54/54 |
+
+### Revue P2 — tickets #20 à #24
+
+| # | Écart | Résolution | Preuve |
+|---|---|---|---|
+| #20 | Docs périmées | Sections « Écarts » des deux services corrigées (lib métriques conforme, tests actifs/verts, plus de `xfail`) ; mentions Tecnativa = comparaisons seulement (archi/nis2/hardening déjà en HAProxy) ; caveats `[S]→[R]` de la gouvernance rafraîchis (compose, 3 playbooks, `verify_tx`, règles SOC, tests remediation livrés) — restent `[S]` : clé age réelle/`secrets.enc.env`, planification du dump, copie hors hôte | `services/{auth,payment-api}`, `docs/{ebios-rm,pca-pra,nis2-dora}.md` |
+| #21 | Reproductibilité R5 | Toutes les images tierces épinglées (plus aucun `:latest`) — Prometheus/Loki/Promtail/Grafana/Alertmanager/cAdvisor/pg-exporter/Ollama/curl | `docker-compose.yml`, test `test_image_tags_are_pinned_for_reproducibility`. **Live `make up-full` à rejouer sur machine Docker** |
+| #22 | Durcissement moteur + Ollama | remediation `read_only: true` + volume nommé `remediation-journal` (journal SQLite persistant, conforme CDC §5.4) ; ancre de durcissement appliquée à `ollama` (`no-new-privileges` + `cap_drop: ALL`) | `docker-compose.yml`, `hardening.md`, tests `test_remediation_container_matches_read_only_claim` + `test_hardening_anchor_applied_to_every_service` |
+| #23 | Image detector non buildable | Étape documentée et dans `make` : `make up`/`up-full` dépendent de `make model` (entraîne si artefact absent) ; `scikit-learn==1.9.1`/`numpy`/`joblib` épinglés à l'identique training↔detector (`ml/training/requirements.txt`) ; garde-fou : avertissement journalisé si la version sklearn chargée diffère de `baseline_stats.json` | `Makefile`, `ml/detector/{model.py,README.md}`, test `test_load_model_warns_on_sklearn_version_drift` (51 tests ML verts) |
+| #24 | Hygiène + événements hors contrat | `egg-info` déjà non suivi + ignoré (`.gitignore`) ; 3 événements assistant (`assistant_index_empty`/`_store_error`/`_http_request`) déclarés au contrat §1 + allowlist `resilience_common.RESERVED_EVENTS` ; tests de conformité contrat↔allowlist et assistant↔allowlist | `docs/contracts.md §1`, `resilience_common/events.py`, tests `test_reserved_events_match_contract_table` + `test_assistant_emits_only_reserved_events` |
 
 ## Risques projet (vivant)
 
