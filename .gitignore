@@ -1,7 +1,3 @@
-# Documents du sujet (non versionnés)
-*.pdf
-*.pptx
-
 # OS / éditeurs
 .DS_Store
 .idea/
