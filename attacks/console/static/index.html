@@ -99,6 +99,13 @@
   .scn.campaign .name{color:var(--amber)}
   .note{font-family:var(--mono);font-size:11px;color:var(--faint);border:1px dashed var(--line);
     border-radius:4px;padding:10px 12px;line-height:1.55}
+  .tech{display:flex;align-items:center;gap:11px;border:1px solid var(--line);border-radius:4px;
+    background:var(--panel-2);padding:10px 12px}
+  .tech+.tech{margin-top:9px}
+  .tech .info{min-width:0;flex:1}
+  .tech .tn{font-weight:700;font-size:13px}
+  .tech .td{font-family:var(--mono);font-size:10.5px;color:var(--faint);line-height:1.45;margin-top:2px}
+  .tech .btn{flex:none;padding:7px 12px;font-size:11px}
   .note b{color:var(--muted)}
 
   /* ---- chain viz ---- */
@@ -190,6 +197,14 @@
         </div>
         <div id="scnlist"></div>
         <div class="note" id="dcnote" hidden></div>
+      </div>
+
+      <div class="panel">
+        <div class="head">
+          <span class="ttl">Techniques avancées</span>
+          <span class="hint">éprouvent des facettes précises de la défense</span>
+        </div>
+        <div id="techlist"></div>
       </div>
     </div>
 
@@ -394,6 +409,31 @@ function connectStream(){
   es.onerror=()=>{$('#conn').className='pill';$('#conntxt').textContent='flux coupé';};
 }
 
+async function loadTechniques(){
+  let d; try{ d = await api('/api/techniques'); }catch{ return; }
+  const list = $('#techlist'); list.innerHTML='';
+  (d.techniques||[]).forEach(t=>{
+    const el = document.createElement('div');
+    el.className='tech scn';   // .scn pour que .busy le désactive aussi
+    el.innerHTML = `<div class="info"><div class="tn">${esc(t.label)}</div>
+      <div class="td">${esc(t.tests)}</div></div>
+      <button class="btn" id="tech-${t.name}">Lancer</button>`;
+    list.appendChild(el);
+    $('#tech-'+t.name).onclick=()=>launchTechnique(t.name);
+  });
+}
+
+async function launchTechnique(name){
+  if(RUNNING) return;
+  curIT=null; $('#t-after').textContent='—'; $('#t-after').style.color=''; setNode('n-apres',null,'—');
+  await preVerify();
+  try{
+    const r = await api('/api/technique',{method:'POST',body:JSON.stringify({scenario:name,target:$('#target').value})});
+    if(r.detail){logLine(new Date().toISOString()+' refus : '+r.detail);return;}
+    logLine(new Date().toISOString()+` technique ${name} (${r.duration}s @ ${r.rate}/s) -> ${r.target}`);
+  }catch(e){logLine(new Date().toISOString()+' erreur de lancement technique');}
+}
+
 async function initBlue(){
   try{const s = await api('/api/status'); BLUE = !!s.blue;}catch{ BLUE=false; }
   const foot = $('#foot');
@@ -402,7 +442,7 @@ async function initBlue(){
     : 'Local-only · 127.0.0.1 · Bleu non connecté — preuve côté attaquant = verify_tx (détection/remédiation : voir dashboard)';
 }
 
-loadScenarios().then(()=>{initBlue();preVerify();connectStream();});
+loadScenarios().then(()=>{loadTechniques();initBlue();preVerify();connectStream();});
 </script>
 </body>
 </html>

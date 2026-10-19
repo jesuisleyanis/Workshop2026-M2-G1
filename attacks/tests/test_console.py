@@ -78,6 +78,25 @@ def test_no_concurrent_runs(client):
     assert c.post("/api/run", json={"scenario": "auth_abuse"}).status_code == 409
 
 
+def test_techniques_are_listed(client):
+    c, _ = client
+    names = {t["name"] for t in c.get("/api/techniques").json()["techniques"]}
+    assert {"rotation", "pulse", "recon", "replay", "slow"} <= names
+
+
+def test_technique_launches_with_clamped_defaults(client):
+    c, server = client
+    r = c.post("/api/technique", json={"scenario": "pulse"}).json()
+    assert r["launched"] == "pulse"
+    assert r["duration"] <= 60 and r["rate"] <= 100
+    assert server.runner.last_argv[:3] == ["bash", str(server.RUN_SH), "pulse"]
+
+
+def test_technique_rejects_unknown(client):
+    c, _ = client
+    assert c.post("/api/technique", json={"scenario": "nuke"}).status_code == 422
+
+
 def test_campaign_launches_the_orchestrator(client):
     c, server = client
     r = c.post("/api/campaign", json={"scenario": "campaign"}).json()
