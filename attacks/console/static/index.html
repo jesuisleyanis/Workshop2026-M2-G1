@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Console Red Team</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" />
+<style>
+  /* Console d'ops Red Team — monde terminal/télémétrie, dark assumé, un accent ambre "armé". */
+  :root{
+    --bg:#0b0e11; --panel:#12161b; --panel-2:#171c22; --line:#232a32;
+    --fg:#e7edf3; --muted:#8a97a6; --faint:#5a6676;
+    --amber:#ff8a3d; --amber-dim:#2a1c12;
+    --red:#ff4d5e; --green:#39d98a; --blue:#4da3ff; --violet:#a98bff;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --ui:"Archivo",system-ui,-apple-system,sans-serif;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:
+      radial-gradient(1200px 600px at 85% -10%, #15202b 0%, transparent 60%),
+      radial-gradient(900px 500px at -5% 110%, #1a1410 0%, transparent 55%),
+      var(--bg);
+    color:var(--fg);font-family:var(--ui);font-size:14px;line-height:1.45;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding-block:18px;padding-inline:16px}
+  a{color:var(--blue)}
+
+  /* ---- top bar ---- */
+  header{display:flex;flex-wrap:wrap;align-items:center;gap:14px;
+    padding:14px 16px;background:linear-gradient(180deg,var(--panel),var(--panel-2));
+    border:1px solid var(--line);border-radius:14px}
+  .brand{display:flex;align-items:center;gap:11px;min-width:0}
+  .glyph{width:34px;height:34px;border-radius:9px;flex:none;
+    background:radial-gradient(circle at 35% 30%,#ff9b57,var(--amber) 55%,#c7461e);
+    box-shadow:0 0 0 1px #00000055, 0 4px 12px -6px #000000aa;
+    position:relative}
+  .glyph::after{content:"";position:absolute;inset:0;border-radius:9px;
+    background:repeating-linear-gradient(90deg,#0000 0 5px,#0003 5px 6px)}
+  .brand h1{font-size:15px;font-weight:800;letter-spacing:.14em;margin:0;text-transform:uppercase}
+  .brand .sub{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.04em}
+  .spacer{flex:1 1 40px}
+  .target{display:flex;align-items:center;gap:8px;background:var(--bg);
+    border:1px solid var(--line);border-radius:10px;padding:7px 11px;min-width:0}
+  .target label{font-family:var(--mono);font-size:10px;color:var(--faint);
+    text-transform:uppercase;letter-spacing:.1em}
+  .target input{background:none;border:none;color:var(--fg);font-family:var(--mono);
+    font-size:12.5px;width:min(42vw,230px);outline:none;min-width:0}
+  .pill{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);
+    font-size:11px;padding:6px 11px;border-radius:999px;border:1px solid var(--line);
+    background:var(--bg);white-space:nowrap}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+  .pill.live .dot{background:var(--green);box-shadow:0 0 0 0 #39d98a99;animation:ping 1.6s infinite}
+  .pill.armed{color:var(--amber);border-color:#4a3016}.pill.armed .dot{background:var(--amber)}
+  @keyframes ping{0%{box-shadow:0 0 0 0 #39d98a66}70%{box-shadow:0 0 0 7px #39d98a00}100%{box-shadow:0 0 0 0 #39d98a00}}
+
+  .btn{font-family:var(--ui);font-weight:700;font-size:12.5px;letter-spacing:.04em;
+    border-radius:10px;border:1px solid var(--line);background:var(--panel-2);color:var(--fg);
+    padding:9px 14px;cursor:pointer;transition:.12s;white-space:nowrap}
+  .btn:hover{border-color:#36404b;transform:translateY(-1px)}
+  .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+  .btn.kill{background:linear-gradient(180deg,#ff5d6c,#e23545);border-color:#ff7a86;color:#fff;
+    box-shadow:0 6px 16px -10px #000000aa}
+  .btn.ghost{background:transparent}
+  .btn.go{background:linear-gradient(180deg,#ff9b57,var(--amber));border-color:#ffb27d;color:#1a0f07;width:100%}
+
+  /* ---- layout ---- */
+  .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px;margin-top:16px}
+  @media(max-width:860px){.grid{grid-template-columns:1fr}}
+  .col{display:flex;flex-direction:column;gap:16px;min-width:0}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:15px}
+  .panel>.head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+  .panel .ttl{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+
+  /* ---- scenario cards ---- */
+  .scn{border:1px solid var(--line);border-radius:12px;background:var(--panel-2);padding:13px;
+    display:flex;flex-direction:column;gap:11px}
+  .scn+.scn{margin-top:11px}
+  .scn .row{display:flex;align-items:center;gap:10px}
+  .scn .name{font-weight:800;font-size:14.5px;letter-spacing:.01em}
+  .tag{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:6px;
+    border:1px solid var(--line);color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .tag.it{color:var(--amber);border-color:#4a3016;background:var(--amber-dim)}
+  .chainflow{font-family:var(--mono);font-size:11px;color:var(--faint);line-height:1.6}
+  .chainflow b{color:var(--muted);font-weight:600}
+  .params{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+  .params .f{display:flex;flex-direction:column;gap:5px}
+  .params label{font-family:var(--mono);font-size:10px;color:var(--faint);
+    text-transform:uppercase;letter-spacing:.08em;display:flex;justify-content:space-between}
+  .params label b{color:var(--amber);font-weight:600;font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--amber);height:4px}
+  .scn.busy{opacity:.55;pointer-events:none}
+  .note{font-family:var(--mono);font-size:11px;color:var(--faint);border:1px dashed var(--line);
+    border-radius:10px;padding:10px 12px;line-height:1.55}
+  .note b{color:var(--muted)}
+
+  /* ---- chain viz ---- */
+  .chain{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;align-items:stretch}
+  .node{position:relative;border:1px solid var(--line);border-radius:11px;background:var(--panel-2);
+    padding:11px 8px;text-align:center;overflow:hidden;transition:.25s}
+  .node .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--faint);text-transform:uppercase}
+  .node .v{font-weight:800;font-size:12.5px;margin-top:4px}
+  .node .ic{font-size:17px;line-height:1;margin-bottom:3px;filter:grayscale(.3)}
+  .node[data-state=ok]{border-color:#1f6d4a;background:linear-gradient(180deg,#0f2319,var(--panel-2))}
+  .node[data-state=ok] .v{color:var(--green)}
+  .node[data-state=active]{border-color:#7a4a1e;background:linear-gradient(180deg,#241607,var(--panel-2))}
+  .node[data-state=active] .v{color:var(--amber)}
+  .node[data-state=active]::before{content:"";position:absolute;inset:0;
+    background:linear-gradient(90deg,#0000,#ff8a3d22,#0000);transform:translateX(-100%);
+    animation:sweep 1.4s linear infinite}
+  .node[data-state=watch]{border-color:#2a3b5c}.node[data-state=watch] .v{color:var(--blue)}
+  .node[data-state=fail]{border-color:#6d2130;background:linear-gradient(180deg,#240f13,var(--panel-2))}
+  .node[data-state=fail] .v{color:var(--red)}
+  @keyframes sweep{to{transform:translateX(100%)}}
+
+  .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-top:13px}
+  .tile{border:1px solid var(--line);border-radius:11px;background:var(--panel-2);padding:11px}
+  .tile .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--faint);text-transform:uppercase}
+  .tile .v{font-family:var(--mono);font-weight:600;font-size:21px;margin-top:5px;font-variant-numeric:tabular-nums}
+  .tile .v small{font-size:12px;color:var(--faint)}
+
+  /* ---- terminal ---- */
+  .term{background:#080a0c;border:1px solid var(--line);border-radius:11px;
+    font-family:var(--mono);font-size:12px;line-height:1.55;height:270px;overflow:auto;padding:11px 12px}
+  .term .ln{white-space:pre-wrap;word-break:break-word;color:#c3ccd6}
+  .term .ln .ts{color:var(--faint)}
+  .term .ln.k{color:var(--amber)}.term .ln.s{color:var(--green)}.term .ln.e{color:var(--red)}
+  .term::-webkit-scrollbar{width:9px}.term::-webkit-scrollbar-thumb{background:#1d242b;border-radius:9px}
+  .footline{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:14px;text-align:center;letter-spacing:.03em}
+  .bar{display:flex;gap:9px;flex-wrap:wrap}
+  .countdown{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--amber);font-size:12px}
+  .hint{font-family:var(--mono);font-size:10px;color:var(--faint)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="glyph" aria-hidden="true"></div>
+      <div>
+        <h1>Red&nbsp;Console</h1>
+        <div class="sub">resilience-alpha · banc d'essai</div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div class="target">
+      <label for="target">cible</label>
+      <input id="target" spellcheck="false" />
+    </div>
+    <span id="conn" class="pill"><span class="dot"></span><span id="conntxt">connexion…</span></span>
+    <div class="bar">
+      <button class="btn ghost" id="reset">Reset</button>
+      <button class="btn kill" id="kill">Kill-switch</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- LEFT : scénarios -->
+    <div class="col">
+      <div class="panel">
+        <div class="head">
+          <span class="ttl">Scénarios</span>
+          <span class="hint" id="caps"></span>
+        </div>
+        <div id="scnlist"></div>
+        <div class="note" id="dcnote" hidden></div>
+      </div>
+    </div>
+
+    <!-- RIGHT : visualisation + télémétrie -->
+    <div class="col">
+      <div class="panel">
+        <div class="head">
+          <span class="ttl">Chaîne de reprise</span>
+          <span class="countdown" id="countdown"></span>
+        </div>
+        <div class="chain">
+          <div class="node" id="n-avant"><div class="ic">✔</div><div class="k">Avant</div><div class="v">—</div></div>
+          <div class="node" id="n-attaque"><div class="ic">⚡</div><div class="k">Attaque</div><div class="v">prêt</div></div>
+          <div class="node" id="n-detect"><div class="ic">◎</div><div class="k">Détection</div><div class="v">ML</div></div>
+          <div class="node" id="n-remed"><div class="ic">⟳</div><div class="k">Remédiation</div><div class="v">auto</div></div>
+          <div class="node" id="n-apres"><div class="ic">✔</div><div class="k">Après</div><div class="v">—</div></div>
+        </div>
+        <div class="tiles">
+          <div class="tile"><div class="k">Verify avant</div><div class="v" id="t-before">—</div></div>
+          <div class="tile"><div class="k">Chrono attaque</div><div class="v" id="t-chrono">0<small>s</small></div></div>
+          <div class="tile"><div class="k">Verify après</div><div class="v" id="t-after">—</div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="head">
+          <span class="ttl">Journal temps réel · .runlog</span>
+          <button class="btn ghost" id="verify" style="padding:6px 11px">Verify_tx</button>
+        </div>
+        <div class="term" id="term"><div class="ln"><span class="ts">—</span> en attente du flux…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footline" id="foot">Local-only · 127.0.0.1 · détection &amp; remédiation observées côté dashboard Blue Team</div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = (p,o={}) => fetch(p,{headers:{'content-type':'application/json'},...o}).then(r=>r.json());
+let CAPS = {max_duration:60, max_rate:100};
+let RUNNING = false;
+
+function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+function logLine(raw){
+  const term = $('#term');
+  const m = raw.match(/^(\S+)\s+(.*)$/);
+  const ts = m ? m[1] : '';
+  const rest = m ? m[2] : raw;
+  let cls = '';
+  if(/KILL-SWITCH|killed|kill/i.test(rest)) cls='k';
+  else if(/END|unpause|rétabli|OK/i.test(rest)) cls='s';
+  else if(/FAIL|erreur|error/i.test(rest)) cls='e';
+  const div = document.createElement('div');
+  div.className = 'ln '+cls;
+  div.innerHTML = `<span class="ts">${esc(ts)}</span> ${esc(rest)}`;
+  term.appendChild(div);
+  term.scrollTop = term.scrollHeight;
+  while(term.children.length>400) term.removeChild(term.firstChild);
+}
+
+function setNode(id,state,val){const n=$('#'+id);if(state)n.dataset.state=state;else n.removeAttribute('data-state');if(val!=null)n.querySelector('.v').textContent=val;}
+
+async function loadScenarios(){
+  const d = await api('/api/scenarios');
+  CAPS = {max_duration:d.max_duration, max_rate:d.max_rate};
+  $('#caps').textContent = `plafonds ${d.max_rate}/s · ${d.max_duration}s`;
+  $('#target').value = d.default_target;
+  const list = $('#scnlist'); list.innerHTML='';
+  d.scenarios.filter(s=>s.launchable).forEach(s=>{
+    const rem = (s.remediation||[]).join(' + ');
+    const el = document.createElement('div');
+    el.className='scn'; el.id='scn-'+s.name;
+    el.innerHTML = `
+      <div class="row">
+        <span class="name">${esc(s.name)}</span>
+        <span class="tag it">${esc(s.incident_type||'')}</span>
+        <span style="flex:1"></span>
+        <span class="tag">${esc(s.cible?.service||'')}</span>
+      </div>
+      <div class="chainflow"><b>signal</b> ${esc((s.signal?.metrique||'').slice(0,80))}…<br><b>remédiation</b> ${esc(rem)}</div>
+      <div class="params">
+        <div class="f"><label>durée <b id="dv-${s.name}">20s</b></label>
+          <input type="range" min="5" max="${CAPS.max_duration}" value="20" id="d-${s.name}"></div>
+        <div class="f"><label>débit <b id="rv-${s.name}">40/s</b></label>
+          <input type="range" min="5" max="${CAPS.max_rate}" value="40" id="r-${s.name}"></div>
+      </div>
+      <button class="btn go" id="go-${s.name}">⚡ Lancer ${esc(s.name)}</button>`;
+    list.appendChild(el);
+    const dv=$('#dv-'+s.name), rv=$('#rv-'+s.name), ds=$('#d-'+s.name), rs=$('#r-'+s.name);
+    ds.oninput=()=>dv.textContent=ds.value+'s'; rs.oninput=()=>rv.textContent=rs.value+'/s';
+    $('#go-'+s.name).onclick=()=>launch(s.name, +ds.value, +rs.value);
+  });
+  const dc = d.scenarios.find(s=>s.name==='data_corruption');
+  if(dc){const n=$('#dcnote');n.hidden=false;
+    n.innerHTML=`<b>data_corruption</b> — déclenché côté opérateur (PC Hôte), la base n'est pas exposée.<br>→ <code>pg_backup.yml</code> puis <code>db_corrupt_fake.yml</code>.`;}
+}
+
+async function preVerify(){
+  setNode('n-avant','active','test…');
+  const v = await api('/api/verify').catch(()=>({ok:false}));
+  $('#t-before').textContent = v.ok? 'OK' : 'KO';
+  $('#t-before').style.color = v.ok? 'var(--green)':'var(--red)';
+  setNode('n-avant', v.ok?'ok':'fail', v.ok?'OK':'KO');
+  return v.ok;
+}
+
+async function launch(name,duration,rate){
+  if(RUNNING) return;
+  $('#t-after').textContent='—'; $('#t-after').style.color='';
+  setNode('n-apres',null,'—');
+  await preVerify();
+  try{
+    const r = await api('/api/run',{method:'POST',body:JSON.stringify({scenario:name,target:$('#target').value,duration,rate})});
+    if(r.detail){logLine(new Date().toISOString()+' refus : '+r.detail);return;}
+    logLine(new Date().toISOString()+` ▶ lancement ${name} (${r.duration}s @ ${r.rate}/s) → ${r.target}`);
+  }catch(e){logLine(new Date().toISOString()+' erreur de lancement');}
+}
+
+function applyStatus(st){
+  RUNNING = st.running;
+  document.querySelectorAll('.scn').forEach(e=>e.classList.toggle('busy', st.running));
+  const conn=$('#conn');
+  if(st.running){
+    conn.className='pill armed'; $('#conntxt').textContent='ARMÉ · '+st.scenario;
+    setNode('n-attaque','active', Math.round(st.remaining_s)+'s');
+    setNode('n-detect','watch','ML'); setNode('n-remed','watch','auto');
+    $('#countdown').textContent = '⏱ '+Math.round(st.remaining_s)+'s restant';
+    $('#t-chrono').innerHTML = Math.round(st.elapsed_s)+'<small>s</small>';
+  }else{
+    conn.className='pill live'; $('#conntxt').textContent = st.dry_run? 'prêt · dry-run':'prêt';
+    if($('#n-attaque').dataset.state==='active'){ // vient de finir
+      setNode('n-attaque',null,'prêt'); setNode('n-detect',null,'ML'); setNode('n-remed',null,'auto');
+      $('#countdown').textContent=''; afterVerify();
+    }
+  }
+}
+
+async function afterVerify(){
+  setNode('n-apres','active','test…');
+  for(let i=0;i<10;i++){
+    const v = await api('/api/verify').catch(()=>({ok:false}));
+    if(v.ok){$('#t-after').textContent='OK';$('#t-after').style.color='var(--green)';setNode('n-apres','ok','OK');
+      setNode('n-detect','ok','vu');setNode('n-remed','ok','agi');
+      logLine(new Date().toISOString()+' ✔ verify_tx OK — reprise confirmée');return;}
+    await new Promise(r=>setTimeout(r,3000));
+  }
+  $('#t-after').textContent='KO';$('#t-after').style.color='var(--red)';setNode('n-apres','fail','KO');
+}
+
+$('#kill').onclick=async()=>{await api('/api/stop',{method:'POST'});logLine(new Date().toISOString()+' ⛔ kill-switch');};
+$('#reset').onclick=async()=>{logLine(new Date().toISOString()+' ↺ reset en cours…');await api('/api/reset',{method:'POST'}).catch(()=>{});};
+$('#verify').onclick=preVerify;
+
+function connectStream(){
+  const es = new EventSource('/api/stream');
+  es.addEventListener('log', e=>logLine(e.data));
+  es.addEventListener('status', e=>{try{applyStatus(JSON.parse(e.data));}catch{}});
+  es.onerror=()=>{$('#conn').className='pill';$('#conntxt').textContent='flux coupé';};
+}
+
+loadScenarios().then(()=>{preVerify();connectStream();});
+</script>
+</body>
+</html>
