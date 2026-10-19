@@ -1,6 +1,8 @@
 // Types alignés sur docs/contracts.md §3 (AnomalyEvent) et §1 (événements normalisés remediation_*).
-// Le contrat fige l'AnomalyEvent ; l'enveloppe SSE du moteur de remédiation (health, score,
-// remediation_*) est documentée dans CAHIER-DES-CHARGES.md (« Flux SSE consommé »).
+// Le contrat fige l'AnomalyEvent. Le moteur de remédiation émet UNE seule forme de trame SSE
+// (`event: timeline`, voir remediation/timeline.py) ; `parseStreamMessage` la traduit en messages
+// internes (ci-dessous). Les kinds `health` / `score` sont alimentés par Prometheus (polling),
+// le moteur n'en émet pas. Détail : CAHIER-DES-CHARGES.md §3.
 
 /** incident_type : énumération figée (contrat §3). */
 export const INCIDENT_TYPES = ['service_flood', 'auth_abuse', 'web_attack', 'data_corruption', 'unknown'] as const
@@ -81,10 +83,28 @@ export type StreamMessage =
     }
   | { kind: 'remediation_failed'; ts: string; incidentId: string; reason: string }
   | { kind: 'verify_tx'; verify: VerifyTx }
+  /** Trame `timeline` du moteur sans effet sur l'état (ex. « action en cours », cooldown) : acceptée, jamais comptée comme rejet. */
+  | { kind: 'timeline_note'; ts: string; incidentId: string; phase: TimelinePhase; status: TimelineStatus; message: string }
 
 export type StreamMessageKind = StreamMessage['kind']
 
-/** Noms d'événements SSE écoutés (champ `event:`). */
+/** Enveloppe réelle du moteur : `event: timeline` (remediation/timeline.py). */
+export const TIMELINE_PHASES = ['detection', 'decision', 'action', 'verification', 'closure', 'escalation'] as const
+export type TimelinePhase = (typeof TIMELINE_PHASES)[number]
+export const TIMELINE_STATUSES = ['info', 'running', 'ok', 'ko', 'failed', 'skipped', 'dry_run'] as const
+export type TimelineStatus = (typeof TIMELINE_STATUSES)[number]
+export interface TimelineFrame {
+  id: number
+  incident_id: string
+  incident_type: IncidentType
+  ts: string
+  phase: TimelinePhase
+  status: TimelineStatus
+  message: string
+  data: Record<string, unknown>
+}
+
+/** Kinds internes acceptés directement comme nom d'événement SSE (mock, simulateur, compatibilité). */
 export const STREAM_EVENT_NAMES: StreamMessageKind[] = [
   'health',
   'score',
@@ -95,6 +115,12 @@ export const STREAM_EVENT_NAMES: StreamMessageKind[] = [
   'remediation_failed',
   'verify_tx',
 ]
+
+/** Nom d'événement réellement émis par le moteur (une seule enveloppe). */
+export const TIMELINE_EVENT_NAME = 'timeline'
+
+/** Noms d'événements SSE écoutés (champ `event:`) : l'enveloppe réelle + les kinds internes. */
+export const SSE_EVENT_NAMES: string[] = [TIMELINE_EVENT_NAME, ...STREAM_EVENT_NAMES]
 
 // --- Modèle d'affichage ---------------------------------------------------------
 

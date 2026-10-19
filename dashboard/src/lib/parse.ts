@@ -1,6 +1,9 @@
 import {
   INCIDENT_TYPES,
   STREAM_EVENT_NAMES,
+  TIMELINE_EVENT_NAME,
+  TIMELINE_PHASES,
+  TIMELINE_STATUSES,
   type ActionResult,
   type AnomalyEvent,
   type FeatureContribution,
@@ -9,6 +12,9 @@ import {
   type ServiceHealth,
   type ServiceStatus,
   type StreamMessage,
+  type TimelineFrame,
+  type TimelinePhase,
+  type TimelineStatus,
   type VerifyTx,
 } from '../types/events'
 
@@ -94,6 +100,101 @@ function parsePlannedActions(v: unknown): PlannedAction[] {
   return out
 }
 
+const isPhase = (v: unknown): v is TimelinePhase => (TIMELINE_PHASES as readonly unknown[]).includes(v)
+const isStatus = (v: unknown): v is TimelineStatus => (TIMELINE_STATUSES as readonly unknown[]).includes(v)
+
+/** Valide l'enveloppe réelle du moteur (`event: timeline`, remediation/timeline.py). */
+export function parseTimelineFrame(raw: unknown): Result<TimelineFrame> {
+  if (!isObj(raw)) return fail('timeline : trame non objet')
+  if (!isStr(raw.incident_id)) return fail('timeline : incident_id manquant')
+  if (!isIncidentType(raw.incident_type)) return fail(`timeline : incident_type inconnu : ${String(raw.incident_type)}`)
+  if (!isIso(raw.ts)) return fail('timeline : ts invalide')
+  if (!isPhase(raw.phase)) return fail(`timeline : phase inconnue : ${String(raw.phase)}`)
+  if (!isStatus(raw.status)) return fail(`timeline : status inconnu : ${String(raw.status)}`)
+  return ok({
+    id: isNum(raw.id) ? raw.id : 0,
+    incident_id: raw.incident_id,
+    incident_type: raw.incident_type,
+    ts: raw.ts,
+    phase: raw.phase,
+    status: raw.status,
+    message: isStr(raw.message) ? raw.message : '',
+    data: isObj(raw.data) ? raw.data : {},
+  })
+}
+
+/**
+ * Adaptateur enveloppe moteur -> messages internes. Table (phase, status) -> kind :
+ *   detection/info        -> anomaly_detected (AnomalyEvent reconstruit depuis data, validé §3)
+ *   decision/info+actions -> remediation_started
+ *   action/ok|failed|dry_run -> remediation_action (dry_run => "skipped")
+ *   verification/ok|ko    -> remediation_verified (verify_tx.ok ; sans MTTR)
+ *   closure/ok            -> remediation_verified (+ mttd_seconds, mttr_seconds)
+ *   escalation/failed     -> remediation_failed
+ *   tout le reste (running, skipped, cooldown, dry_run clos) -> timeline_note (accepté, sans effet)
+ */
+export function adaptTimelineFrame(f: TimelineFrame): Result<StreamMessage> {
+  const d = f.data
+  const base = { ts: f.ts, incidentId: f.incident_id }
+  const note = (): Result<StreamMessage> => ok({ kind: 'timeline_note', ...base, phase: f.phase, status: f.status, message: f.message })
+
+  switch (f.phase) {
+    case 'detection': {
+      if (f.status !== 'info') return note()
+      const ev = parseAnomalyEvent({
+        schema_version: '1.0',
+        event_id: d.event_id,
+        ts: f.ts,
+        source: d.source ?? 'detector',
+        service: d.service,
+        anomaly_score: d.anomaly_score,
+        threshold: d.threshold,
+        incident_type: f.incident_type,
+        features_top: d.features_top ?? [],
+        evidence: d.evidence,
+      })
+      if (!ev.ok) return fail(`timeline/detection : ${ev.error}`)
+      return ok({ kind: 'anomaly_detected', incidentId: f.incident_id, event: ev.value })
+    }
+    case 'decision':
+      if (f.status !== 'info' || !Array.isArray(d.actions)) return note()
+      return ok({
+        kind: 'remediation_started',
+        ...base,
+        incidentType: f.incident_type,
+        service: isStr(d.service) ? d.service : null,
+        actions: parsePlannedActions(d.actions),
+        dryRun: d.dry_run === true,
+      })
+    case 'action': {
+      if (f.status === 'running') return note()
+      if (!isStr(d.action)) return fail('timeline/action : data.action manquant')
+      const result: ActionResult = f.status === 'failed' ? 'failed' : f.status === 'dry_run' ? 'skipped' : 'ok'
+      return ok({ kind: 'remediation_action', ...base, action: d.action, result, detail: f.message || null, attempt: isNum(d.attempt) ? d.attempt : null })
+    }
+    case 'verification':
+      if (f.status !== 'ok' && f.status !== 'ko') return note()
+      return ok({
+        kind: 'remediation_verified',
+        ...base,
+        verify: { ok: f.status === 'ok', ts: f.ts, txId: null, durationMs: null },
+        mttdSeconds: null,
+        mttrSeconds: null,
+      })
+    case 'closure':
+      if (f.status !== 'ok') return note()
+      return ok({
+        kind: 'remediation_verified',
+        ...base,
+        verify: { ok: true, ts: f.ts, txId: null, durationMs: null },
+        mttdSeconds: isNum(d.mttd_seconds) ? d.mttd_seconds : null,
+        mttrSeconds: isNum(d.mttr_seconds) ? d.mttr_seconds : null,
+      })
+    case 'escalation':
+      return ok({ kind: 'remediation_failed', ...base, reason: isStr(d.reason) ? d.reason : f.message || 'escalade' })
+  }
+}
+
 /** Valide et normalise un message du flux SSE de remédiation. */
 export function parseStreamMessage(eventName: string, data: string): Result<StreamMessage> {
   let json: unknown
@@ -106,6 +207,10 @@ export function parseStreamMessage(eventName: string, data: string): Result<Stre
 
   // Événement SSE sans `event:` => le type est porté par le corps (`type` ou `event`).
   const kind = eventName && eventName !== 'message' ? eventName : String(json.type ?? json.event ?? '')
+  if (kind === TIMELINE_EVENT_NAME || (kind === '' && isStr(json.phase) && isStr(json.incident_id))) {
+    const frame = parseTimelineFrame(json)
+    return frame.ok ? adaptTimelineFrame(frame.value) : fail(frame.error)
+  }
   if (!(STREAM_EVENT_NAMES as string[]).includes(kind)) return fail(`type de message inconnu : ${kind || '(vide)'}`)
 
   const ts = isIso(json.ts) ? json.ts : new Date().toISOString()
