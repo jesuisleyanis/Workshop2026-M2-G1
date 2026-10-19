@@ -18,14 +18,15 @@ _spec.loader.exec_module(gen)
 class FakeApi:
     """Mini payment-api : un compte par utilisateur, journalise chaque appel."""
 
-    def __init__(self):
-        self.calls = []
+    def __init__(self, clock=lambda: 0.0):
+        self.calls, self.times, self._clock = [], [], clock
         self.ids = {u: 100 + i for i, (u, _) in enumerate(gen.USERS)}
         self.passwords = dict(gen.USERS)
         self.expired = set()
 
     def __call__(self, method, path, payload=None, token=None):
         self.calls.append((method, path, payload, token))
+        self.times.append(self._clock())
         if path == "/api/v1/login":
             ok = self.passwords.get(payload["username"]) == payload["password"]
             return (200, {"access_token": f"tok-{payload['username']}"}) if ok else (401, {})
@@ -110,16 +111,113 @@ def test_session_expiry_and_revoked_token_trigger_relogin():
 
 def test_logins_stay_under_the_auth_rate_limit():
     """À 5 req/s, logins (re-logins + fautes de frappe) < 10/min/IP (limite de l'auth)."""
-    api = FakeApi()
     t = [0.0]
+    api = FakeApi(clock=lambda: t[0])
     stats = gen.run(600, 5.0, api, seed=4, clock=lambda: t[0],
                     sleep=lambda s: t.__setitem__(0, t[0] + s))
-    logins = sum(v for k, v in stats.items() if k.startswith(("login:", "bad_login:")))
+    logins = [t for t, (_, path, _, _) in zip(api.times, api.calls) if path == "/api/v1/login"]
     assert stats["total"] == pytest.approx(5.0 * 600, rel=0.1)
-    assert logins / 10 < 10  # par minute, sur 10 min
+    assert _max_logins_per_minute(logins) <= gen.LOGIN_BUDGET_PER_MIN  # fenêtre glissante
 
 
 def test_parse_duration():
     assert gen.parse_duration("30m") == 1800
     with pytest.raises(ValueError):
         gen.parse_duration("bientôt")
+
+
+class FlakyAuth(FakeApi):
+    """L'auth renvoie `auth_status` (503, 429...) tant que `down` ; horodate chaque login."""
+
+    def __init__(self, clock, auth_status=503, retry_after=None):
+        super().__init__(clock)
+        self.clock, self.down = clock, True
+        self.auth_status, self.retry_after = auth_status, retry_after
+        self.login_times, self.login_users = [], []
+
+    def __call__(self, method, path, payload=None, token=None):
+        if path == "/api/v1/login":
+            self.login_times.append(self.clock())
+            self.login_users.append((payload["username"], self.clock()))
+            if self.down:
+                return self.auth_status, ({"retry_after": self.retry_after} if self.retry_after else {})
+        return super().__call__(method, path, payload, token)
+
+
+def _simulate(api, t, seconds, rps=5.0):
+    return gen.run(seconds, rps, api, seed=9, clock=lambda: t[0],
+                   sleep=lambda s: t.__setitem__(0, t[0] + s))
+
+
+def _max_logins_per_minute(times):
+    return max(sum(1 for x in times if s <= x < s + 60) for s in times) if times else 0
+
+
+@pytest.mark.parametrize("auth_status", [503, 429, 0])
+def test_auth_down_does_not_trigger_a_login_storm(auth_status):
+    t = [0.0]
+    api = FlakyAuth(lambda: t[0], auth_status=auth_status)
+    stats = _simulate(api, t, 600)
+    assert _max_logins_per_minute(api.login_times) <= 10  # limite de l'auth : 10/min/IP
+    assert stats["wait"] > 0                              # les clients se sont tus
+    assert not any(k.startswith(("accounts", "transfer", "history")) for k in stats)
+
+
+def test_retry_after_is_honoured():
+    t = [0.0]
+    api = FlakyAuth(lambda: t[0], auth_status=429, retry_after="120")
+    _simulate(api, t, 600)
+    for user, _ in gen.USERS:  # chaque client attend >= 120 s entre deux tentatives
+        times = [x for u, x in api.login_users if u == user]
+        assert len(times) >= 2
+        assert all(b - a >= 120 for a, b in zip(times, times[1:]))
+
+
+def test_login_budget_sliding_window():
+    b = gen.LoginBudget(per_min=2)
+    assert b.allow(0)
+    b.record(0)
+    b.record(10)
+    assert not b.allow(30) and b.next_slot(30) == 60
+    assert b.allow(60) and b.next_slot(60) == 60
+
+
+def test_traffic_resumes_when_auth_comes_back():
+    t = [0.0]
+    api = FlakyAuth(lambda: t[0], auth_status=503)
+    _simulate(api, t, 120)            # 2 min de panne
+    api.down = False
+    stats = Counter()
+    clients_stats = gen.run(300, 5.0, api, seed=10, clock=lambda: t[0],
+                            sleep=lambda s: t.__setitem__(0, t[0] + s))
+    stats.update(clients_stats)
+    assert stats["login:200"] == 3                    # chaque client se reconnecte une fois
+    assert stats["accounts:200"] + stats["history:200"] > 500
+
+
+def test_backoff_grows_exponentially_and_resets_on_success():
+    api = FakeApi()
+    c = gen.Client("demo01", "demo-pass-01", send=api)
+    api.passwords["demo01"] = "autre"  # login refusé
+    rng = random.Random(0)
+    delays = []
+    now = 0.0
+    for _ in range(6):
+        c.login(now, rng=rng)
+        delays.append(c.retry_at - now)
+        now = c.retry_at
+    lo, hi = 1 - gen.BACKOFF_JITTER, 1 + gen.BACKOFF_JITTER
+    for i, d in enumerate(delays):
+        expected = min(gen.BACKOFF_MAX_S, gen.BACKOFF_BASE_S * 2 ** i)
+        assert expected * lo <= d <= expected * hi
+    api.passwords["demo01"] = "demo-pass-01"
+    assert c.login(now, rng=rng) == 200 and c.login_failures == 0
+
+
+def test_deliberate_typo_never_pauses_the_session():
+    api = FakeApi()
+    c = gen.Client("demo01", "demo-pass-01", send=api)
+    c.login(0.0)
+    token = c.token
+    assert c.login(1.0, password="faux") == 401
+    assert c.token == token and c.ready(1.0) and c.login_failures == 0
