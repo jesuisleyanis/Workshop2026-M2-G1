@@ -30,8 +30,12 @@ RUN set -eux; \
     chmod 600 /etc/nginx/conf/server.key /etc/nginx/conf/server.crt
 
 COPY --chown=nginx:nginx nginx.conf /etc/nginx/nginx.conf
-# Liste de blocage par défaut (vide) ; Compose la remplace par un montage rw pour la remédiation.
-COPY --chown=nginx:nginx blocked_ips.conf /etc/nginx/blocked_ips.conf
+# Deny-list IP : répertoire partagé avec le moteur de remédiation (volume Compose `waf-deny`).
+# setgid + group-writable : le moteur (uid 10001, groupe 101) y remplace le fichier (lineinfile),
+# nginx (uid 101) le relit au SIGHUP. Le script d'entrypoint recrée le fichier s'il manque.
+COPY --chown=nginx:nginx deny/blocked_ips.conf /etc/nginx/deny/blocked_ips.conf
+COPY --chmod=0755 docker-entrypoint.d/05-ensure-deny-list.sh /docker-entrypoint.d/05-ensure-deny-list.sh
+RUN chown -R nginx:nginx /etc/nginx/deny && chmod 2775 /etc/nginx/deny && chmod 0644 /etc/nginx/deny/blocked_ips.conf
 
 # Ports non privilégiés (entrypoint `check-low-port`) et chemins TLS utilisés par nginx.conf.
 ENV PORT=8080 \

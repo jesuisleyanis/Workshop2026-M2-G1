@@ -76,7 +76,7 @@ def test_modsecurity_crs_loaded_and_blocklist_included():
     assert "load_module modules/ngx_http_modsecurity_module.so;" in conf
     assert "modsecurity on;" in conf
     assert "modsecurity_rules_file /etc/modsecurity.d/setup.conf;" in conf
-    assert "include /etc/nginx/blocked_ips.conf;" in conf and "if ($blocked_source) { return 403; }" in conf
+    assert "include /etc/nginx/deny/blocked_ips.conf;" in conf and "if ($blocked_source) { return 403; }" in conf
     # Les templates ModSecurity de l'image doivent rester : ils rendent setup.conf au démarrage.
     removed = re.findall(r"rm -r?f? ?(\S+)", re.sub(r"#.*$", "", DOCKERFILE, flags=re.M))
     assert not any("modsecurity.d" in path for path in removed)
@@ -92,6 +92,9 @@ def test_compose_publishes_80_443_to_unprivileged_ports_with_valid_healthcheck()
     services = yaml.safe_load(COMPOSE)["services"]
     waf = services["waf"]
     assert waf["ports"] == ["80:8080", "443:8443"]
+    # Deny-list : volume nommé partagé avec le moteur (jamais un bind-mount de fichier : rename impossible).
+    assert "waf-deny:/etc/nginx/deny:rw" in waf["volumes"]
+    assert "waf-deny:/etc/resilience/waf-deny:rw" in services["remediation"]["volumes"]
     assert waf["build"] == {"context": "../../security/waf"}
     test = waf["healthcheck"]["test"]
     assert test[0] == "CMD-SHELL" and "8443/healthz" in test[1], "healthcheck exec-form malformé (ticket #10)"

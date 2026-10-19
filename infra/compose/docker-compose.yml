@@ -26,6 +26,7 @@ networks:
 
 volumes:
   pgdata:
+  waf-deny:        # deny-list Nginx partagée WAF (lecture) <-> remediation (écriture via playbook)
   grafana-data:
   loki-data:
   chroma-data:
@@ -43,7 +44,7 @@ services:
       - "80:8080"
       - "443:8443"
     volumes:
-      - ../../security/waf/blocked_ips.conf:/etc/nginx/blocked_ips.conf:rw
+      - waf-deny:/etc/nginx/deny:rw
     depends_on: [front, payment-api, auth]
     mem_limit: 256m
     healthcheck:
@@ -149,7 +150,8 @@ services:
   # ---------------------------------------------------------------- remédiation
   docker-socket-proxy:
     # Proxy strict basé sur la config haproxy de la remédiation (ADR 0002) :
-    # n'autorise QUE 4 couples (méthode, chemin), dont POST /containers/{id}/restart.
+    # n'autorise QUE 5 couples (méthode, chemin) : ping/list/inspect, POST .../restart et
+    # POST .../kill?signal=HUP (reload à chaud du WAF) — jamais exec/create/kill arbitraire.
     # Plus restrictif que tecnativa (CONTAINERS=1+POST=1 ouvrirait /containers/create).
     <<: *hardening
     image: haproxy:2.9-alpine
@@ -162,7 +164,9 @@ services:
   remediation:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: remediation/Dockerfile }
-    networks: [app]            # jamais sur edge
+    # app : API + proxy Docker + WAF (verify_tx) ; data : pg_restore (correction de corruption).
+    # Jamais sur edge, aucun `ports:`.
+    networks: [app, data]
     environment:
       DOCKER_PROXY_URL: http://docker-socket-proxy:2375
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
@@ -171,8 +175,19 @@ services:
       # verify_tx : rejoué à travers le WAF (réseau app, cert auto-signé) avec le jeu fictif seedé
       BASE_URL: https://waf
       VERIFY_PASSWORD: ${SEED_PASSWORD}
-    depends_on: [docker-socket-proxy]
-    tmpfs: ["/tmp"]
+      # restore_pg_dump : playbook pg_restore.yml dans ce conteneur (client PG 16, réseau data)
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: resilience
+      POSTGRES_USER: resilience
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # waf_block_ip : deny-list partagée + SIGHUP du service `waf` via le proxy
+      WAF_SERVICE: waf
+    volumes:
+      - waf-deny:/etc/resilience/waf-deny:rw                 # écrite par waf_deny_ip.yml
+      - ../../infra/ansible/backups:/opt/backups:ro          # dumps sains (pg_backup.yml côté hôte)
+    group_add: ["101"]         # groupe nginx du WAF : droit d'écrire dans le volume waf-deny
+    depends_on: [docker-socket-proxy, postgres]
+    tmpfs: ["/tmp"]            # artefacts ansible-runner
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8005/health').status==200 else 1)"]
       interval: 15s
