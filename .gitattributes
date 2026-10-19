@@ -1,0 +1,13 @@
+# Fins de ligne LF forcées pour tout ce qui s'exécute ou se lit dans un conteneur Linux.
+# Sans cela, un checkout Windows (core.autocrlf=true) produit un shebang `#!/bin/sh\r`
+# -> `exec /entrypoint.sh: no such file or directory` (ROADMAP I12).
+*.sh                text eol=lf
+scripts/verify_tx   text eol=lf
+*.py                text eol=lf
+Dockerfile*         text eol=lf
+*.conf              text eol=lf
+*.cfg               text eol=lf
+*.template          text eol=lf
+*.yml               text eol=lf
+*.yaml              text eol=lf
+*.env               text eol=lf

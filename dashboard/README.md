@@ -90,6 +90,8 @@ docker run --rm --network <reseau-app> --read-only --tmpfs /tmp --cap-drop ALL \
 
 Multi-stage `node:22-alpine` -> `nginx:1.27-alpine`, utilisateur `nginx`, port **8080**, `HEALTHCHECK` sur `/healthz`. La conf nginx est générée au démarrage (`envsubst`) dans `/tmp`.
 
+`entrypoint.sh` doit être en LF : un checkout Windows en CRLF donne `exec /entrypoint.sh: no such file or directory` (shebang `#!/bin/sh`). Le `.gitattributes` racine l'impose, et le Dockerfile retire les `` en garde-fou.
+
 ### Câblage compose
 
 - Service `dashboard` sur le réseau `app` (joint `remediation:8005`), `depends_on: remediation`.

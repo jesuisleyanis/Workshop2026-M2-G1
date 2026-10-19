@@ -32,6 +32,9 @@ WORKDIR /app
 # Code et table en lecture seule pour l'utilisateur d'exécution (propriété root).
 COPY remediation/*.py remediation/decision_table.yml /app/
 COPY remediation/actions /app/actions
+# Transaction de contrôle rejouée après chaque action (preuve de reprise). Stdlib seule ;
+# le shebang `env python3` trouve le venv via PATH. Exécutable, propriété root.
+COPY --chmod=755 scripts/verify_tx /opt/scripts/verify_tx
 # Seul point inscriptible : le journal d'incidents (volume dédié).
 VOLUME ["/var/lib/remediation"]
 USER 10001:10001

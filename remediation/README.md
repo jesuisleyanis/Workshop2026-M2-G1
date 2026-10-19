@@ -72,7 +72,7 @@ POST /events ──► main.py (auth Bearer) ──► engine.handle_event ─�
 - **`timeline.py`** : `Broker` (file `asyncio.Queue` de 1000 par abonné ; un abonné trop lent est déconnecté et se reconnecte), `frame()` (trame SSE), `sse_stream()` (abonnement *avant* le rejeu, donc sans trou ni doublon ; commentaire `: keepalive` si inactif).
 - **`verify.py`** : `ScriptVerifier` lance `VERIFY_TX_PATH` sans shell, avec timeout (`VERIFY_TIMEOUT_S`) ; exit 0 = OK ; renvoie `VerifyResult(ok, rc, detail)` (dernière ligne de sortie, 200 caractères max).
 - **`models.py`** : `IncomingEvent` = `AnomalyEvent` (`resilience_common`) + `source_ip` optionnel (une IP littérale) ; champs inconnus ignorés.
-- **`http_metrics.py`** : `resilience_http_requests_total{service,method,path,status}` et `resilience_http_request_duration_seconds{service,method,path}` (chemin = gabarit de route, cardinalité bornée).
+- **`http_metrics.py`** : `resilience_http_requests_total{service,method,path,status}` et `resilience_http_request_duration_seconds{service,method,path}` (chemin = gabarit de route, cardinalité bornée). Les objets viennent de `resilience_common.metrics` : les redéclarer lève `DuplicateTimeseries` (registre Prometheus global).
 
 ## Endpoints
 
@@ -134,10 +134,12 @@ Lues par `config.py` (`Settings.from_env`). **Aucun secret n'a de valeur par dé
 | `NOTIFY_WEBHOOK_URL` | — | Webhook optionnel appelé à l'escalade. |
 | `DECISION_TABLE` | `<dossier>/decision_table.yml` | Chemin de la table de décision. |
 | `INCIDENTS_DB` | `incidents.db` | Fichier SQLite du journal (`/var/lib/remediation/incidents.db` dans l'image). |
-| `VERIFY_TX_PATH` | `scripts/verify_tx` | Script de vérification (`/opt/scripts/verify_tx` dans l'image). |
+| `VERIFY_TX_PATH` | `scripts/verify_tx` | Script de vérification (`/opt/scripts/verify_tx` dans l'image, qui le copie depuis `scripts/verify_tx`). |
+| `BASE_URL` | — (compose : `https://waf:8443`) | Lu par `verify_tx` : la transaction de contrôle passe par le WAF comme un vrai client, depuis le réseau `app`. |
 | `VERIFY_TIMEOUT_S` | `30` | Timeout d'une exécution de `verify_tx`. |
 | `VERIFY_RETRIES` | `5` | Essais de `verify_tx` après une action (min. 1). |
 | `VERIFY_INTERVAL_S` | `3` | Pause entre deux essais. |
+| `BASE_URL`, `VERIFY_USER`, `VERIFY_PASSWORD`, `VERIFY_DST_ID`, `VERIFY_DST_USER`, `VERIFY_DST_PASSWORD` | `https://localhost`, `demo01`… | Lues par `verify_tx` (environnement hérité du moteur). Dans le conteneur, `BASE_URL` doit viser le WAF (`localhost` n'y est pas la plateforme). Voir `docs/contracts.md` (Conventions d'API). |
 | `ACTION_TIMEOUT_S` | `300` | Timeout d'une action. |
 | `ANSIBLE_PRIVATE_DATA_DIR` | `/opt/ansible` | Répertoire ansible-runner (playbooks sous `project/`). |
 | `REMEDIATION_DRY_RUN` | `false` | Force le dry-run (ne peut jamais le désactiver s'il est actif dans la table). Valeurs vraies : `1`, `true`, `yes`, `on`. |

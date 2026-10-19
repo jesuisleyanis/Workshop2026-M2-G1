@@ -22,6 +22,9 @@ _CTX.check_hostname = False
 _CTX.verify_mode = ssl.CERT_NONE
 
 # Jeu de comptes fictifs (username, password, iban_fake, solde initial en centimes).
+# ATTENTION : `register` (auth) ignore iban_fake et balance_cents : l'IBAN est généré et le
+# solde vient de REGISTER_INITIAL_BALANCE_CENTS (compose : 1 000 €). Gardés pour mémoire
+# et pour le mode SQL direct (DATABASE_URL).
 FIXTURES = [
     ("demo01", "demo-pass-01", "FR-FAKE-0001", 1_000_00),
     ("demo02", "demo-pass-02", "FR-FAKE-0002", 500_00),

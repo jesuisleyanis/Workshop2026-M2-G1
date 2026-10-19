@@ -15,6 +15,9 @@
 | Healthcheck | `/health` sur chaque service ; `HEALTHCHECK` dans le Dockerfile | Dockerfile |
 | Réseau | services internes sur `app`/`data`/`obs` ; `data` en `internal: true` ; **seul le WAF** publie des ports | `audit.sh` |
 | Secrets | via SOPS uniquement, injectés en env au runtime ; aucun secret en image | gitleaks + `audit.sh` |
+| Fins de ligne | `.gitattributes` force LF sur scripts, entrypoints, Dockerfiles, confs (un checkout Windows CRLF casse les shebangs) | `git ls-files --eol` |
+
+**Images officielles (postgres).** L'entrypoint de `postgres:16-alpine` démarre en root puis fait `chown`/`chmod` et `gosu postgres` : incompatible avec `cap_drop: ALL`. Plutôt que de rendre `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, `SETGID`, le service démarre **directement en `user: postgres`** (uid 70, propriétaire du volume nommé `pgdata` à sa création) : aucun `cap_add`, `read_only: true`, `tmpfs` pour le socket unix et `/tmp`.
 
 ## Moteur de remédiation — modèle de privilèges (critique)
 

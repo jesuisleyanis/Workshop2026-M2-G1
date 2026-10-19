@@ -28,7 +28,7 @@ C'est ce contrat qui garantit qu'une attaque est toujours reliée à une détect
 
 | Scénario | incident_type | Signal | Remédiation attendue |
 |---|---|---|---|
-| `service_flood` | service_flood | req/s + 5xx + latence ↑ | waf_block_ip + restart_service |
+| `service_flood` | service_flood | req/s + 5xx + latence ↑ (virements **authentifiés**, ids entiers : la charge atteint Postgres) | waf_block_ip + restart_service |
 | `auth_abuse` | auth_abuse | échecs 401 ↑ | waf_block_ip + tighten_rate_limit |
 | `web_attack` | web_attack | blocages CRS ↑ | confirm_waf_block + waf_blacklist_ip |
 | `data_corruption` | data_corruption | erreurs DB + verify_tx KO | restore_pg_dump (correction ≠ disponibilité) |
@@ -48,5 +48,5 @@ Voir `attacks/README.md`. En démo notée : depuis le **PC Attaquant physique**.
 ## Tests
 
 ```bash
-python -m pytest attacks/tests/ -q   # valide le contrat de tous les scénarios
+python -m pytest attacks/tests/ -q   # contrat des scénarios + corps du flood (test_run_flood.py)
 ```

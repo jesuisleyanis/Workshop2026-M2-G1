@@ -117,6 +117,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      # Solde fictif des comptes créés par /register (make seed) : sans lui (défaut 0),
+      # tout virement répond 409 insufficient_funds et verify_tx ne peut jamais réussir.
+      # 1 000 € = ~10 000 vérifications à 1 € ; le trafic de démo vire entre comptes seedés.
+      REGISTER_INITIAL_BALANCE_CENTS: "100000"
     depends_on: [postgres]
     read_only: true
     tmpfs: ["/tmp"]
@@ -131,6 +135,13 @@ services:
     <<: *hardening
     image: postgres:16-alpine
     networks: [data]
+    # Démarre directement en utilisateur postgres (uid 70 de l'image alpine) : l'entrypoint
+    # saute alors chown/gosu et cap_drop ALL suffit (aucun cap_add). Le volume NOMMÉ pgdata
+    # hérite à sa création du propriétaire postgres du dossier de l'image (un bind mount
+    # appartenant à root, lui, ne marcherait pas).
+    user: postgres
+    read_only: true
+    tmpfs: ["/var/run/postgresql", "/tmp"]   # socket unix + fichiers temporaires
     environment:
       POSTGRES_DB: resilience
       POSTGRES_USER: resilience
@@ -194,7 +205,9 @@ services:
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       AUTH_URL: http://auth:8002
-      VERIFY_TX_PATH: /app/verify_tx
+      # verify_tx (copié dans l'image en /opt/scripts/verify_tx, cf. Dockerfile) passe par le
+      # WAF comme un vrai client : depuis le réseau app, waf:8443 (et non https://localhost).
+      BASE_URL: https://waf:8443
     depends_on: [docker-socket-proxy]
     tmpfs: ["/tmp"]
     healthcheck:
