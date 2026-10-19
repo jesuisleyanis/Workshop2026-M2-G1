@@ -6,7 +6,7 @@ import { PhaseBanner } from './components/PhaseBanner'
 import { ScoreChart } from './components/ScoreChart'
 import { ServicesGrid } from './components/ServicesGrid'
 import { Sidebar } from './components/Sidebar'
-import { GRAFANA_BASE, LIVE_TRIGGERS, STREAM_SOURCE, STREAM_URL, TRIGGER_URL, type StreamSource } from './config'
+import { GRAFANA_BASE, LIVE_TRIGGERS, METRICS_POLL_MS, PROMETHEUS_BASE, STREAM_SOURCE, STREAM_URL, TRIGGER_URL, type StreamSource } from './config'
 import { useDashboard } from './hooks/useDashboard'
 import { useNow } from './hooks/useNow'
 import { defaultFactory, type EventSourceFactory } from './hooks/useRemediationStream'
@@ -20,10 +20,12 @@ interface Props {
   source?: StreamSource
   liveTriggers?: boolean
   grafanaBase?: string
+  /** Base du proxy Prometheus (score + santé) ; null = pas de polling (tests). */
+  metricsBase?: string | null
 }
 
 /** Choisit la source (flux réel / simulation) ; la console est remontée à chaque bascule. */
-export function App({ streamUrl = STREAM_URL, eventSourceFactory, source = STREAM_SOURCE, liveTriggers = LIVE_TRIGGERS, grafanaBase = GRAFANA_BASE }: Props) {
+export function App({ streamUrl = STREAM_URL, eventSourceFactory, source = STREAM_SOURCE, liveTriggers = LIVE_TRIGGERS, grafanaBase = GRAFANA_BASE, metricsBase = PROMETHEUS_BASE }: Props) {
   const [simulated, setSimulated] = useState(source === 'simulation')
   const [fallback, setFallback] = useState(false)
 
@@ -44,6 +46,7 @@ export function App({ streamUrl = STREAM_URL, eventSourceFactory, source = STREA
       onToggleSource={() => setSimulated((s) => !s)}
       liveTriggers={liveTriggers}
       grafanaBase={grafanaBase}
+      metricsBase={metricsBase}
     />
   )
 }
@@ -57,15 +60,17 @@ interface ConsoleProps {
   onToggleSource: () => void
   liveTriggers: boolean
   grafanaBase: string
+  metricsBase: string | null
 }
 
-function Console({ streamUrl, eventSourceFactory, simulated, fallback, onNeverOpened, onToggleSource, liveTriggers, grafanaBase }: ConsoleProps) {
+function Console({ streamUrl, eventSourceFactory, simulated, fallback, onNeverOpened, onToggleSource, liveTriggers, grafanaBase, metricsBase }: ConsoleProps) {
   const simRef = useRef<SimulatedEventSource | null>(null)
   const factory = useMemo<EventSourceFactory>(
     () => (simulated ? () => (simRef.current = new SimulatedEventSource()) : (eventSourceFactory ?? defaultFactory)),
     [simulated, eventSourceFactory],
   )
-  const { state, phase, reset } = useDashboard(simulated ? 'simulation://local' : streamUrl, factory)
+  // En simulation, score et santé viennent du simulateur ; en réel, de Prometheus (polling).
+  const { state, phase, reset } = useDashboard(simulated ? 'simulation://local' : streamUrl, factory, simulated ? null : metricsBase, METRICS_POLL_MS)
   const now = useNow(250)
   const incident = latestIncident(state)
 

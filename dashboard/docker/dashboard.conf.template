@@ -1,4 +1,4 @@
-# Variables substituées au démarrage : REMEDIATION_UPSTREAM, REMEDIATION_AUTH_HEADER, DNS_RESOLVER.
+# Variables substituées au démarrage : REMEDIATION_UPSTREAM, REMEDIATION_AUTH_HEADER, PROMETHEUS_UPSTREAM, DNS_RESOLVER.
 server {
   listen 8080;
   server_name _;
@@ -39,6 +39,24 @@ server {
   }
 
   location /remediation/ {
+    return 404;
+  }
+
+  # Score ML (resilience_anomaly_score) et santé (up) lus dans Prometheus : UNIQUEMENT
+  # l'API de requête instantanée, en GET, en lecture seule. Rien d'autre de Prometheus n'est exposé.
+  location = /prometheus/api/v1/query {
+    include /etc/nginx/security-headers.conf;
+    limit_except GET { deny all; }
+    set $prometheus_upstream "http://${PROMETHEUS_UPSTREAM}";
+    rewrite ^/prometheus(/.*)$ $1 break;
+    proxy_pass $prometheus_upstream;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_read_timeout 10s;
+    add_header Cache-Control "no-store" always;
+  }
+
+  location /prometheus/ {
     return 404;
   }
 
