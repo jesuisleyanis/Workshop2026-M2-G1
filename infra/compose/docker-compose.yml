@@ -49,9 +49,10 @@ services:
       - "80:8080"
       - "443:8443"
     volumes:
-      # Lecture seule : la liste est écrite SUR L'HÔTE (playbook waf_deny_ip.yml) ; un WAF
-      # compromis ne peut pas débloquer lui-même une source.
-      - ../../security/waf/blocked_ips.conf:/etc/nginx/blocked_ips.conf:ro
+      # DOSSIER (pas le fichier) en lecture seule : la liste est écrite SUR L'HÔTE (playbook
+      # waf_deny_ip.yml, par renommage) ; un bind mount de fichier garderait l'ancien inode
+      # sur un hôte Linux. Un WAF compromis ne peut pas débloquer lui-même une source.
+      - ../../security/waf/blocklist:/etc/nginx/blocklist:ro
       - waf-logs:/var/log/modsec            # journal d'audit ModSecurity -> waf-exporter
     depends_on: [front, payment-api, auth]
     mem_limit: 256m

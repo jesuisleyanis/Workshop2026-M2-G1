@@ -13,8 +13,15 @@ USER root
 RUN mkdir -p /var/log/modsec && chown nginx:nginx /var/log/modsec
 COPY --chown=root:root templates/conf.d/default.conf.template templates/conf.d/logging.conf.template \
      /etc/nginx/templates/conf.d/
-# Liste de blocage par défaut (vide) : le compose monte security/waf/blocked_ips.conf par-dessus.
-COPY --chown=root:root blocked_ips.conf /etc/nginx/blocked_ips.conf
+# Liste de blocage par défaut (vide). Le compose monte le DOSSIER security/waf/blocklist/
+# par-dessus (jamais le fichier seul : un bind mount de fichier garde l'ancien inode quand
+# l'hôte Linux réécrit le fichier par renommage, comme lineinfile d'Ansible -> la liste vue
+# par nginx ne bougerait plus, alors que l'action est marquée réussie).
+COPY --chown=root:root blocklist/ /etc/nginx/blocklist/
+# Borne le journal d'audit (tmpfs) : lancé en tâche de fond par l'entrypoint de l'image.
+# CRLF retirés : un checkout Windows (autocrlf) casserait le shebang.
+COPY --chown=root:root --chmod=0755 docker-entrypoint.d/97-audit-rotate.sh /docker-entrypoint.d/97-audit-rotate.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.d/97-audit-rotate.sh
 USER nginx
 
 ENV PORT=8080 \
@@ -33,11 +40,11 @@ ENV PORT=8080 \
     # Seuls les BLOCAGES sont journalisés (pas les 401/429 d'un flood de logins) : borne la
     # taille du journal et l'exposition de données.
     MODSEC_AUDIT_LOG_RELEVANT_STATUS=^403$ \
-    # error_log au niveau crit : à error, nginx y écrit la requête complète (query string,
-    # donc jetons éventuels) et ModSecurity la donnée appariée, et Promtail envoie stderr dans
-    # Loki. Les erreurs HTTP restent visibles dans l'access log (statut), les blocages via
-    # waf-exporter ; les erreurs de configuration (emerg/crit) restent affichées.
-    LOGLEVEL=crit \
+    # error_log au niveau error : les causes des 502 (connect() failed, upstream timed out,
+    # no resolver...) doivent rester visibles. nginx y écrit la requête complète (query
+    # string, donc jetons éventuels) et l'URL amont : Promtail les MASQUE avant Loki
+    # (infra/promtail, étape replace) — testé par security/waf/tests/test_nginx_conf.py.
+    LOGLEVEL=error     AUDIT_LOG_MAX_BYTES=16777216     AUDIT_ROTATE_INTERVAL_S=5 \
     BLOCKING_PARANOIA=1
 
 EXPOSE 8080 8443

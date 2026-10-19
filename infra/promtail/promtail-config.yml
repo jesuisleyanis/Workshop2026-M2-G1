@@ -21,6 +21,23 @@ scrape_configs:
       - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
         target_label: 'service'
     pipeline_stages:
+      # Masquage AVANT Loki des query strings que nginx écrit dans son error_log (niveau
+      # `error`, nécessaire pour diagnostiquer les 502) : `request: "GET /p?token=X HTTP/1.1"`,
+      # `upstream: "http://h:8001/p?token=X"`, `referrer: "https://h/?token=X"`. Seule la
+      # query (groupe capturé) est retirée ; méthode, chemin et hôte restent. Vérifié par
+      # security/waf/tests/test_nginx_conf.py.
+      - replace:
+          expression: '(?:request|upstream|referrer): "[^"?]*(\?[^" ]*)[^"]*"'
+          replace: ''
+      # Idem pour les lignes « ModSecurity: Access denied » (aussi au niveau error) : la donnée
+      # appariée `[data "..."]` et la valeur de la variable `(Value: `...' )` peuvent porter
+      # le contenu de la requête (mot de passe d'un login bloqué...).
+      - replace:
+          expression: '\[data "((?:[^"\\]|\\.)*)"\]'
+          replace: ''
+      - replace:
+          expression: 'Value: `(.*?)'' \)'
+          replace: ''
       # Les services émettent du JSON (contrat §1) : on parse les champs clés
       # pour les rendre requêtables et alimenter les règles SOC.
       - json:

@@ -1,26 +1,31 @@
 ---
 # Remédiation : blocage d'une IP source au niveau du WAF (action waf_block_ip / waf_blacklist_ip).
 # Appelé par le moteur de remédiation via ansible-runner. Idempotent.
+# Extravars envoyés par le moteur (remediation/actions/waf.py) : deny_ip, deny_list, incident_id.
 - name: Bloquer une IP au WAF
   hosts: host
   gather_facts: false
   vars:
-    blocked_ip: ""     # fourni par le moteur depuis l'AnomalyEvent
-    blocked_file: "{{ project_root }}/security/waf/blocked_ips.conf"
+    deny_ip: ""        # fourni par le moteur depuis l'AnomalyEvent (extravar `deny_ip`)
+    deny_list: temporary   # temporary | permanent (informatif : même fichier, voir README WAF)
+    incident_id: ""
+    # Fichier DANS le dossier security/waf/blocklist/ : c'est ce dossier que le compose monte
+    # dans le WAF (un bind mount de fichier garderait l'ancien inode après le renommage de lineinfile).
+    blocked_file: "{{ project_root }}/security/waf/blocklist/blocked_ips.conf"
   tasks:
     - name: Vérifier l'IP fournie
       ansible.builtin.assert:
         that:
-          - blocked_ip | length > 0
-          - blocked_ip is match('^[0-9a-fA-F:.]+$')
+          - deny_ip | length > 0
+          - deny_ip is match('^[0-9a-fA-F:.]+$')
         fail_msg: "IP invalide ou absente"
 
     - name: Ajouter l'IP à la liste de blocage (idempotent)
       ansible.builtin.lineinfile:
         path: "{{ blocked_file }}"
-        line: "{{ blocked_ip }} 1;"
+        line: "{{ deny_ip }} 1;"
         create: true
-        regexp: "^{{ blocked_ip | regex_escape }} "
+        regexp: "^{{ deny_ip | regex_escape }} "
 
     - name: Recharger le WAF à chaud
       ansible.builtin.command:

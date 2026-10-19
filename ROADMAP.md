@@ -26,7 +26,7 @@ Phase 2  Infra & observ.  [########..]  85%   configs Prom/Loki/Grafana/Alert/An
 Phase 3  Détection ML     [#########.]  90%   outillage données réelles OK (77 tests 3.12, build vérifié) ; capture réelle à jouer
 Phase 4  Remédiation      [######....]  60%   code + CDC + README ; câblage à réconcilier
 Phase 5  Dashboard        [########..]  85%   dashboard + front livrés (src+tests)
-Phase 6  Cyber & attaques [########..]  85%   WAF conteneurisé et vérifié ; chaîne de blocage IP auto à câbler
+Phase 6  Cyber & attaques [########..]  85%   WAF conteneurisé, testé sur la vraie image ; e2e web_attack (blocage IP auto, I11) à faire
 Phase 7  Assistant RAG    [#########.]  90%   RAG livré (97 tests)
 Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés à l'archi
 ```
@@ -59,7 +59,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | front : login, solde, virement, historique | `services/front` | R1 | — | ✅ | CDC+README+src+tests |
 | seed + verify_tx | `scripts/` | R2 | — | ✅ | scripts/verify_tx, scripts/seed.py |
 | Observabilité provisionnée (Prom/Loki/Grafana/Alert) | `infra/*` | R7 | — | ✅ | configs + provisioning |
-| WAF Nginx+ModSec+CRS devant le front | `security/waf` | R11 | — | ✅ | image OWASP CRS 4 LTS épinglée, non-root ; stack levée : front 200, SQLi/XSS 403 comptées dans Prometheus, blocklist 403, `/metrics` `/internal` 404, aucun secret dans Loki ; waf-exporter 17 tests ; revue security-reviewer traitée |
+| WAF Nginx+ModSec+CRS devant le front | `security/waf` | R11 | — | 🟨 | image OWASP CRS 4 LTS épinglée, non-root ; `security/waf/tests` : 59 verts dont 13 sur la **vraie image** (`make test-waf` : CRS 403, blocklist par renommage + reload, XFF écrasé, routes internes 404, rotation du journal, cause des 502) ; revue security-reviewer traitée ; **reste avant ✅** : `/api/v1/*` → 200 (stack complète, I12) et e2e `web_attack` vert (bloqué par I11) |
 | Durcissement conteneurs (non-root, cap_drop, read_only) | `security/hardening` | R14 | — | ✅ | hardening.md + audit.sh (OK) |
 | collector (features) + training (IsolationForest) | `ml/collector`, `ml/training` | R8 | — | ✅ | 50 tests ML verts |
 | EBIOS v2 + début NIS2/DORA | `docs/` | R16,R18 | — | ✅ | ebios-rm.md, nis2-dora.md |
@@ -119,7 +119,7 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | I7 | Build image detector | le Dockerfile copiait des artefacts non versionnés (build impossible) -> modèle entraîné au build ; seuil calibré périmé = build en échec | `docker compose build detector` OK (non-root uid 10003, sha256 vérifié) ; empreinte fausse -> build en échec code 3, bonne -> seuil calibré appliqué |
 | I9 | WAF jamais conteneurisé | pas de Dockerfile (build `make up` impossible), exporter sans serveur ni suivi du journal, nginx.conf incompatible non-root, front visé sur le port 80 au lieu de 8080 -> image OWASP CRS + modèles, service `waf-exporter`, ports `80:8080`/`443:8443` | `security/waf/`, vérifié stack levée |
 | I10 | Label Loki de `waf_blocked` | l'event est émis par le service `waf-exporter` : requêtes `{service="waf"}` du detector et de `confirm_waf_block` corrigées | `ml/detector/events.py`, `remediation/actions/waf.py` (tests) |
-| I11 | 🔴 Chaîne auto `waf_block_ip` | playbook `waf_deny_ip.yml` attend `blocked_ip`, le moteur envoie `deny_ip` ; `docker exec … nginx -s reload` interdit par `docker-socket-proxy` ; le detector n'émet pas `source_ip`. La conf nginx (liste + reload) est vérifiée, pas l'action de bout en bout | **à corriger** |
+| I11 | 🔴 Chaîne auto `waf_block_ip` | ~~playbook `blocked_ip` vs moteur `deny_ip`~~ **corrigé** (playbook lit `deny_ip`, test d'alignement) ; ~~bind mount du fichier de liste~~ **corrigé** (dossier `security/waf/blocklist/` monté, écriture par renommage vue par nginx, testé sur la vraie image). **Reste** : `docker exec … nginx -s reload` interdit par `docker-socket-proxy` ; le detector n'émet pas `source_ip`. L'action n'est pas vérifiée de bout en bout | **à corriger** |
 | I12 | 🔴 Services qui ne démarrent pas | **postgres** : `cap_drop: ALL` empêche le `chown`/changement d'utilisateur de l'entrypoint (=> auth, payment-api KO) ; **remediation** : `http_metrics.py` redéclare `resilience_http_requests_total` déjà défini par la lib (DuplicateTimeseries, aussi en collecte de `tests/test_api.py`) ; **dashboard** : `exec /entrypoint.sh: no such file` = fins de ligne CRLF au checkout Windows (ajouter `.gitattributes` `*.sh eol=lf`) | **à corriger** |
 | I13 | 🟨 IP source en Docker Desktop | le WAF voit les clients de l'hôte sous l'IP de passerelle `edge` (ex. 172.22.0.1) : blocklist et rate-limit de l'auth viseraient tout le monde si c'est aussi le cas depuis le PC attaquant | à vérifier depuis le PC attaquant |
 | I14 | 🟨 Segmentation réseau | WAF sur `app` avec `docker-socket-proxy` (sans auth) et `remediation` : sans effet via la conf nginx, mais joignable au niveau L3 si le WAF était compromis -> réseau `ctl` dédié proxy+remédiation | à planifier (R19) |

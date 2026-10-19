@@ -8,7 +8,7 @@ ROOT    := $(shell pwd)
 # `python`. Forçable : make seed PYTHON=py
 PYTHON  ?= $(shell python3 -c "" >/dev/null 2>&1 && echo python3 || echo python)
 
-.PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt \
+.PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front test-waf audit package decrypt \
         traffic train capture-baseline capture-attack calibrate ml-tools test-ml
 
 ML_DATA  := ml/training/data
@@ -123,6 +123,9 @@ calibrate: ml-tools ## Ré-entraîne sur la baseline puis calibre le seuil sur l
 
 test-ml: ml-tools ## Tests ML (pytest) dans l'image d'outils, Python 3.12
 	$(ML_DOCKER) -w /src/ml $(ML_TOOLS) python -m pytest -p no:cacheprovider
+
+test-waf: ## WAF réel : build de l'image + nginx/ModSecurity/CRS contre des backends factices (Docker)
+	WAF_DOCKER_TESTS=1 $(PYTHON) -m pytest security/waf/tests -q
 
 audit: ## Audit de durcissement du dépôt
 	security/hardening/audit.sh

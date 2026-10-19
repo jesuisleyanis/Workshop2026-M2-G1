@@ -12,11 +12,12 @@ more_clear_headers Server;
 
 # --- Liste de blocage IP rechargeable à chaud -----------------------------------------
 # L'action de remédiation waf_block_ip / waf_blacklist_ip (playbook Ansible waf_deny_ip.yml)
-# ajoute "<ip> 1;" dans ce fichier (monté depuis security/waf/blocked_ips.conf) puis
-# `nginx -s reload`. Interface documentée dans le README.
+# ajoute "<ip> 1;" dans security/waf/blocklist/blocked_ips.conf puis `nginx -s reload`.
+# Le DOSSIER blocklist/ est monté en lecture seule (pas le fichier : voir le Dockerfile).
+# Interface documentée dans le README.
 geo $blocked_source {
     default 0;
-    include /etc/nginx/blocked_ips.conf;
+    include /etc/nginx/blocklist/blocked_ips.conf;
 }
 
 server {

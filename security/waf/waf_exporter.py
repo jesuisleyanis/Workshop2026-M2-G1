@@ -25,7 +25,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TextIO
+from typing import BinaryIO, TextIO
 
 #: Règles d'évaluation/corrélation du CRS : elles disent « score dépassé », pas « quelle
 #: attaque ». On leur préfère la première règle de détection pour le label `rule`.
@@ -132,24 +132,52 @@ def iter_block_events(lines: Iterable[str]) -> Iterator[WafBlockEvent]:
             yield event
 
 
+#: Octets du début du fichier mémorisés pour reconnaître un fichier tronqué puis ré-alimenté.
+HEAD_BYTES = 256
+
+
+def _was_replaced(path: str, inode: int, pos: int, head: bytes) -> tuple[bool, bytes]:
+    """Le fichier suivi a-t-il été remplacé ou tronqué ? Renvoie aussi le début à retenir.
+
+    Trois indices : autre inode (rotation par renommage), taille < position (troncature
+    vue avant ré-alimentation) et DÉBUT DU FICHIER DIFFÉRENT. Ce dernier couvre la troncature
+    suivie d'une ré-alimentation au-delà de l'ancienne position entre deux sondages, que la
+    seule comparaison des tailles ne voit pas (un flot de blocages pourrait la provoquer).
+    Un journal ModSecurity n'est qu'ajouté : son début ne change jamais tant qu'il n'est pas
+    tronqué ; il s'allonge seulement (les premières transactions portent IP et horodatage).
+    """
+    try:
+        st = os.stat(path)
+        if st.st_ino != inode or st.st_size < pos:
+            return True, head
+        with open(path, "rb") as fh:
+            current = fh.read(HEAD_BYTES)
+    except FileNotFoundError:
+        return True, head
+    if current[: len(head)] != head:
+        return True, head
+    return False, current if len(current) > len(head) else head
+
+
 def follow(path: str, *, from_end: bool = True, poll_s: float = 0.5,
            should_stop: Callable[[], bool] = lambda: False,
            sleep: Callable[[float], None] = time.sleep) -> Iterator[str]:
     """Lignes ajoutées à `path`, comme `tail -F`.
 
     Attend que le fichier existe (le waf le crée à la 1re transaction journalisée),
-    reprend au début s'il est tronqué ou remplacé (rotation), ne rend que des lignes
-    complètes. `from_end` : ignorer l'existant au démarrage (pas de double comptage
-    après un redémarrage — Prometheus gère la remise à zéro du compteur).
+    reprend au début s'il est tronqué ou remplacé (rotation, voir `_was_replaced`), ne rend
+    que des lignes complètes. `from_end` : ignorer l'existant au démarrage (pas de double
+    comptage après un redémarrage — Prometheus gère la remise à zéro du compteur).
     """
-    fh: TextIO | None = None
-    inode = None
-    buf = ""
+    fh: BinaryIO | None = None
+    inode = 0
+    head = b""
+    buf = b""
     try:
         while not should_stop():
             if fh is None:
                 try:
-                    fh = open(path, encoding="utf-8", errors="replace")  # noqa: SIM115
+                    fh = open(path, "rb")  # noqa: SIM115
                 except FileNotFoundError:
                     # Absent : le fichier sera créé par la prochaine transaction journalisée,
                     # qu'il ne faut pas sauter -> lecture depuis le début une fois apparu.
@@ -157,23 +185,20 @@ def follow(path: str, *, from_end: bool = True, poll_s: float = 0.5,
                     sleep(poll_s)
                     continue
                 inode = os.fstat(fh.fileno()).st_ino
-                if from_end:
-                    fh.seek(0, os.SEEK_END)
+                head = fh.read(HEAD_BYTES)
+                fh.seek(0, os.SEEK_END if from_end else os.SEEK_SET)
                 from_end = False  # un fichier (re)créé ensuite est lu depuis le début
+            replaced, head = _was_replaced(path, inode, fh.tell(), head)
+            if replaced:
+                fh.close()
+                fh, buf, head = None, b"", b""
+                continue
             chunk = fh.read()
             if chunk:
                 buf += chunk
-                *lines, buf = buf.split("\n")
-                yield from lines
-                continue
-            try:
-                st = os.stat(path)
-                replaced = st.st_ino != inode or st.st_size < fh.tell()
-            except FileNotFoundError:
-                replaced = True
-            if replaced:
-                fh.close()
-                fh, buf = None, ""
+                *lines, buf = buf.split(b"\n")
+                for raw in lines:
+                    yield raw.rstrip(b"\r").decode("utf-8", errors="replace")
                 continue
             sleep(poll_s)
     finally:

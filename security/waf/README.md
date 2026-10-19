@@ -14,11 +14,12 @@ security/waf/
 ├── templates/conf.d/
 │   ├── default.conf.template          # serveur : routage, liste de blocage, refus explicites
 │   └── logging.conf.template          # access log JSON (contrat §1) sur stdout
-├── blocked_ips.conf                   # liste de deny rechargeable (gérée par la remédiation)
+├── blocklist/blocked_ips.conf         # liste de deny rechargeable (gérée par la remédiation) ; le DOSSIER est monté
+├── docker-entrypoint.d/97-audit-rotate.sh  # borne le journal d'audit (troncature au seuil)
 ├── Dockerfile.exporter                # image du service waf-exporter
 ├── waf_exporter.py                    # journal d'audit -> resilience_waf_blocked_total + event waf_blocked
 ├── requirements.txt                   # dépendances de l'exporter
-└── tests/                             # tests de l'exporter (parsing, suivi du journal, métrique)
+└── tests/                             # exporter, modèles nginx/compose/playbook, vraie image (opt-in)
 ```
 
 ## Image
@@ -39,7 +40,8 @@ On ne remplace que deux modèles (`conf.d/default.conf`, `conf.d/logging.conf`).
 | `MODSEC_AUDIT_LOG` | `/var/log/modsec/audit.json` (JSON, Serial, RelevantOnly) | lu par waf-exporter via le volume `waf-logs` |
 | `MODSEC_AUDIT_LOG_PARTS` | `AHZ` | ni en-têtes ni corps journalisés (les parties par défaut B, I, J, E… écriraient jetons `Authorization` et mots de passe). A = IP/URI/code, H = règles déclenchées |
 | `MODSEC_AUDIT_LOG_RELEVANT_STATUS` | `^403$` | seuls les **blocages** sont journalisés (pas les 401/429 d'un flood de logins) : taille et exposition bornées |
-| `LOGLEVEL` | `crit` | à `error`, nginx écrit dans `error_log` (stderr → Promtail → **Loki**) la requête complète avec sa query string, et ModSecurity la donnée appariée. Les erreurs HTTP restent visibles via le statut de l'access log ; les blocages via waf-exporter |
+| `LOGLEVEL` | `error` | les **causes des 502** (`connect() failed`, `could not be resolved`, `upstream timed out`) doivent rester visibles. À ce niveau nginx écrit la requête complète (query string, donc jetons éventuels) et ModSecurity `[data "…"]` / `(Value: …)` : **Promtail les masque avant Loki** (étapes `replace`, `infra/promtail/promtail-config.yml`) |
+| `AUDIT_LOG_MAX_BYTES` / `AUDIT_ROTATE_INTERVAL_S` | 16 Mio / 5 s | seuil de troncature du journal d'audit (voir ci-dessous) |
 
 ### Ce qui est journalisé, et où (vérifié)
 
@@ -47,11 +49,14 @@ Test : login avec le mot de passe `Zq9' OR 1=1--secret` et requête `?token=TOKZ
 
 | Sortie | Destination | Secret retrouvé |
 |---|---|---|
-| access log JSON + stderr du WAF | Promtail → Loki | **aucun** (pas de query string, pas de corps, `error_log` à `crit`) |
+| access log JSON | Promtail → Loki | **aucun** (pas de query string, pas de corps) |
+| `error_log` (stderr du WAF, niveau `error`) | Promtail → Loki | **aucun après masquage** : query string de `request:`/`upstream:`/`referrer:`, `[data "…"]` et `(Value: …)` retirés par Promtail (vérifié avec l'image Promtail réelle). Le log **local** du conteneur (`docker logs`) les garde : lecture réservée à l'opérateur de l'hôte |
 | event `waf_blocked` | waf-exporter → Loki | **aucun** (IP, chemin sans query, règle) |
 | journal d'audit `audit.json` | volume `waf-logs` | **oui : la donnée appariée par la règle** (partie H) |
 
 **Risque résiduel assumé** : ModSecurity v3 ne sait pas masquer la donnée appariée (les actions `sanitise*` de v2 n'existent pas). Le journal d'audit est donc cloisonné : volume **tmpfs** (en mémoire, non persistant, 64 Mo max), dossier `0750 nginx:nginx`, lu en lecture seule par le seul waf-exporter (groupe 101), jamais collecté par Promtail, et limité aux 403.
+
+**Rotation du journal d'audit** : ModSecurity v3 ne fait pas tourner son journal et un tmpfs plein ferait perdre les blocages suivants (waf-exporter ne les compterait plus). `docker-entrypoint.d/97-audit-rotate.sh` (lancé en tâche de fond par l'entrypoint de l'image, sous l'utilisateur `nginx`) **tronque en place** le fichier dès qu'il atteint `AUDIT_LOG_MAX_BYTES` (16 Mio sur 64 Mo de tmpfs : marge pour l'écriture entre deux contrôles de 5 s). ModSecurity écrit en ajout : il continue sur le même inode. waf-exporter détecte la troncature (taille < position, ou début du fichier différent : cas d'un fichier tronqué puis ré-alimenté au-delà de l'ancienne position entre deux sondages) et relit depuis le début. Perte possible : les lignes écrites depuis la dernière lecture de l'exporter (< 0,5 s) au moment de la troncature ; les blocages déjà lus restent comptés (`resilience_waf_blocked_total` ne régresse pas).
 
 ## Durcissement
 
@@ -83,16 +88,15 @@ Le WAF n'est pas `read_only` : l'entrypoint de l'image rend sa conf et son certi
 
 L'action `waf_block_ip` / `waf_blacklist_ip` du moteur de remédiation (playbook `infra/ansible/playbooks/waf_deny_ip.yml`) :
 
-1. ajoute une ligne `"<ip> 1;"` dans `security/waf/blocked_ips.conf` **sur l'hôte** (monté en lecture seule dans le conteneur : un WAF compromis ne peut pas débloquer une source) ;
+1. ajoute une ligne `"<ip> 1;"` dans `security/waf/blocklist/blocked_ips.conf` **sur l'hôte**. C'est le **dossier** `security/waf/blocklist/` qui est monté (en lecture seule : un WAF compromis ne peut pas débloquer une source) sur `/etc/nginx/blocklist/`. Un montage du *fichier* seul garderait l'ancien inode quand l'hôte Linux réécrit le fichier par renommage (`lineinfile` d'Ansible) : l'action serait marquée réussie sans que nginx voie la nouvelle liste. Le playbook lit les variables que le moteur envoie : `deny_ip`, `deny_list`, `incident_id` ;
 2. déclenche un rechargement à chaud : `docker exec resilience-g1-waf-1 nginx -s reload`.
 
 Les requêtes des IP listées reçoivent **403** (renvoyé avant ModSecurity : pas d'event `waf_blocked`, c'est un blocage de source, pas une règle CRS). **Toute modification du fichier doit être suivie d'un reload**, y compris un retrait manuel. Interface stable — ne pas changer le format sans mettre à jour `remediation/` et `docs/contracts.md`.
 
-> État de la chaîne automatique (constaté à la revue sécurité, hors de ce composant, suivi au ROADMAP) : le playbook attend
-> `blocked_ip` alors que le moteur envoie `deny_ip`, et `docker exec … nginx -s reload` n'est pas autorisé par
-> `docker-socket-proxy`. La conf nginx (liste + reload) est vérifiée ; l'action `waf_block_ip` de bout en bout ne l'est pas.
-
-> Limite : le fichier est monté seul (bind mount de fichier). Sous Docker Desktop (Windows, poste de démo), une écriture par renommage (comme `lineinfile` d'Ansible) est bien vue par le conteneur (vérifié) ; sur un hôte Linux, un bind mount de fichier garde l'ancien inode après renommage — monter alors le dossier plutôt que le fichier.
+> État de la chaîne automatique (suivi au ROADMAP, **I11**) : le nom de variable du playbook est aligné sur le moteur (`deny_ip`)
+> et l'écriture-par-renommage est vue par nginx (testé sur la vraie image). **Reste ouvert** : `docker exec … nginx -s reload` n'est
+> pas autorisé par `docker-socket-proxy`, et le detector n'émet pas encore `source_ip`. L'action `waf_block_ip` n'est donc pas
+> vérifiée de bout en bout : le composant WAF n'est pas marqué ✅ tant que l'e2e `web_attack` n'est pas vert.
 
 ## Observabilité (fonction SOC)
 
@@ -107,8 +111,11 @@ Les requêtes des IP listées reçoivent **403** (renvoyé avant ModSecurity : p
 ## Lancement / test
 
 ```bash
-# Tests de l'exporter (sans conteneur)
+# Tests sans conteneur : exporter + garanties de sécurité des modèles nginx / compose / playbook / Promtail
 python -m pytest security/waf/tests/ -q
+
+# Tests sur la VRAIE image (build + nginx/ModSecurity/CRS contre des backends factices ; Docker requis)
+make test-waf          # = WAF_DOCKER_TESTS=1 pytest security/waf/tests
 
 # Images
 docker build -t resilience/waf security/waf
