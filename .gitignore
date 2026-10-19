@@ -37,3 +37,6 @@ remediation/incidents.db
 .DS_Store
 .idea/
 .vscode/
+
+# Captures ML en cours (écrites en .tmp puis renommées si valides)
+ml/training/data/*.tmp

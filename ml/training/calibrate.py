@@ -19,8 +19,12 @@ Le fichier écrit (calibration.json, versionné) est relu par `train --calibrati
 par le build du detector : le seuil survit au ré-entraînement tant que l'empreinte du
 modèle (`model_fingerprint`) est la même.
 
+Le rapport complet est TOUJOURS écrit à côté (`calibration.report.json`), même en échec :
+c'est lui qu'on lit pour savoir quel scénario ne se détache pas du normal.
+
 Codes retour : 0 = séparable et MTTD respecté ; 1 = attaques non séparables du normal
-(rien n'est écrit) ; 2 = seuil écrit mais un scénario dépasse --max-mttd.
+(calibration.json n'est PAS écrit, seul le rapport l'est) ; 2 = seuil écrit mais un
+scénario dépasse --max-mttd.
 """
 
 from __future__ import annotations
@@ -126,6 +130,8 @@ def calibrate(model, normal: Series, attacks: Series, margin: float = DEFAULT_MA
         worst = None if None in mttds else max(mttds)
         mttd_ok = mttd_ok and worst is not None and worst <= max_mttd_s
         report["attacks"][kind] = {
+            # sous le plancher : ce scénario ne se détache pas du normal (cause d'un échec)
+            "separable": k["peak_min"] > floor,
             "runs": len(k["runs"]),
             "windows": sum(len(s) for _, s in k["runs"]),
             "peak_min": round(k["peak_min"], 4),
@@ -157,12 +163,16 @@ def main(argv: list[str] | None = None) -> int:
     sys.stdout.write(f"normal : n={n['n']} p99.9={n['score_p999']} max={n['score_max']}\n")
     for kind, r in report["attacks"].items():
         sys.stdout.write(f"  {kind:16s} passages={r['runs']} pic min={r['peak_min']} "
-                         f"MTTD pire={r['mttd_s_worst']} s\n")
+                         f"MTTD pire={r['mttd_s_worst']} s"
+                         f"{'' if r['separable'] else '  <- NON SÉPARABLE'}\n")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    report_path = args.out.with_name(args.out.stem + ".report.json")
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    sys.stdout.write(f"rapport -> {report_path}\n")
     if not report["separable"]:
-        sys.stdout.write("NON SÉPARABLE : un scénario ne dépasse jamais le normal. Rien n'est écrit.\n"
+        sys.stdout.write(f"NON SÉPARABLE : rien n'est écrit dans {args.out.name}.\n"
                          "-> capturer plus de normal varié / revoir le scénario (jamais de if en dur, R8)\n")
         return 1
-    args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     sys.stdout.write(f"seuil calibré = {report['threshold']} -> {args.out}\n"
                      "-> ré-entraîner avec --calibration (ou rebuild du detector)\n")

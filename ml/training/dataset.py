@@ -88,7 +88,8 @@ def load_csv(path: Path | str, min_rows: int = MIN_TRAINING_ROWS,
     if len(rows) < min_rows:
         raise ValueError(
             f"{path}: {len(rows)} fenêtre(s) exploitable(s), minimum {min_rows}"
-            + (f" pour le label {label!r}" if label else ""))
+            + (f" pour le label {label!r}" if label else "")
+            + f" (au pas de 15 s : capturer au moins {math.ceil(min_rows * 15 / 60)} min)")
     rows.sort(key=lambda r: r[0])  # ISO 8601 UTC : l'ordre lexical est chronologique
     data = np.array([r[1] for r in rows], dtype=float).reshape(len(rows), N_FEATURES)
     return Series(data, tuple(r[0] for r in rows), tuple(r[2] for r in rows))

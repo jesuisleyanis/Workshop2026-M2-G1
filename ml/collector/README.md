@@ -39,7 +39,7 @@ vide ignorée). Lancée dans le conteneur (seul à joindre Prometheus) ; `--wind
 
 ```bash
 docker compose -f infra/compose/docker-compose.yml exec -T collector \
-  python -m ml.collector.capture --last 30m --label normal > ml/training/data/baseline_real.csv
+  python -m ml.collector.capture --last 60m --label normal > ml/training/data/baseline_real.csv
 # ou --start/--end ISO 8601 UTC, --label <scenario>, --no-header pour concaténer (>>)
 ```
 
