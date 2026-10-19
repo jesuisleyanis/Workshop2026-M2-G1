@@ -21,6 +21,7 @@ Règles de traduction (documentées dans README-SOC.md) :
 
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -75,13 +76,16 @@ class Skipped(BaseModel):
 
 
 def _float(*values: str | None, default: float) -> float:
+    """Premier nombre FINI parmi les valeurs (un `NaN`/`inf` rendu par un template est ignoré)."""
     for v in values:
         if v is None:
             continue
         try:
-            return float(v)
+            f = float(v)
         except ValueError:
             continue
+        if math.isfinite(f):
+            return f
     return default
 
 

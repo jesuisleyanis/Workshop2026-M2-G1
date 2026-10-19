@@ -153,7 +153,7 @@ L'attaque principale de la démo est `service_flood` : crédible pour une platef
 
 | Mesure | Mise en œuvre | Où vérifier |
 |---|---|---|
-| WAF, seul point exposé | image officielle OWASP CRS épinglée, non-root (8080/8443 publiés en 80/443), TLS généré au build, paranoïa 1, deny-list IP à chaud | `security/waf/`, 22 tests de contrat |
+| WAF, seul point exposé | image officielle OWASP CRS épinglée, non-root (8080/8443 publiés en 80/443), TLS généré au build, paranoïa 1, deny-list IP à chaud | `security/waf/`, 25 tests de contrat |
 | Segmentation | 4 réseaux, `data` interne, aucun `ports:` hors WAF | `infra/compose`, `audit.sh` §5–7 |
 | Secrets | **SOPS + age** : secrets chiffrés dans le dépôt, clé privée hors git, `.env` déchiffré ignoré ; `gitleaks` en pre-commit ; token Alertmanager via secret Compose ; re-scan de l'archive (noms et contenu) | `security/sops/`, `scripts/package_deliverables.sh` |
 | Durcissement | images slim, utilisateurs non-root, `cap_drop: ALL`, `no-new-privileges`, `read_only` + tmpfs, limites CPU/RAM, healthchecks ; Postgres démarre non-root sans aucune capability ajoutée | `security/hardening/hardening.md`, tests `infra/tests` |
@@ -171,8 +171,8 @@ L'attaque principale de la démo est `service_flood` : crédible pour une platef
 | `services/auth` / `payment-api` | 35 / 54 | règles métier (virement atomique, solde), JWT, rate-limit, métriques et logs du contrat |
 | `services/front` / `dashboard` (Vitest) | 44 / 121 | parcours utilisateur ; adaptation de l'enveloppe SSE réelle du moteur, lecture Prometheus |
 | `ml/*` | 50 | vecteur de features figé, entraînement reproductible, seuil, événement conforme |
-| `remediation` | 104 | invariants de la table, séquences par type, cooldown/idempotence/escalade, listes blanches, auth (401/503), SSE, **exécution réelle du playbook WAF**, chemin SOC |
-| `security/waf`, `attacks`, `infra`, `scripts`, libs | 22 / 16 / 11 / 16 / 10 | contrats de configuration (Dockerfile, nginx, compose, Prometheus, SOC), scénarios Red/Blue, seed et `verify_tx`, packaging sans secret |
+| `remediation` | 105 | invariants de la table, séquences par type, cooldown/idempotence/escalade, listes blanches, auth (401/503), SSE, **exécution réelle du playbook WAF**, chemin SOC |
+| `security/waf`, `attacks`, `infra`, `scripts`, libs | 25 / 16 / 11 / 16 / 10 | contrats de configuration (Dockerfile, nginx, compose, Prometheus, SOC), scénarios Red/Blue, seed et `verify_tx`, packaging sans secret |
 | `assistant` | 97 | indexation, réponse, mode dégradé sans Ollama |
 | `tests/e2e` | 7 (sautés hors stack) | rejeu des 5 temps contre la stack réelle, dont `data_corruption` KO → OK |
 

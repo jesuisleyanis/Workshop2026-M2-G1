@@ -32,7 +32,7 @@ def _fake_repo(tmp_path: Path) -> Path:
         "services/api/main.py": "print('x')\n",
         "security/sops/secrets.example.env": "POSTGRES_PASSWORD=change-me\n",
         ".env": "POSTGRES_PASSWORD=real\n",
-        "security/sops/keys.txt": "# created\nAGE-SECRET-KEY-1QQQ\n",
+        "security/sops/keys.txt": "# created\nAGE-SECRET-KEY-" + "1QQQ\n",
         "dashboard/node_modules/x/index.js": "x",
         "dashboard/dist/index.html": "x",
         "libs/python/pkg.egg-info/PKG-INFO": "x",
@@ -72,7 +72,7 @@ def test_archive_has_exact_name_and_excludes_secrets_and_artifacts(tmp_path):
 def test_packaging_fails_if_a_private_key_slips_into_the_archive(tmp_path):
     repo = _fake_repo(tmp_path)
     (repo / "docs").mkdir()
-    (repo / "docs" / "notes.md").write_text("AGE-SECRET-KEY-1ABCDEF\n", encoding="utf-8")  # pas exclu par nom
+    (repo / "docs" / "notes.md").write_text("AGE-SECRET-KEY-" + "1ABCDEF\n", encoding="utf-8")  # pas exclu par nom (littéral coupé : le scan de contenu ne doit pas se déclencher sur CE fichier)
     r = _run(repo)
     assert r.returncode == 1 and "clé privée" in r.stderr
     assert not (repo / CODE).exists(), "l'archive fautive doit être supprimée"

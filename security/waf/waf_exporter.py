@@ -20,6 +20,7 @@ FIN du fichier pour ne pas recompter d'anciens blocages après un redémarrage d
 from __future__ import annotations
 
 import argparse
+import codecs
 import contextlib
 import json
 import logging
@@ -119,11 +120,16 @@ def parse_modsec_line(line: str) -> WafBlockEvent | None:
     return parse_modsec_record(record) if isinstance(record, dict) else None
 
 
+MAX_PENDING_BYTES = 1_000_000  # un objet d'audit incomplet plus gros que ça est du bruit : on l'abandonne
+
+
 def iter_json_objects(chunks: Iterable[str]) -> Iterator[dict]:
     """Décode un flux d'objets JSON concaténés (un par ligne OU collés, avec ou sans retour à la ligne).
 
     ModSecurity v3 en mode Serial/JSON écrit un objet par transaction ; on ne présume pas de la
     présence d'un `\\n` entre deux objets. Le bruit (texte non JSON) est sauté jusqu'au prochain `{`.
+    Un objet jamais refermé (entrée tronquée) ne bloque pas le flux : au-delà de MAX_PENDING_BYTES,
+    on repart après son accolade ouvrante.
     """
     decoder = json.JSONDecoder()
     buf = ""
@@ -134,15 +140,17 @@ def iter_json_objects(chunks: Iterable[str]) -> Iterator[dict]:
             if start < 0:
                 buf = ""
                 break
+            if start:
+                buf = buf[start:]  # on ne rescanne jamais le bruit déjà vu
             try:
-                obj, end = decoder.raw_decode(buf, start)
+                obj, end = decoder.raw_decode(buf)
             except json.JSONDecodeError:
-                # objet incomplet (chunk partiel) : on attend la suite ; si l'erreur vient de bruit
-                # avant un vrai objet, on avance d'un caractère pour ne pas bloquer.
-                if _looks_incomplete(buf, start):
-                    buf = buf[start:]
-                    break
-                buf = buf[start + 1:]
+                if _looks_incomplete(buf, 0):
+                    if len(buf) > MAX_PENDING_BYTES:
+                        buf = buf[1:]  # objet jamais refermé : on cherche le suivant
+                        continue
+                    break  # chunk partiel : on attend la suite
+                buf = buf[1:]  # faux départ (accolade dans du bruit)
                 continue
             buf = buf[end:]
             if isinstance(obj, dict):
@@ -219,25 +227,33 @@ def follow(path: Path, *, from_start: bool = False, poll_s: float = 0.5,
 
     Ne garde jamais le fichier ouvert au-delà d'une lecture (compatible avec une rotation qui
     remplace l'inode) ; n'exige aucun droit d'écriture (volume monté en lecture seule).
+    Lecture BINAIRE + décodeur incrémental : un caractère UTF-8 coupé entre deux lectures est
+    recomposé, et la position est un vrai décalage d'octets comparable à st_size.
+    Un fichier absent au démarrage (créé par ModSecurity au premier blocage) est lu depuis
+    le début dès son apparition : on ne saute à la fin que pour un fichier déjà présent.
     """
     stop = stop or threading.Event()
-    position = None if from_start else -1  # -1 : se placer à la fin au premier accès
+    position: int | None = 0 if from_start else None  # None : se placer à la fin du fichier existant
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     while not stop.is_set():
         try:
             size = path.stat().st_size
         except FileNotFoundError:
-            position = 0 if from_start else -1
+            position = 0  # il n'existe pas encore : tout ce qui y sera écrit est nouveau
+            decoder.reset()
             stop.wait(poll_s)
             continue
-        if position is None or position == -1:
-            position = 0 if position is None else size
+        if position is None:
+            position = size
         if size < position:  # troncature / rotation : on repart du début
             position = 0
+            decoder.reset()
         if size > position:
-            with path.open("r", encoding="utf-8", errors="replace") as fh:
+            with path.open("rb") as fh:
                 fh.seek(position)
-                data = fh.read()
+                raw = fh.read()
                 position = fh.tell()
+            data = decoder.decode(raw)
             if data:
                 yield data
             continue
