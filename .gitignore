@@ -41,4 +41,4 @@ infra/ansible/backups/*
 .vscode/
 
 # Livrables générés (scripts/package_deliverables.sh) — produits à la demande, jamais commités
-Workshop2026-M2-G1-Code.zip
+Workshop2026-M2-G1-*
