@@ -10,7 +10,7 @@
 | Développement | Métier + reprise | _à renseigner_ | `services/*`, `dashboard/`, `scripts/verify_tx` |
 | Infrastructure | Déploiement, observabilité | _à renseigner_ | `infra/*`, exécution remédiation |
 | IA / Data | Détection ML + RAG | _à renseigner_ | `ml/*`, `assistant/` |
-| Cybersécurité | Red Team, WAF, SOC, secrets | _à renseigner_ | `security/*`, `attacks/` |
+| Cybersécurité | Red Team, WAF, SOC, secrets | Louis | `security/*`, `attacks/` |
 | Transformation | Gouvernance, risques, conformité | _à renseigner_ | `docs/ebios-rm.md`, `docs/pca-pra.md`, `docs/nis2-dora.md` |
 
 > Une personne peut couvrir plusieurs domaines ; un domaine peut mobiliser plusieurs personnes (cf. sujet §3). Ce qui compte : une **contribution identifiable** par membre (traçable dans les commits et ici).
@@ -45,8 +45,8 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | Librairie partagée (logs/métriques/événement) | `libs/python/resilience_common` | R8 | — | ✅ | 4 tests verts |
 | `.claude/` (settings, agents, skills, commandes) | `.claude/` | — | — | ✅ | settings + 3 agents + skill + 2 cmds |
 | Compose : 4 réseaux + profils + socket-proxy | `infra/compose` | R5,R19,R15 | — | ✅ | `docker-compose.yml` |
-| SOPS + age + `.sops.yaml` + `.gitignore` | `security/sops` | R13 | — | ✅ | README + decrypt-secrets.sh |
-| gitleaks + ruff pre-commit | `.pre-commit-config.yaml` | R13 | — | ✅ | config présente (`pre-commit install` au poste) |
+| SOPS + age + `.sops.yaml` + `.gitignore` | `security/sops` | R13 | Louis | ✅ | README + decrypt-secrets.sh ; `.env` déchiffré ignoré, exemples factices seulement (audit §3-4 OK) |
+| gitleaks + ruff pre-commit | `.pre-commit-config.yaml` | R13 | Louis | ✅ | gitleaks v8.18.4 + check-added-large-files ; relancé (config présente) |
 | **EBIOS RM v1** (valeurs métier, sources de risque, scénarios) | `docs/ebios-rm.md` | R16 | — | ✅ | docs/ebios-rm.md |
 | `docs/architecture.md` + `docs/network.md` + ADR | `docs/` | R19 | — | ✅ | architecture.md, network.md, 3 ADR |
 
@@ -60,7 +60,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | seed + verify_tx | `scripts/` | R2 | — | ✅ | scripts/verify_tx, scripts/seed.py |
 | Observabilité provisionnée (Prom/Loki/Grafana/Alert) | `infra/*` | R7 | — | ✅ | configs + provisioning |
 | WAF Nginx+ModSec+CRS devant le front | `security/waf` | R11 | — | ✅ | nginx.conf + waf_exporter (5 tests) |
-| Durcissement conteneurs (non-root, cap_drop, read_only) | `security/hardening` | R14 | — | ✅ | hardening.md + audit.sh (OK) |
+| Durcissement conteneurs (non-root, cap_drop, read_only) | `security/hardening` | R14 | Louis | ✅ | hardening.md + audit.sh **enrichi** (7 contrôles : +exposition réseau WAF-only, +ancre durcissement, +data interne) — exit 0 |
 | collector (features) + training (IsolationForest) | `ml/collector`, `ml/training` | R8 | — | ✅ | 50 tests ML verts |
 | EBIOS v2 + début NIS2/DORA | `docs/` | R16,R18 | — | ✅ | ebios-rm.md, nis2-dora.md |
 
@@ -73,17 +73,17 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | docker-socket-proxy + API authentifiée | `remediation/`, `infra/compose` | R15 | — | ✅ | haproxy strict câblé + Bearer statique (ADR 0002) |
 | Playbooks Ansible (deploy + remédiation) | `infra/ansible` | R6 | — | ✅ | deploy, block_ip, restore_pg_dump |
 | Alertmanager → webhook remédiation | `infra/alertmanager` | R7 | — | ✅ | alertmanager.yml |
-| Règles SOC Loki/Grafana | `infra/grafana`, `infra/loki` | R12 | — | ✅ | soc-rules.yml |
+| Règles SOC Loki/Grafana | `infra/grafana`, `infra/loki` | Louis | 🟨 | 4 règles (couvre les 4 incident_type) corrigées (uid datasource, reduce, +data_corruption) ; 5 tests contrat verts. **Routage→remédiation ouvert** : endpoint `/events/alertmanager` absent côté moteur + wiring Prometheus/Alertmanager manquant (voir README-SOC.md) |
 | Dashboard (états, score, timeline, MTTD/MTTR, SSE) | `dashboard/` | R4,R20 | — | ✅ | CDC+README+src+tests |
-| Scénarios d'attaque v1 (depuis PC Attaquant) | `attacks/` | R10 | — | ✅ | 4 scénarios (4 tests contrat) |
+| Scénarios d'attaque v1 (depuis PC Attaquant) | `attacks/` | R10 | Louis | ✅ | 4 scénarios ; validateur + runbook PC Attaquant ; déclencheur `data_corruption` (pg_backup + db_corrupt_fake réversible) — 10 tests contrat verts |
 | RAG : indexation docs + journal, UI onglet | `assistant/` | R9 | — | ✅ | 97 tests verts |
 
 ## J4 — Jeudi : recette, chaos, clip, gel du code (17h)
 
 | Tâche | Composant | Réf. | Propriétaire | Statut | Preuve |
 |---|---|---|---|---|---|
-| Tests e2e rejouant chaque scénario | `tests/e2e` | R10 | — | 🟨 | squelette prêt (skip si stack down) |
-| Chaos engineering (pannes non-attaque) | `attacks/`, `tests/e2e` | — | — | ⬜ | — |
+| Tests e2e rejouant chaque scénario | `tests/e2e` | R10 | Louis | 🟨 | 4 scénarios couverts (dont data_corruption KO→OK) + preuve incident clos optionnelle ; 5 tests collectés/skip OK hors stack, à valider live |
+| Chaos engineering (pannes non-attaque) | `attacks/chaos`, `tests/e2e` | — | Louis | ✅ | `chaos.sh` (crash/freeze, bornés+réversibles, kill-switch) + README ; 5 tests contrat + e2e `test_chaos_flow.py` (skip hors stack) |
 | `scripts/demo.sh` (5 temps enchaînés) | `scripts/` | R20 | — | ✅ | scripts/demo.sh |
 | PCA/PRA (RTO/RPO, risques résiduels) | `docs/pca-pra.md` | R17 | — | ✅ | docs/pca-pra.md |
 | NIS2/DORA finalisé | `docs/nis2-dora.md` | R18 | — | ✅ | docs/nis2-dora.md |
@@ -105,7 +105,12 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | J1 | Remédiation via docker-socket-proxy, jamais le socket brut | acté |
 | J1 | Attaque depuis PC physique pour la démo (profil `attack` = dev) | acté |
 
-## Points d'intégration — ✅ TOUS RÉCONCILIÉS (câblage)
+## Points d'intégration
+
+> ⚠️ **I6 — ouvert** (rouvre la section) : routage **SOC → remédiation** non fonctionnel.
+> `alertmanager.yml` poste vers `remediation:8005/events/alertmanager` (endpoint **absent** côté moteur) et `prometheus.yml` n'a ni `rule_files` ni bloc `alerting`. À trancher avec **remédiation** (adaptateur Alertmanager→AnomalyEvent) et **infra** (wiring). Détail : `infra/grafana/provisioning/alerting/README-SOC.md`. Les règles SOC elles-mêmes sont corrigées et testées.
+
+### Câblage initial — réconcilié
 
 | # | Écart | Résolution | Preuve |
 |---|---|---|---|

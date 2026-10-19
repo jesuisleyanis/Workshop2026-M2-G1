@@ -1,0 +1,56 @@
+---
+# DÉCLENCHEUR du scénario data_corruption (Red Team / chaos, côté OPÉRATEUR / PC Hôte).
+# Altère de façon CONTRÔLÉE et RÉVERSIBLE des données FICTIVES pour provoquer des
+# erreurs DB et l'échec de verify_tx, et déclencher la remédiation de CORRECTION
+# (restore_pg_dump), distincte d'une restauration de disponibilité (sujet §2, §3.4).
+#
+# La base est sur le réseau interne `data` (non exposée) : ce playbook NE se lance PAS
+# depuis le PC Attaquant mais depuis le PC Hôte, via ansible-runner ou en direct.
+#
+# Garde-fous :
+#   - cible UNIQUEMENT la base de données fictives `resilience` (comptes/transactions seedés) ;
+#   - corruption par RENOMMAGE de table (atomique, sans perte) — pas de DROP, pas de DELETE ;
+#   - entièrement réversible : `mode=revert` remet en place ; `pg_restore.yml` le fait aussi.
+#
+# Usage :
+#   ansible-playbook db_corrupt_fake.yml                    # mode=corrupt (défaut)
+#   ansible-playbook db_corrupt_fake.yml -e mode=revert     # annule l'altération
+- name: Altérer (réversiblement) des données fictives pour déclencher data_corruption
+  hosts: host
+  gather_facts: false
+  vars:
+    mode: corrupt                       # corrupt | revert
+    db_container: "resilience-g1-postgres-1"
+    db_name: resilience
+    db_user: resilience
+    live_table: transactions            # table lue par verify_tx (insertion de contrôle)
+    quarantine_table: transactions__corrupted
+  tasks:
+    - name: Valider le mode
+      ansible.builtin.assert:
+        that: mode in ['corrupt', 'revert']
+        fail_msg: "mode doit valoir 'corrupt' ou 'revert'"
+
+    - name: Garde-fou — n'opérer que sur la base de données fictives
+      ansible.builtin.assert:
+        that: db_name == 'resilience'
+        fail_msg: "Refus : ce playbook ne touche QUE la base fictive 'resilience'"
+
+    # mode=corrupt : écarte la table de contrôle -> toute requête payment-api sur
+    # `transactions` échoue (db_error), verify_tx KO. Atomique, aucune donnée perdue.
+    - name: Injecter la corruption (renommage réversible)
+      ansible.builtin.shell: |
+        docker exec -i {{ db_container }} psql -v ON_ERROR_STOP=1 \
+          -U {{ db_user }} -d {{ db_name }} -c \
+          "ALTER TABLE IF EXISTS {{ live_table }} RENAME TO {{ quarantine_table }};"
+      when: mode == 'corrupt'
+      changed_when: true
+
+    # mode=revert : remet la table en place (cleanup entre deux prises, cf. reset.sh).
+    - name: Annuler la corruption (renommage inverse, idempotent)
+      ansible.builtin.shell: |
+        docker exec -i {{ db_container }} psql -v ON_ERROR_STOP=1 \
+          -U {{ db_user }} -d {{ db_name }} -c \
+          "ALTER TABLE IF EXISTS {{ quarantine_table }} RENAME TO {{ live_table }};"
+      when: mode == 'revert'
+      changed_when: true

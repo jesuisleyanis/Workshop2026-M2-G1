@@ -71,6 +71,44 @@ else
   pass "aucune clé age dans le dépôt"
 fi
 
+# 5. Exposition réseau : SEUL le WAF publie des ports (R11/R19, point dur jury).
+echo "[5] Exposition réseau (seul le WAF publie des ports)"
+COMPOSE="infra/compose/docker-compose.yml"
+if [[ -f "${COMPOSE}" ]]; then
+  # Repère les services (indent 2) du bloc `services:` qui déclarent une clé `ports:` (indent 4).
+  offenders="$(awk '
+    /^[A-Za-z0-9_-]+:/        { in_services = ($0 ~ /^services:/) ; next }
+    in_services && /^  [A-Za-z0-9_-]+:/ { svc = $1; sub(/:$/, "", svc) }
+    in_services && /^    ports:/        { if (svc != "waf") print svc }
+  ' "${COMPOSE}" | sort -u)"
+  if [[ -n "${offenders}" ]]; then
+    fail "des services autres que le WAF publient des ports : ${offenders}"
+  else
+    pass "seul le WAF publie des ports (DB/API/obs internes)"
+  fi
+else
+  fail "docker-compose.yml introuvable"
+fi
+
+# 6. Durcissement conteneurs : ancre no-new-privileges + cap_drop ALL présente.
+echo "[6] Durcissement conteneurs (no-new-privileges, cap_drop ALL)"
+if grep -q 'no-new-privileges:true' "${COMPOSE}" 2>/dev/null \
+   && grep -qE '^\s*cap_drop:' "${COMPOSE}" 2>/dev/null \
+   && grep -qE '^\s*-\s*ALL\s*$' "${COMPOSE}" 2>/dev/null; then
+  pass "ancre de durcissement présente (no-new-privileges + cap_drop: ALL)"
+else
+  fail "durcissement manquant : no-new-privileges et/ou cap_drop: ALL absents du compose"
+fi
+
+# 7. Base de données jamais exposée : réseau data en internal.
+echo "[7] Réseau data interne (DB jamais exposée)"
+if awk '/^  data:/{d=1;next} d&&/internal:[[:space:]]*true/{print;found=1} /^  [A-Za-z0-9_-]+:/&&!/^  data:/{d=0} END{exit !found}' \
+     "${COMPOSE}" >/dev/null 2>&1; then
+  pass "réseau data: internal: true (Postgres non joignable depuis l'hôte)"
+else
+  fail "le réseau data n'est pas internal: true (DB potentiellement exposée)"
+fi
+
 echo
 if [[ "${FAIL}" -eq 0 ]]; then
   echo "== Audit OK =="

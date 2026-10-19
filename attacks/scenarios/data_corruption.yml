@@ -8,9 +8,11 @@ cible:
   service: postgres
   endpoint: "schéma de données fictives"
 prerequis:
-  - stack up, dump Postgres sain disponible (backup planifié)
+  - stack up, dump Postgres sain disponible (playbook infra/ansible/playbooks/pg_backup.yml)
 parametres:
   mode: "altération contrôlée et réversible de données fictives uniquement"
+  declencheur: "infra/ansible/playbooks/db_corrupt_fake.yml (côté PC Hôte, base non exposée)"
+  annulation: "db_corrupt_fake.yml -e mode=revert, ou restauration via restore_pg_dump"
 signal_attendu:
   metrique: "resilience_db_errors_total en hausse ; verify_tx KO"
   loki: "{service=\"payment-api\"} |= \"db_error\""

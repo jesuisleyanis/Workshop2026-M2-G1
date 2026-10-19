@@ -20,6 +20,10 @@ PC Attaquant (autre PC du groupe)            PC Hôte (192.168.137.1)
 - **Démo notée & Clip Chrono** : l'attaque part du **PC Attaquant physique** (exigé par le sujet, Axe 1).
 - **Dev / répétition** : le profil Compose `attack` rejoue le même scénario depuis un conteneur sur le PC Hôte (cible le WAF via l'hôte). Fallback uniquement.
 
+> **Procédure complète pas-à-pas depuis le PC Attaquant : [`RUNBOOK-PC-ATTAQUANT.md`](RUNBOOK-PC-ATTAQUANT.md)** (pré-vol, lancement, observation, MTTD/MTTR, kill-switch, ordre pour le Clip Chrono).
+>
+> **Pannes NON-attaque (chaos engineering) : [`chaos/README.md`](chaos/README.md)** — crash/gel bornés et réversibles pour prouver la résilience intrinsèque (restart policy, healthchecks), distincte de la chaîne Red Team.
+
 ## Mise en place
 
 ```bash
