@@ -51,6 +51,7 @@
 | grafana | Grafana | obs | non | Dashboards + règles d'alerte SOC |
 | alertmanager | Alertmanager | obs | non | Routage d'alertes → remédiation |
 | cadvisor | cAdvisor | obs | non | CPU/RAM par conteneur |
+| waf-exporter | Python (`security/waf/waf_exporter.py`) | obs | non | Audit ModSecurity → `resilience_waf_blocked_total{rule}` (:9188) |
 | collector | Python | app | non | Construit le vecteur de features (15 s) |
 | detector | FastAPI + scikit-learn | app | non | Score ML, émet l'AnomalyEvent |
 | remediation | FastAPI + ansible-runner | app | non | Décision + actions + vérification |
@@ -72,4 +73,4 @@ Voir [`adr/`](adr/). Résumé : mono-langage Python/FastAPI, SOC = règles Loki/
 
 ## Contraintes de ressources (16 Go)
 
-Profil Compose `demo` = chemin critique minimal (WAF, front, payment-api, auth, postgres, prometheus, loki, promtail, grafana, collector, detector, remediation, dashboard). Observabilité complète (`alertmanager`, `cadvisor`, `pg-exporter`) et `ai` (Ollama) en profils additionnels, l'IA de préférence sur le PC IA.
+Profil Compose `demo` = chemin critique minimal (WAF, waf-exporter, front, payment-api, auth, postgres, prometheus, loki, promtail, grafana, collector, detector, remediation, dashboard). Observabilité complète (`alertmanager`, `cadvisor`, `pg-exporter`) et `ai` (Ollama) en profils additionnels, l'IA de préférence sur le PC IA.

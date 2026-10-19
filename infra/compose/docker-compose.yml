@@ -27,6 +27,7 @@ networks:
 volumes:
   pgdata:
   waf-deny:        # deny-list Nginx partagée WAF (lecture) <-> remediation (écriture via playbook)
+  waf-logs:        # audit log ModSecurity (JSON) : WAF (écriture) -> waf-exporter (lecture)
   grafana-data:
   loki-data:
   chroma-data:
@@ -43,8 +44,15 @@ services:
     ports:
       - "80:8080"
       - "443:8443"
+    environment:
+      # Audit ModSecurity (blocages 4xx/5xx, JSON Serial) écrit dans le volume partagé lu par waf-exporter (#12).
+      MODSEC_AUDIT_ENGINE: RelevantOnly
+      MODSEC_AUDIT_LOG_FORMAT: JSON
+      MODSEC_AUDIT_LOG_TYPE: Serial
+      MODSEC_AUDIT_LOG: /var/log/modsec/audit.json
     volumes:
       - waf-deny:/etc/nginx/deny:rw
+      - waf-logs:/var/log/modsec:rw
     depends_on: [front, payment-api, auth]
     mem_limit: 256m
     healthcheck:
@@ -53,6 +61,25 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+
+  waf-exporter:
+    # Blocages ModSecurity -> resilience_waf_blocked_total{rule} (contrat §2) + log waf_blocked (§1).
+    # Signal dominant de l'incident_type web_attack (feature ML waf_blocked_per_s, règle SOC soc-waf-blocks).
+    # Suit le journal d'audit du WAF via le volume `waf-logs` (lecture seule) ; /metrics :9188 sur `obs` uniquement.
+    <<: *hardening
+    build: { context: ../.., dockerfile: security/waf/Dockerfile.exporter }
+    networks: [obs]
+    volumes:
+      - waf-logs:/var/log/modsec:ro
+    group_add: ["101"]         # groupe nginx : lecture garantie même si l'audit log est créé en 0640
+    depends_on: [waf]
+    read_only: true
+    mem_limit: 64m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9188/metrics').status==200 else 1)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
 
   # ---------------------------------------------------------------- app (métier)
   front:

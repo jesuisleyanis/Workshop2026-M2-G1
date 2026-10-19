@@ -37,6 +37,11 @@ COPY --chown=nginx:nginx deny/blocked_ips.conf /etc/nginx/deny/blocked_ips.conf
 COPY --chmod=0755 docker-entrypoint.d/05-ensure-deny-list.sh /docker-entrypoint.d/05-ensure-deny-list.sh
 RUN chown -R nginx:nginx /etc/nginx/deny && chmod 2775 /etc/nginx/deny && chmod 0644 /etc/nginx/deny/blocked_ips.conf
 
+# Journal d'audit ModSecurity (JSON Serial, blocages) : répertoire partagé avec waf-exporter via le volume
+# Compose `waf-logs` (MODSEC_AUDIT_LOG=/var/log/modsec/audit.json). Le volume hérite de nginx:nginx 0755
+# à sa création ; le fichier (créé par ModSecurity, 0644) est lisible par l'exporteur (groupe 101 en secours).
+RUN mkdir -p /var/log/modsec && chown nginx:nginx /var/log/modsec && chmod 0755 /var/log/modsec
+
 # Ports non privilégiés (entrypoint `check-low-port`) et chemins TLS utilisés par nginx.conf.
 ENV PORT=8080 \
     SSL_PORT=8443 \

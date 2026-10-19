@@ -25,8 +25,9 @@ scrape_configs:
       - targets: ["remediation:8005"]
 
   - job_name: waf-exporter
+    # Conteneur dédié (security/waf/Dockerfile.exporter) qui suit l'audit log ModSecurity du WAF.
     static_configs:
-      - targets: ["waf:9188"]
+      - targets: ["waf-exporter:9188"]
 
   # Profil full :
   - job_name: cadvisor
