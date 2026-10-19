@@ -220,6 +220,9 @@ const $ = s => document.querySelector(s);
 const api = (p,o={}) => fetch(p,{headers:{'content-type':'application/json'},...o}).then(r=>r.json());
 let CAPS = {max_duration:60, max_rate:100};
 let RUNNING = false;
+let SCN_IT = {};      // scénario -> incident_type
+let BLUE = false;     // liaison moteur de remédiation active
+let curIT = null;     // incident_type du run courant
 
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 
@@ -247,6 +250,7 @@ async function loadScenarios(){
   CAPS = {max_duration:d.max_duration, max_rate:d.max_rate};
   $('#caps').textContent = `plafonds ${d.max_rate}/s · ${d.max_duration}s`;
   $('#target').value = d.default_target;
+  d.scenarios.forEach(s=>SCN_IT[s.name]=s.incident_type);
   const list = $('#scnlist'); list.innerHTML='';
   d.scenarios.filter(s=>s.launchable).forEach(s=>{
     const rem = (s.remediation||[]).join(' + ');
@@ -288,8 +292,10 @@ async function preVerify(){
 
 async function launch(name,duration,rate){
   if(RUNNING) return;
+  curIT = SCN_IT[name] || null;
   $('#t-after').textContent='—'; $('#t-after').style.color='';
   setNode('n-apres',null,'—');
+  if(!BLUE){setNode('n-detect',null,'ML');setNode('n-remed',null,'auto');}
   await preVerify();
   try{
     const r = await api('/api/run',{method:'POST',body:JSON.stringify({scenario:name,target:$('#target').value,duration,rate})});
@@ -305,7 +311,7 @@ function applyStatus(st){
   if(st.running){
     conn.className='pill armed'; $('#conntxt').textContent='ARMÉ · '+st.scenario;
     setNode('n-attaque','active', Math.round(st.remaining_s)+'s');
-    setNode('n-detect','watch','ML'); setNode('n-remed','watch','auto');
+    if(BLUE){ refreshBlue(); } else { setNode('n-detect','watch','ML'); setNode('n-remed','watch','auto'); }
     $('#countdown').textContent = Math.round(st.remaining_s)+'s restant';
     $('#t-chrono').innerHTML = Math.round(st.elapsed_s)+'<small>s</small>';
   }else{
@@ -317,12 +323,36 @@ function applyStatus(st){
   }
 }
 
+async function refreshBlue(){
+  if(!BLUE || !curIT) return;
+  let inc;
+  try{
+    const d = await api('/api/blue/incidents');
+    if(d.detail) return;
+    inc = (d.incidents||[]).find(i=>i.incident_type===curIT);
+  }catch{ return; }
+  if(!inc) return;
+  const mttd = inc.mttd_seconds, mttr = inc.mttr_seconds;
+  const st = inc.status;
+  if(st==='closed'){
+    setNode('n-detect','ok', mttd!=null? 'MTTD '+(+mttd).toFixed(1)+'s':'vu');
+    setNode('n-remed','ok', mttr!=null? 'MTTR '+(+mttr).toFixed(1)+'s':'agi');
+  }else if(st==='escalated'){
+    setNode('n-detect','ok', mttd!=null? 'MTTD '+(+mttd).toFixed(1)+'s':'vu');
+    setNode('n-remed','fail','escalade');
+  }else{ // in_progress / interrupted
+    setNode('n-detect','ok', mttd!=null? 'MTTD '+(+mttd).toFixed(1)+'s':'détecté');
+    setNode('n-remed','active','en cours');
+  }
+}
+
 async function afterVerify(){
   setNode('n-apres','active','test…');
   for(let i=0;i<10;i++){
+    if(BLUE) await refreshBlue();
     const v = await api('/api/verify').catch(()=>({ok:false}));
     if(v.ok){$('#t-after').textContent='OK';$('#t-after').style.color='var(--green)';setNode('n-apres','ok','OK');
-      setNode('n-detect','ok','vu');setNode('n-remed','ok','agi');
+      if(BLUE){await refreshBlue();} else {setNode('n-detect','ok','vu');setNode('n-remed','ok','agi');}
       logLine(new Date().toISOString()+' verify_tx OK -- reprise confirmee');return;}
     await new Promise(r=>setTimeout(r,3000));
   }
@@ -340,7 +370,15 @@ function connectStream(){
   es.onerror=()=>{$('#conn').className='pill';$('#conntxt').textContent='flux coupé';};
 }
 
-loadScenarios().then(()=>{preVerify();connectStream();});
+async function initBlue(){
+  try{const s = await api('/api/status'); BLUE = !!s.blue;}catch{ BLUE=false; }
+  const foot = $('#foot');
+  foot.textContent = BLUE
+    ? 'Local-only · 127.0.0.1 · liaison Bleu active : détection & remédiation lues sur le moteur (MTTD/MTTR réels)'
+    : 'Local-only · 127.0.0.1 · Bleu non connecté — preuve côté attaquant = verify_tx (détection/remédiation : voir dashboard)';
+}
+
+loadScenarios().then(()=>{initBlue();preVerify();connectStream();});
 </script>
 </body>
 </html>

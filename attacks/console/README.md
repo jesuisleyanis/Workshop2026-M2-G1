@@ -13,9 +13,26 @@ suivre la chaîne de reprise et le journal temps réel, kill-switch et reset —
   `rate ≤ 100/s` et `duration ≤ 60 s` (clampés), liste blanche de scénarios, cible validée.
 - Lance uniquement les scénarios **réseau** (`service_flood`, `auth_abuse`, `web_attack`).
   `data_corruption` reste **opérateur-only** (base non exposée) — rappelé dans l'UI.
-- La détection ML et la remédiation s'observent sur le **dashboard Blue Team** ; la console
-  l'indique honnêtement (nœuds « Détection/Remédiation » = en attente de confirmation par
-  `verify_tx`, qui est la preuve côté attaquant).
+- La détection ML et la remédiation s'observent sur le **dashboard Blue Team**. Par défaut
+  la console l'indique honnêtement (nœuds « Détection/Remédiation » en attente, preuve =
+  `verify_tx`). Avec la **liaison Bleu** (ci-dessous), ces nœuds affichent les **MTTD/MTTR
+  réels** lus sur le moteur de remédiation.
+
+## Liaison Bleu (optionnelle) — détection & remédiation réelles
+
+Le PC Attaquant **ne peut pas** joindre le moteur (réseau interne, R19) : la liaison ne
+fonctionne que là où le moteur est accessible — **sur le PC Hôte**, ou si la console tourne
+en conteneur sur le réseau `app`. Le backend relaie `GET /incidents` en lecture seule ; le
+**token reste côté serveur** (jamais envoyé au navigateur).
+
+```bash
+REMEDIATION_BASE=http://localhost:8005 \   # ou http://remediation:8005 en conteneur
+REMEDIATION_TOKEN=<token SOPS> \
+  python -m uvicorn --app-dir attacks/console server:app --host 127.0.0.1 --port 8088
+```
+
+Absente ou injoignable, la liaison se désactive proprement (relais `/api/blue/incidents`
+en 503/502) et la console retombe sur la preuve `verify_tx`.
 
 ## Lancer
 
@@ -40,6 +57,7 @@ Variables : `RESILIENCE_TARGET` (cible par défaut), `CONSOLE_PORT` (défaut 808
 | GET | `/api/status` | scénario en cours, chrono, reste |
 | GET | `/api/verify` | `verify_tx` (preuve avant/après) |
 | GET | `/api/stream` | SSE : journal `.runlog` + statut |
+| GET | `/api/blue/incidents` | relais lecture seule du moteur (si liaison Bleu configurée) |
 
 ## Tests
 

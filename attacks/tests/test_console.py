@@ -78,6 +78,21 @@ def test_no_concurrent_runs(client):
     assert c.post("/api/run", json={"scenario": "auth_abuse"}).status_code == 409
 
 
+def test_blue_link_is_optional_and_off_by_default(client):
+    c, _ = client
+    # Sans REMEDIATION_BASE/TOKEN : liaison Bleu inactive, relais refusé proprement.
+    assert c.get("/api/status").json()["blue"] is False
+    assert c.get("/api/blue/incidents").status_code == 503
+
+
+def test_blue_token_never_reaches_the_browser(client):
+    # Le relais est côté serveur : le token n'apparaît pas dans la page ni l'API publique.
+    c, _ = client
+    assert "REMEDIATION_TOKEN" not in c.get("/").text
+    body = CONSOLE / "static" / "index.html"
+    assert "REMEDIATION_TOKEN" not in body.read_text(encoding="utf-8")
+
+
 def test_server_binds_localhost_only():
     # Garde-fou : jamais 0.0.0.0 (le service déclenche des attaques).
     text = (CONSOLE / "server.py").read_text(encoding="utf-8")

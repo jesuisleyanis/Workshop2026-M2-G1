@@ -40,6 +40,32 @@ DEFAULT_TARGET = os.environ.get("RESILIENCE_TARGET", "https://192.168.137.1")
 LAUNCHABLE = {"service_flood", "auth_abuse", "web_attack"}
 DRY = os.environ.get("RESILIENCE_CONSOLE_DRY") == "1"
 
+# --- Liaison Bleu (optionnelle) : API interne du moteur de remédiation. ----------
+# NON joignable depuis le PC Attaquant (réseau interne) : ne renseigner ces variables
+# QUE là où le moteur est accessible (PC Hôte, ou conteneur sur le réseau `app`).
+# Le token reste CÔTÉ SERVEUR — jamais transmis au navigateur.
+BLUE_BASE = os.environ.get("REMEDIATION_BASE")      # ex. http://remediation:8005
+BLUE_TOKEN = os.environ.get("REMEDIATION_TOKEN")
+
+
+def blue_configured() -> bool:
+    return bool(BLUE_BASE and BLUE_TOKEN)
+
+
+def _blue_get(path: str) -> Any:
+    import json
+    import ssl
+    import urllib.request
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    req = urllib.request.Request(
+        BLUE_BASE.rstrip("/") + path,
+        headers={"Authorization": f"Bearer {BLUE_TOKEN}"},
+    )
+    with urllib.request.urlopen(req, timeout=5, context=ctx) as r:
+        return json.loads(r.read())
+
 _TARGET_RE = re.compile(r"^https?://[A-Za-z0-9._:\-\[\]]+/?$")
 
 
@@ -164,7 +190,18 @@ def create_app() -> FastAPI:
 
     @app.get("/api/status")
     def status() -> dict[str, Any]:
-        return runner.status()
+        return {**runner.status(), "blue": blue_configured()}
+
+    @app.get("/api/blue/incidents")
+    def blue_incidents() -> dict[str, Any]:
+        """Relais lecture seule des incidents du moteur (détection/remédiation réelles)."""
+        if not blue_configured():
+            raise HTTPException(503, "Liaison Bleu non configurée (REMEDIATION_BASE/REMEDIATION_TOKEN).")
+        try:
+            data = _blue_get("/incidents?limit=20")
+        except Exception as e:  # moteur injoignable (réseau interne, service down…)
+            raise HTTPException(502, f"Moteur de remédiation injoignable : {e}")
+        return {"connected": True, "incidents": data.get("incidents", [])}
 
     @app.get("/api/verify")
     def verify() -> dict[str, Any]:
