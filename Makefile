@@ -7,7 +7,11 @@ ROOT    := $(shell pwd)
 # Charge .env (produit par `make decrypt`) dans l'environnement d'une cible : SEED_PASSWORD, tokens...
 LOADENV := set -a; [ -f .env ] && . ./.env; set +a;
 
-.PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt model
+.PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt model \
+        traffic train capture-baseline capture-attack calibrate
+
+ML_DATA  := ml/training/data
+DURATION ?= 30m
 
 help: ## Affiche cette aide
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -49,6 +53,34 @@ stop-attack: ## Kill-switch des scénarios
 
 reset: ## Remet la cible à l'état "avant"
 	attacks/reset.sh
+
+# ---- ML : ré-entraînement sur vraies séries Prometheus (ml/training/README.md §6) ----
+traffic: ## Trafic légitime réaliste (DURATION=30m) — baseline et temps 1 de la démo
+	python3 scripts/gen_normal_traffic.py --duration $(DURATION)
+
+capture-baseline: ## Joue DURATION de trafic normal puis capture la baseline réelle
+	python3 scripts/gen_normal_traffic.py --duration $(DURATION)
+	$(COMPOSE) exec -T collector python -m ml.collector.capture --last $(DURATION) \
+	  --label normal > $(ML_DATA)/baseline_real.csv
+
+capture-attack: ## Joue le scénario SC (sur fond de trafic normal) et ajoute ses fenêtres
+	@test -n "$(SC)" || { echo "SC=<scenario> requis"; exit 1; }
+	@start=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+	  python3 scripts/gen_normal_traffic.py --duration 90s & \
+	  attacks/run.sh $(SC); sleep 30; wait; \
+	  end=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+	  hdr=$$( [ -s $(ML_DATA)/attacks_real.csv ] && echo --no-header ); \
+	  $(COMPOSE) exec -T collector python -m ml.collector.capture --start $$start --end $$end \
+	    --label $(SC) $$hdr >> $(ML_DATA)/attacks_real.csv
+
+train: ## Entraîne le modèle (vraie baseline + calibration si présentes)
+	python3 -m ml.training.train --version $(or $(VERSION),1.1.0) \
+	  $(if $(wildcard $(ML_DATA)/baseline_real.csv),--data $(ML_DATA)/baseline_real.csv) \
+	  $(if $(wildcard $(ML_DATA)/attacks_real.csv),--attack-data $(ML_DATA)/attacks_real.csv) \
+	  $(if $(wildcard $(ML_DATA)/calibration.json),--calibration $(ML_DATA)/calibration.json)
+
+calibrate: ## Calibre le seuil sur les attaques réelles capturées (puis rebuild detector)
+	python3 -m ml.training.calibrate
 
 audit: ## Audit de durcissement du dépôt
 	security/hardening/audit.sh

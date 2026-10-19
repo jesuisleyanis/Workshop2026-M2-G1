@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1
 # Build depuis la RACINE du dépôt (le contexte doit contenir libs/ et ml/) :
-#   python -m ml.training.train                       # produit ml/training/artifacts/
 #   docker build -f ml/detector/Dockerfile -t resilience/detector .
+# Le modèle est ENTRAÎNÉ AU BUILD (étape `trainer`) : les artefacts ne sont pas
+# versionnés (.gitignore) et le scikit-learn d'entraînement est ainsi celui du runtime.
+# Données : ml/training/data/baseline_real.csv si présent (vraies séries Prometheus,
+# cf. ml/training/README.md), sinon baseline synthétique ; seuil calibré par
+# ml/training/data/calibration.json si présent.
 FROM python:3.12-slim AS builder
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
@@ -9,6 +13,18 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY libs/python/resilience_common /tmp/resilience_common
 COPY ml/detector/requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt "/tmp/resilience_common[fastapi]"
+
+FROM builder AS trainer
+ARG MODEL_VERSION=1.1.0
+WORKDIR /build
+COPY ml/__init__.py ml/__init__.py
+COPY ml/shared ml/shared
+COPY ml/training ml/training
+RUN set -eu; \
+    args="--version ${MODEL_VERSION} --out /build/artifacts"; \
+    if [ -f ml/training/data/baseline_real.csv ]; then args="$args --data ml/training/data/baseline_real.csv"; fi; \
+    if [ -f ml/training/data/calibration.json ]; then args="$args --calibration ml/training/data/calibration.json"; fi; \
+    python -m ml.training.train $args
 
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
@@ -22,7 +38,7 @@ WORKDIR /app
 COPY --chown=root:root ml/__init__.py ml/__init__.py
 COPY --chown=root:root ml/shared ml/shared
 COPY --chown=root:root ml/detector ml/detector
-COPY --chown=root:root ml/training/artifacts/model.joblib ml/training/artifacts/baseline_stats.json /app/artifacts/
+COPY --from=trainer --chown=root:root /build/artifacts/model.joblib /build/artifacts/baseline_stats.json /app/artifacts/
 USER 10003:10003
 EXPOSE 8003
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
