@@ -1,0 +1,8 @@
+# Liste blanche : le contexte de build est la racine du repo, on n'envoie que le nécessaire.
+*
+!assistant/app
+!assistant/requirements.txt
+!libs/python/resilience_common/pyproject.toml
+!libs/python/resilience_common/src
+**/__pycache__
+**/*.egg-info

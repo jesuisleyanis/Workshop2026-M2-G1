@@ -1,0 +1,20 @@
+name: service_flood
+objectif: >
+  Saturer légèrement payment-api avec un pic de requêtes borné pour provoquer une
+  hausse de latence et de 5xx, et déclencher la détection + la remédiation de disponibilité.
+cible:
+  service: payment-api
+  endpoint: /api/v1/transactions
+prerequis:
+  - stack up, verify_tx OK (état "avant")
+parametres:
+  rate_max: 80        # req/s plafonnées
+  duration_max: 30    # secondes, arrêt automatique
+signal_attendu:
+  metrique: "rate(resilience_http_requests_total{service=\"payment-api\"}[1m]) élevé ; ratio_5xx en hausse ; p95 latence en hausse"
+  loki: "{service=\"payment-api\"} |= \"db_error\" (si saturation)"
+incident_type: service_flood
+remediation_attendue:
+  - waf_block_ip      # blocage de la source
+  - restart_service   # redémarrage payment-api depuis image saine
+critere_de_reussite: "verify_tx repasse OK après remédiation, sans intervention humaine"

@@ -1,0 +1,15 @@
+# Dépendances runtime épinglées (les libs du monorepo resilience_common / resilience_db
+# s'installent séparément depuis libs/python/, cf. Dockerfile et README).
+fastapi==0.146.0
+uvicorn==0.54.0
+pydantic==2.14.1
+SQLAlchemy==2.1.5
+alembic==1.20.0
+psycopg[binary]==3.3.6
+passlib==1.7.4
+bcrypt==4.0.1
+PyJWT==2.15.1
+slowapi==0.1.10
+limits==5.8.0
+prometheus-client==0.26.0
+prometheus-fastapi-instrumentator==8.1.0

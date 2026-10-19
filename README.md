@@ -97,23 +97,38 @@ cd Workshop2026-M2-G1
 4. **Remédiation** — le moteur de remédiation décide et exécute l'action corrective.
 5. **Après** — le dashboard montre le retour à l'état nominal, une nouvelle transaction réussit.
 
-## Structure du dépôt
+## Documents de référence
 
-*Structure prévisionnelle, à ajuster :*
+| Document | Rôle |
+|---|---|
+| [`CAHIER-DES-CHARGES.md`](CAHIER-DES-CHARGES.md) | Cahier des charges maître — traçabilité exigence → composant |
+| [`docs/contracts.md`](docs/contracts.md) | **Contrats d'interfaces** (logs, métriques, événement d'anomalie, table de décision) — figés |
+| [`docs/architecture.md`](docs/architecture.md) | Architecture technique et flux de la reprise autonome |
+| [`docs/network.md`](docs/network.md) | Réseau, exposition, pare-feu |
+| [`ROADMAP.md`](ROADMAP.md) | Roadmap et suivi d'avancement de l'équipe |
+| [`CLAUDE.md`](CLAUDE.md) | Guide de contribution et flow de travail |
+| [`docs/adr/`](docs/adr/) | Décisions d'architecture (ADR) |
+| `docs/ebios-rm.md` · `docs/pca-pra.md` · `docs/nis2-dora.md` | Gouvernance et conformité |
+
+## Structure du dépôt
 
 ```
 .
-├── services/          # Microservices (front, API, auth, …)
-├── remediation/       # Moteur de remédiation
-├── dashboard/         # Supervision React + Tailwind
-├── ml/                # Détection d'anomalies
-├── assistant/         # Assistant RAG (Ollama + LangChain)
-├── infra/             # Docker Compose, Ansible, Prometheus, Grafana, Loki
-├── security/          # WAF, SIEM, durcissement, secrets
-├── attacks/           # Scripts Red Team
-├── docs/              # Architecture, EBIOS RM, PCA/PRA, NIS2/DORA, procédures
-└── tests/
+├── services/          # Microservices métier (front, payment-api, auth)
+├── remediation/       # Moteur de remédiation (décision + actions + vérification)
+├── dashboard/         # Supervision React + Tailwind (timeline, MTTD/MTTR)
+├── ml/                # Détection d'anomalies (collector, training, detector)
+├── assistant/         # Assistant RAG (Ollama + LangChain + Chroma)
+├── infra/             # Docker Compose, Ansible, Prometheus, Grafana, Loki, Promtail, Alertmanager
+├── security/          # WAF (Nginx+ModSecurity+CRS), secrets (SOPS), durcissement
+├── attacks/           # Banc d'essai Red Team (scénarios, kill-switch)
+├── libs/python/       # Librairie partagée resilience_common (logs, métriques, schémas)
+├── scripts/           # demo.sh, verify_tx, seed.py, decrypt-secrets.sh, package_deliverables.sh
+├── docs/              # contracts, architecture, EBIOS RM, PCA/PRA, NIS2/DORA, ADR
+└── tests/e2e/         # Rejeu des scénarios de bout en bout
 ```
+
+Démarrage rapide : `make help` liste les commandes (`make up`, `make seed`, `make verify`, `make demo`, `make test`).
 
 ## Gestion des secrets
 

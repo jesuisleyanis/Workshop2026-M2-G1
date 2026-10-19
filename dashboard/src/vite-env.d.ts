@@ -1,0 +1,8 @@
+/// <reference types="vite/client" />
+
+interface ImportMetaEnv {
+  /** Base du moteur de remédiation (flux SSE = <base>/stream). */
+  readonly VITE_REMEDIATION_BASE?: string
+  /** Base de Grafana pour les liens. */
+  readonly VITE_GRAFANA_BASE?: string
+}

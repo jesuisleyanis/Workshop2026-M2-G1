@@ -1,0 +1,4 @@
+# Dépendances runtime du collector (+ resilience_common[fastapi] installée depuis libs/).
+fastapi==0.146.0
+uvicorn==0.54.0
+httpx==0.28.1

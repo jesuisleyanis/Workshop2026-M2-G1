@@ -1,0 +1,19 @@
+# Alertmanager — route les alertes vers le moteur de remédiation (webhook authentifié).
+# Complément de la détection ML : une alerte seuil peut aussi déclencher la remédiation.
+global:
+  resolve_timeout: 1m
+
+route:
+  receiver: remediation
+  group_by: ['incident_type']
+  group_wait: 5s
+  group_interval: 30s
+  repeat_interval: 5m
+
+receivers:
+  - name: remediation
+    webhook_configs:
+      # Le moteur attend un AnomalyEvent (contrat §3) ; un adaptateur côté remédiation
+      # traduit le payload Alertmanager. En-tête d'auth via le reverse-proxy interne.
+      - url: 'http://remediation:8005/events/alertmanager'
+        send_resolved: false

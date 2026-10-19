@@ -1,0 +1,28 @@
+---
+# Remédiation : blocage d'une IP source au niveau du WAF (action waf_block_ip / waf_blacklist_ip).
+# Appelé par le moteur de remédiation via ansible-runner. Idempotent.
+- name: Bloquer une IP au WAF
+  hosts: host
+  gather_facts: false
+  vars:
+    blocked_ip: ""     # fourni par le moteur depuis l'AnomalyEvent
+    blocked_file: "{{ project_root }}/security/waf/blocked_ips.conf"
+  tasks:
+    - name: Vérifier l'IP fournie
+      ansible.builtin.assert:
+        that:
+          - blocked_ip | length > 0
+          - blocked_ip is match('^[0-9a-fA-F:.]+$')
+        fail_msg: "IP invalide ou absente"
+
+    - name: Ajouter l'IP à la liste de blocage (idempotent)
+      ansible.builtin.lineinfile:
+        path: "{{ blocked_file }}"
+        line: "{{ blocked_ip }} 1;"
+        create: true
+        regexp: "^{{ blocked_ip | regex_escape }} "
+
+    - name: Recharger le WAF à chaud
+      ansible.builtin.command:
+        cmd: "docker exec resilience-g1-waf-1 nginx -s reload"
+      changed_when: true

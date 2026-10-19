@@ -1,0 +1,26 @@
+[project]
+name = "resilience-db"
+version = "1.0.0"
+description = "Schéma PostgreSQL partagé RESILIENCE-ALPHA : modèles SQLAlchemy 2.0, config DB, migrations Alembic, seed."
+requires-python = ">=3.12"
+dependencies = [
+    "sqlalchemy>=2.0,<2.2",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
+    "passlib[bcrypt]>=1.7.4",
+    "bcrypt>=4.0.1,<4.1",  # passlib 1.7.4 est incompatible avec bcrypt >= 4.1
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"

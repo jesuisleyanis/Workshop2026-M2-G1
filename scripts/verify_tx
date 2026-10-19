@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""verify_tx — transaction de vérification de bout en bout.
+
+Contrat (docs/contracts.md) : exit 0 = service utilisable, exit 1 = KO.
+Réutilisé par la démo ET par la boucle de vérification du moteur de remédiation :
+un conteneur qui redémarre ne prouve rien ; cette transaction prouve la reprise.
+
+Étapes : login (auth) -> virement fictif (payment-api) -> lecture de l'historique.
+Tout passe par le WAF (BASE_URL) comme un vrai client.
+"""
+from __future__ import annotations
+
+import json
+import os
+import ssl
+import sys
+import urllib.error
+import urllib.request
+
+BASE_URL = os.environ.get("BASE_URL", "https://localhost")
+USER = os.environ.get("VERIFY_USER", "demo01")
+PASSWORD = os.environ.get("VERIFY_PASSWORD", "demo-pass-01")
+DST = os.environ.get("VERIFY_DST", "FR-FAKE-0002")
+TIMEOUT = float(os.environ.get("VERIFY_TIMEOUT", "5"))
+
+# Certificat auto-signé du WAF : contexte non vérifié (environnement de labo fermé).
+_CTX = ssl.create_default_context()
+_CTX.check_hostname = False
+_CTX.verify_mode = ssl.CERT_NONE
+
+
+def _post(path: str, payload: dict, token: str | None = None) -> dict:
+    data = json.dumps(payload).encode()
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(BASE_URL + path, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=TIMEOUT, context=_CTX) as resp:
+        return json.loads(resp.read() or b"{}")
+
+
+def _get(path: str, token: str) -> dict:
+    req = urllib.request.Request(
+        BASE_URL + path, headers={"Authorization": f"Bearer {token}"}, method="GET"
+    )
+    with urllib.request.urlopen(req, timeout=TIMEOUT, context=_CTX) as resp:
+        return json.loads(resp.read() or b"{}")
+
+
+def main() -> int:
+    try:
+        login = _post("/api/v1/login", {"username": USER, "password": PASSWORD})
+        token = login.get("access_token") or login.get("token")
+        if not token:
+            print("verify_tx: échec login (pas de token)", file=sys.stderr)
+            return 1
+
+        tx = _post("/api/v1/transactions", {"dst_account": DST, "amount_cents": 100}, token)
+        if tx.get("status") not in ("created", "accepted", "ok"):
+            print(f"verify_tx: transaction refusée: {tx}", file=sys.stderr)
+            return 1
+
+        history = _get("/api/v1/transactions", token)
+        items = history if isinstance(history, list) else history.get("items", [])
+        if not items:
+            print("verify_tx: historique vide après transaction", file=sys.stderr)
+            return 1
+
+        print("verify_tx: OK — transaction fictive réussie")
+        return 0
+    except (urllib.error.URLError, TimeoutError, ssl.SSLError) as exc:
+        print(f"verify_tx: service injoignable: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 — le script doit toujours renvoyer 0/1
+        print(f"verify_tx: erreur inattendue: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

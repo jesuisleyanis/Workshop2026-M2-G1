@@ -1,0 +1,63 @@
+# Règles d'alerte SOC (fonction SOC intégrée à la supervision — R12).
+# Corrèlent métriques et logs pour détecter des comportements suspects, en complément
+# du détecteur ML. Les alertes peuvent être routées vers le moteur de remédiation.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: resilience-soc
+    folder: SOC
+    interval: 30s
+    rules:
+      - uid: soc-auth-abuse
+        title: Rafale d'échecs d'authentification
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: 'sum(rate(resilience_auth_logins_total{result="failed"}[1m]))'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [5] }
+        labels: { severity: warning, incident_type: auth_abuse }
+        annotations: { summary: "Plus de 5 échecs de login/s — possible abus d'authentification" }
+
+      - uid: soc-service-flood
+        title: Pic de 5xx sur payment-api
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: 'sum(rate(resilience_http_requests_total{service="payment-api",status=~"5.."}[1m]))'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [2] }
+        labels: { severity: critical, incident_type: service_flood }
+        annotations: { summary: "Taux de 5xx élevé — possible saturation du service" }
+
+      - uid: soc-waf-blocks
+        title: Hausse des blocages WAF
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: 'sum(rate(resilience_waf_blocked_total[1m]))'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1] }
+        labels: { severity: warning, incident_type: web_attack }
+        annotations: { summary: "Blocages CRS en hausse — requêtes malveillantes probables" }

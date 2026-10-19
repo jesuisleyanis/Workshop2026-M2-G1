@@ -1,0 +1,26 @@
+---
+# Déploiement reproductible de la stack (R6). Déchiffre les secrets puis lève Compose.
+- name: Déployer RESILIENCE-ALPHA
+  hosts: host
+  gather_facts: false
+  vars:
+    profile: "demo"
+  tasks:
+    - name: Déchiffrer les secrets SOPS vers .env
+      ansible.builtin.command:
+        cmd: "{{ project_root }}/scripts/decrypt-secrets.sh"
+      changed_when: true
+
+    - name: Construire et lever la stack (profil {{ profile }})
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ compose_file }} --profile {{ profile }} up -d --build"
+      changed_when: true
+
+    - name: Attendre que le WAF soit sain
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ compose_file }} ps --format '{{ '{{' }}.Health{{ '}}' }}' waf"
+      register: waf_health
+      retries: 10
+      delay: 6
+      until: "'healthy' in waf_health.stdout"
+      changed_when: false

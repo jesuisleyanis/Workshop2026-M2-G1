@@ -1,0 +1,24 @@
+name: data_corruption
+objectif: >
+  Simuler une indisponibilité / incohérence de données FICTIVES (ex. table de comptes
+  altérée dans l'environnement de test) pour provoquer des erreurs DB et l'échec de
+  verify_tx, et déclencher une remédiation de CORRECTION (restauration), distincte
+  d'une simple restauration de disponibilité.
+cible:
+  service: postgres
+  endpoint: "schéma de données fictives"
+prerequis:
+  - stack up, dump Postgres sain disponible (backup planifié)
+parametres:
+  mode: "altération contrôlée et réversible de données fictives uniquement"
+signal_attendu:
+  metrique: "resilience_db_errors_total en hausse ; verify_tx KO"
+  loki: "{service=\"payment-api\"} |= \"db_error\""
+incident_type: data_corruption
+remediation_attendue:
+  - restore_pg_dump   # restauration du dernier dump sain — PAS un simple redémarrage
+critere_de_reussite: "données cohérentes restaurées, verify_tx OK"
+notes: >
+  Ce scénario illustre la distinction imposée par le sujet (§2, §3.4) entre restauration
+  de disponibilité (service_flood) et correction de corruption (data_corruption) :
+  la réponse attendue n'est PAS la même.

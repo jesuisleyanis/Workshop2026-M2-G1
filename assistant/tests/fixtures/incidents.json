@@ -1,0 +1,8 @@
+[
+  {"incident_id": "inc-0001", "incident_type": "service_flood", "service": "payment-api",
+   "ts": "2026-10-21T09:14:35Z", "actions": ["waf_block_ip 192.168.137.50", "restart_service payment-api"],
+   "verified": true, "mttd_seconds": 12, "mttr_seconds": 41},
+  {"incident_id": "inc-0002", "incident_type": "auth_abuse", "service": "auth",
+   "ts": "2026-10-21T10:02:11Z", "actions": ["waf_block_ip 192.168.137.51"], "verified": false,
+   "summary": "Pic d'échecs de connexion, blocage IP effectué mais verify_tx en échec, escalade à l'opérateur"}
+]

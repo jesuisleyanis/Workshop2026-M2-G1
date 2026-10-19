@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+html {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #020617;
+  color-scheme: dark;
+}
+
+@keyframes pulse-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(239 68 68 / 0.55); }
+  50% { box-shadow: 0 0 0 14px rgb(239 68 68 / 0); }
+}
+.animate-pulse-ring { animation: pulse-ring 1.6s ease-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-ring { animation: none; }
+}

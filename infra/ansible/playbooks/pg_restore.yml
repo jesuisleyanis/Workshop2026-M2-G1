@@ -1,0 +1,33 @@
+---
+# Remédiation : restauration du dernier dump Postgres sain (action restore_pg_dump).
+# Réponse à data_corruption — CORRECTION de données, distincte d'un simple redémarrage.
+# Appelé par le moteur de remédiation via ansible-runner.
+- name: Restaurer la base depuis le dernier dump sain
+  hosts: host
+  gather_facts: false
+  vars:
+    backup_dir: "{{ project_root }}/infra/ansible/backups"
+    db_container: "resilience-g1-postgres-1"
+    db_name: resilience
+    db_user: resilience
+  tasks:
+    - name: Trouver le dump le plus récent
+      ansible.builtin.find:
+        paths: "{{ backup_dir }}"
+        patterns: "resilience-*.dump"
+      register: dumps
+
+    - name: Vérifier qu'un dump existe
+      ansible.builtin.assert:
+        that: dumps.files | length > 0
+        fail_msg: "Aucun dump disponible — backup pg_dump planifié manquant"
+
+    - name: Sélectionner le dump le plus récent
+      ansible.builtin.set_fact:
+        latest_dump: "{{ (dumps.files | sort(attribute='mtime') | last).path }}"
+
+    - name: Restaurer (drop + recreate propre)
+      ansible.builtin.shell: |
+        docker exec -i {{ db_container }} pg_restore --clean --if-exists \
+          -U {{ db_user }} -d {{ db_name }} < "{{ latest_dump }}"
+      changed_when: true

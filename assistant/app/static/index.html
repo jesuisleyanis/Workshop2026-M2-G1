@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assistant opérateur - RESILIENCE-ALPHA</title>
+  <link rel="stylesheet" href="/static/assistant.css">
+</head>
+<body>
+  <main>
+    <h1>Assistant opérateur</h1>
+    <p class="notice">
+      Lecture documentaire seule : cet assistant explique les procédures et l'historique des incidents.
+      Il ne déclenche <strong>aucune action</strong> ; la remédiation est assurée par le moteur automatique.
+    </p>
+    <form id="ask-form">
+      <label for="question">Votre question</label>
+      <textarea id="question" rows="3" maxlength="1000" required
+        placeholder="Ex. : Quelle procédure pour un incident service_flood ? Que s'est-il passé lors du dernier incident ?"></textarea>
+      <button type="submit" id="submit">Demander</button>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+    <section id="result" hidden>
+      <div id="degraded" class="banner" hidden>
+        Mode dégradé : le modèle local est indisponible. Seuls les passages documentaires sont affichés.
+      </div>
+      <h2>Réponse</h2>
+      <p id="answer"></p>
+      <h2>Sources</h2>
+      <ol id="sources"></ol>
+    </section>
+  </main>
+  <script src="/static/assistant.js"></script>
+</body>
+</html>

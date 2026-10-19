@@ -1,0 +1,290 @@
+# RESILIENCE-ALPHA — orchestration Docker Compose
+# Profils : (défaut=demo) chemin critique | full=observabilité complète | attack=banc d'essai | ai=assistant RAG
+# Secrets injectés depuis ../../.env (produit par scripts/decrypt-secrets.sh à partir de SOPS).
+# Durcissement : non-root (Dockerfiles), cap_drop ALL, no-new-privileges, limites ressources,
+# seul le WAF publie des ports. Voir ../../security/hardening/hardening.md.
+
+name: resilience-g1
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  restart: unless-stopped
+
+x-pylimits: &pylimits
+  mem_limit: 512m
+  cpus: 0.75
+
+networks:
+  edge:
+  app:
+  data:
+    internal: true
+  obs:
+
+volumes:
+  pgdata:
+  grafana-data:
+  loki-data:
+  chroma-data:
+  ollama-models:
+
+services:
+
+  # ---------------------------------------------------------------- edge (exposé)
+  waf:
+    <<: *hardening
+    build: { context: ../../security/waf }
+    networks: [edge, app]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../../security/waf/blocked_ips.conf:/etc/nginx/blocked_ips.conf:rw
+    depends_on: [front, payment-api, auth]
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "curl", "-fsk", "https://localhost/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------- app (métier)
+  front:
+    <<: *hardening
+    build: { context: ../../services/front }
+    networks: [app]
+    environment:
+      VITE_API_BASE: "/api/v1"
+    mem_limit: 128m
+
+  payment-api:
+    <<: [*hardening, *pylimits]
+    build: { context: ../.., dockerfile: services/payment-api/Dockerfile }
+    networks: [app, data]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: resilience
+      POSTGRES_USER: resilience
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+    depends_on: [postgres]
+    read_only: true
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  auth:
+    <<: [*hardening, *pylimits]
+    build: { context: ../.., dockerfile: services/auth/Dockerfile }
+    networks: [app, data]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: resilience
+      POSTGRES_USER: resilience
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+    depends_on: [postgres]
+    read_only: true
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8002/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------- data (interne)
+  postgres:
+    <<: *hardening
+    image: postgres:16-alpine
+    networks: [data]
+    environment:
+      POSTGRES_DB: resilience
+      POSTGRES_USER: resilience
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U resilience"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------- ML (AIOps)
+  collector:
+    <<: [*hardening, *pylimits]
+    build: { context: ../.., dockerfile: ml/collector/Dockerfile }
+    networks: [app, obs]
+    environment:
+      PROMETHEUS_URL: http://prometheus:9090
+    depends_on: [prometheus]
+    read_only: true
+    tmpfs: ["/tmp"]
+
+  detector:
+    <<: [*hardening, *pylimits]
+    build: { context: ../.., dockerfile: ml/detector/Dockerfile }
+    networks: [app, obs]
+    environment:
+      REMEDIATION_URL: http://remediation:8005
+      REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
+    depends_on: [collector, remediation]
+    read_only: true
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8003/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------- remédiation
+  docker-socket-proxy:
+    # Proxy strict basé sur la config haproxy de la remédiation (ADR 0002) :
+    # n'autorise QUE 4 couples (méthode, chemin), dont POST /containers/{id}/restart.
+    # Plus restrictif que tecnativa (CONTAINERS=1+POST=1 ouvrirait /containers/create).
+    <<: *hardening
+    image: haproxy:2.9-alpine
+    networks: [app]
+    volumes:
+      - ../../remediation/proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro   # socket monté UNIQUEMENT ici, en lecture seule
+    mem_limit: 64m
+
+  remediation:
+    <<: [*hardening, *pylimits]
+    build: { context: ../.., dockerfile: remediation/Dockerfile }
+    networks: [app]            # jamais sur edge
+    environment:
+      DOCKER_PROXY_URL: http://docker-socket-proxy:2375
+      REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      AUTH_URL: http://auth:8002
+      VERIFY_TX_PATH: /app/verify_tx
+    depends_on: [docker-socket-proxy]
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8005/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------- dashboard
+  dashboard:
+    <<: *hardening
+    build: { context: ../../dashboard }
+    networks: [app]
+    environment:
+      VITE_REMEDIATION_BASE: http://remediation:8005
+    mem_limit: 128m
+
+  # ---------------------------------------------------------------- observabilité
+  prometheus:
+    <<: *hardening
+    image: prom/prometheus:latest
+    networks: [app, obs]
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    mem_limit: 384m
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=2h"]
+
+  loki:
+    <<: *hardening
+    image: grafana/loki:latest
+    networks: [obs]
+    volumes:
+      - ../loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    mem_limit: 384m
+
+  promtail:
+    <<: *hardening
+    image: grafana/promtail:latest
+    networks: [obs]
+    volumes:
+      - ../promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: ["-config.file=/etc/promtail/config.yml"]
+    mem_limit: 128m
+
+  grafana:
+    <<: *hardening
+    image: grafana/grafana:latest
+    networks: [obs]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    mem_limit: 256m
+
+  # ---- observabilité complète (profil full) ----
+  alertmanager:
+    <<: *hardening
+    image: prom/alertmanager:latest
+    profiles: [full]
+    networks: [obs, app]
+    volumes:
+      - ../alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    mem_limit: 128m
+
+  cadvisor:
+    <<: *hardening
+    image: gcr.io/cadvisor/cadvisor:latest
+    profiles: [full]
+    networks: [obs]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    mem_limit: 128m
+
+  pg-exporter:
+    <<: *hardening
+    image: prometheuscommunity/postgres-exporter:latest
+    profiles: [full]
+    networks: [data, obs]
+    environment:
+      DATA_SOURCE_NAME: "postgresql://resilience:${POSTGRES_PASSWORD}@postgres:5432/resilience?sslmode=disable"
+    depends_on: [postgres]
+    mem_limit: 64m
+
+  # ---------------------------------------------------------------- assistant RAG (profil ai)
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [ai]
+    networks: [app]
+    volumes:
+      - ollama-models:/root/.ollama
+    mem_limit: 8g          # lourd — déporter sur le PC IA si la RAM est serrée
+    restart: unless-stopped
+
+  assistant:
+    <<: [*hardening, *pylimits]
+    build: { context: ../.., dockerfile: assistant/Dockerfile }
+    profiles: [ai]
+    networks: [app]
+    environment:
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+    volumes:
+      - chroma-data:/app/chroma
+      - ../../docs:/app/docs:ro
+    depends_on: [ollama]
+    tmpfs: ["/tmp"]
+
+  # ---------------------------------------------------------------- banc d'essai (profil attack)
+  attacker:
+    image: curlimages/curl:latest
+    profiles: [attack]
+    networks: [edge]       # rejoue depuis le PC Hôte en dev ; en démo : PC Attaquant physique
+    entrypoint: ["sleep", "infinity"]
+    mem_limit: 64m

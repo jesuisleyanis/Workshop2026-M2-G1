@@ -1,19 +1,39 @@
-# OS / éditeurs
+# Secrets déchiffrés et clés — JAMAIS commités
+.env
+*.decrypted.env
+secrets.enc.env.dec
+**/age.key
+**/keys.txt
+*.age
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.vite/
+coverage/
+
+# ML artefacts volumineux (modèles regénérables via `python -m ml.training.train`)
+ml/training/*.joblib
+ml/training/artifacts/
+ml/**/chroma/
+assistant/**/chroma/
+**/*.joblib
+
+# Données locales
+remediation/incidents.db
+*.sqlite3
+
+# OS / IDE
 .DS_Store
 .idea/
 .vscode/
-
-# Secrets
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-
-# Dépendances / builds
-node_modules/
-__pycache__/
-*.pyc
-.venv/
-dist/
-build/

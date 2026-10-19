@@ -1,0 +1,14 @@
+version: "1.0"
+defaults: { cooldown_seconds: 60, max_attempts: 3, dry_run: false }
+rules:
+  - incident_type: auth_abuse
+    actions:
+      - { type: waf_block_ip, params: { source: "from_event" } }
+      - { type: tighten_rate_limit, params: { service: "auth", factor: 0.5 } }
+    verify: verify_tx
+    escalation: notify_operator
+  - incident_type: unknown
+    actions:
+      - { type: dry_run_report, params: {} }
+    verify: verify_tx
+    escalation: notify_operator

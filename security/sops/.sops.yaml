@@ -1,0 +1,7 @@
+# Règles de chiffrement SOPS — RESILIENCE-ALPHA
+# Tous les fichiers *.enc.env et *.enc.yaml sont chiffrés avec la clé age de l'équipe.
+# La clé PRIVÉE age reste hors git (voir security/sops/README.md).
+creation_rules:
+  - path_regex: \.enc\.(env|yaml|json)$
+    # Remplacer par la clé publique age de l'équipe (générée avec `age-keygen`).
+    age: "age1examplexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"

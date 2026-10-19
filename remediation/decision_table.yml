@@ -1,0 +1,47 @@
+# remediation/decision_table.yml — SOURCE DE VÉRITÉ de la table incident -> action.
+# Schéma figé par docs/contracts.md §4. Ce fichier fait foi : le moteur ne contient
+# AUCUNE règle de décision codée en dur (seulement des invariants de sécurité,
+# voir decision.py). Toute modification passe par PR + revue.
+version: "1.0"
+defaults:
+  cooldown_seconds: 60        # pas de ré-action sur le même incident avant ce délai
+  max_attempts: 3             # tentatives avant escalade
+  dry_run: false              # true en dev / mode répétition
+
+rules:
+  # Restauration de DISPONIBILITÉ (surcharge) : on coupe la source et on redémarre.
+  - incident_type: service_flood
+    actions:
+      - { type: waf_block_ip,     params: { source: "from_event" } }
+      - { type: restart_service,  params: { service: "payment-api" } }
+    verify: verify_tx
+    escalation: notify_operator
+
+  - incident_type: auth_abuse
+    actions:
+      - { type: waf_block_ip,       params: { source: "from_event" } }
+      - { type: tighten_rate_limit, params: { service: "auth", factor: 0.5 } }
+    verify: verify_tx
+    escalation: notify_operator
+
+  - incident_type: web_attack
+    actions:
+      - { type: confirm_waf_block, params: {} }
+      - { type: waf_blacklist_ip,  params: { source: "from_event" } }
+    verify: verify_tx
+    escalation: notify_operator
+
+  # Correction de CORRUPTION / COMPROMISSION (intégrité des données) : restauration
+  # du dernier dump. Ne JAMAIS y mettre restart/recreate (≠ disponibilité).
+  - incident_type: data_corruption
+    actions:
+      - { type: restore_pg_dump, params: { backup: "latest" } }
+    verify: verify_tx
+    escalation: notify_operator
+
+  # Signature inconnue : aucune action destructive, journalisation puis escalade.
+  - incident_type: unknown
+    actions:
+      - { type: dry_run_report, params: {} }
+    verify: verify_tx
+    escalation: notify_operator

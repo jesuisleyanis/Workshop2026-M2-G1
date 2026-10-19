@@ -1,0 +1,11 @@
+# Contexte de build minimal : tout est exclu sauf ce que le Dockerfile COPY (pas de .git, pas de secrets).
+*
+!libs/python/resilience_common
+!libs/python/resilience_db
+!services/auth/requirements.txt
+!services/auth/pyproject.toml
+!services/auth/src
+**/__pycache__
+**/*.egg-info
+**/.pytest_cache
+**/tests

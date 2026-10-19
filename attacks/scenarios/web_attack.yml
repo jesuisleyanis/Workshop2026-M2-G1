@@ -1,0 +1,21 @@
+name: web_attack
+objectif: >
+  Envoyer des requêtes HTTP au motif typé (injection / traversée de chemin) contre
+  le front/API afin de déclencher les règles OWASP CRS du WAF et confirmer le blocage.
+cible:
+  service: waf
+  endpoint: "/api/v1/* et /"
+prerequis:
+  - stack up, WAF (ModSecurity + CRS) actif
+parametres:
+  rate_max: 20
+  duration_max: 20
+  payloads: "charges CRS standards de test (ex. ?id=1' OR '1'='1, ../../etc/passwd)"
+signal_attendu:
+  metrique: "resilience_waf_blocked_total{rule} en hausse"
+  loki: "{service=\"waf\"} |= \"waf_blocked\""
+incident_type: web_attack
+remediation_attendue:
+  - confirm_waf_block
+  - waf_blacklist_ip
+critere_de_reussite: "requêtes malveillantes bloquées (403) ; source mise en liste noire ; verify_tx OK"

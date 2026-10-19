@@ -1,0 +1,20 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; background: #f8fafc; color: #0f172a; }
+main { max-width: 52rem; margin: 0 auto; padding: 1rem; }
+h1 { font-size: 1.25rem; margin: 0 0 .5rem; }
+h2 { font-size: 1rem; margin: 1rem 0 .25rem; }
+.notice { font-size: .85rem; background: #e0f2fe; border-left: 4px solid #0284c7; padding: .5rem .75rem; margin: 0 0 1rem; }
+.banner { background: #fef3c7; border-left: 4px solid #d97706; padding: .5rem .75rem; font-size: .85rem; }
+label { display: block; font-weight: 600; margin-bottom: .25rem; }
+textarea { width: 100%; box-sizing: border-box; padding: .5rem; font: inherit; }
+button { margin-top: .5rem; padding: .4rem 1rem; font: inherit; cursor: pointer; }
+#answer { white-space: pre-wrap; }
+#sources li { margin-bottom: .5rem; font-size: .85rem; }
+#sources code { font-weight: 600; }
+#sources blockquote { margin: .15rem 0 0; color: #475569; }
+#status.error { color: #b91c1c; }
+@media (prefers-color-scheme: dark) {
+  body { background: #0f172a; color: #e2e8f0; }
+  .notice { background: #082f49; } .banner { background: #451a03; }
+  #sources blockquote { color: #94a3b8; }
+}

@@ -1,0 +1,20 @@
+name: auth_abuse
+objectif: >
+  Générer une rafale bornée de tentatives de connexion invalides sur le service auth
+  pour faire monter les échecs 401 et déclencher rate-limit + blocage de la source.
+cible:
+  service: auth
+  endpoint: /api/v1/login
+prerequis:
+  - stack up, verify_tx OK
+parametres:
+  rate_max: 40        # tentatives/s plafonnées
+  duration_max: 30
+signal_attendu:
+  metrique: "rate(resilience_auth_logins_total{result=\"failed\"}[1m]) élevé ; resilience_auth_rate_limited_total en hausse"
+  loki: "{service=\"auth\"} |= \"auth_login_failed\""
+incident_type: auth_abuse
+remediation_attendue:
+  - waf_block_ip
+  - tighten_rate_limit
+critere_de_reussite: "verify_tx OK après remédiation ; les logins légitimes restent possibles"

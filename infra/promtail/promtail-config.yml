@@ -1,0 +1,35 @@
+# Promtail — collecte les logs JSON des conteneurs (driver Docker) vers Loki.
+server:
+  http_listen_port: 9080
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 10s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'service'
+    pipeline_stages:
+      # Les services émettent du JSON (contrat §1) : on parse les champs clés
+      # pour les rendre requêtables et alimenter les règles SOC.
+      - json:
+          expressions:
+            level: level
+            service: service
+            event: event
+            client_ip: client_ip
+            http_status: http_status
+      - labels:
+          level:
+          event:

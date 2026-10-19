@@ -1,0 +1,11 @@
+**/.git
+**/__pycache__
+**/.pytest_cache
+**/*.db
+**/*.pyc
+**/.env*
+**/*.enc.*
+**/*age*.txt
+**/keys.txt
+**/node_modules
+remediation/tests

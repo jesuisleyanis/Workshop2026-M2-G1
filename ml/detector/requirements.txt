@@ -1,0 +1,8 @@
+# Dépendances runtime du detector (la lib partagée resilience_common[fastapi] est installée
+# séparément depuis libs/python/resilience_common, cf. Dockerfile).
+fastapi==0.146.0
+uvicorn==0.54.0
+httpx==0.28.1
+numpy==2.5.4
+scikit-learn==1.9.1  # DOIT être identique à la version d'entraînement (baseline_stats.json)
+joblib==1.6.0

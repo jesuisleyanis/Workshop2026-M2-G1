@@ -1,0 +1,13 @@
+# Configuration ruff partagée — RESILIENCE-ALPHA
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+ignore = ["E501"]  # la longueur est gérée par le formateur
+
+[lint.per-file-ignores]
+"**/tests/**" = ["B", "SIM"]  # tests : règles assouplies
+
+[format]
+quote-style = "double"

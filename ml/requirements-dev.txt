@@ -1,0 +1,6 @@
+# Environnement de dev/test pour tout ml/ :
+#   python3 -m venv /tmp/rc-ml && /tmp/rc-ml/bin/pip install -r ml/requirements-dev.txt
+#   cd ml && /tmp/rc-ml/bin/python -m pytest
+-e ../libs/python/resilience_common[fastapi,test]
+-r detector/requirements.txt
+-r collector/requirements.txt

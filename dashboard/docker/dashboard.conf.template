@@ -1,0 +1,56 @@
+# Variables substituées au démarrage : REMEDIATION_UPSTREAM, REMEDIATION_AUTH_HEADER, DNS_RESOLVER.
+server {
+  listen 8080;
+  server_name _;
+  root /usr/share/nginx/html;
+  index index.html;
+
+  # Résolution DNS paresseuse (Docker) : nginx démarre même si "remediation" n'est pas encore up.
+  resolver ${DNS_RESOLVER} valid=10s ipv6=off;
+
+  include /etc/nginx/security-headers.conf;
+
+  location = /healthz {
+    access_log off;
+    default_type text/plain;
+    return 200 "ok\n";
+  }
+
+  # Flux SSE du moteur de remédiation. UNIQUEMENT ce chemin (lecture seule) est exposé :
+  # l'API /events du moteur reste inaccessible depuis le navigateur. Le jeton éventuel est
+  # injecté ici côté serveur ; il n'atteint jamais le bundle JS.
+  location = /remediation/stream {
+    include /etc/nginx/security-headers.conf;
+    set $remediation_upstream "http://${REMEDIATION_UPSTREAM}";
+    rewrite ^/remediation/stream$ /stream break;
+    proxy_pass $remediation_upstream;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Authorization "${REMEDIATION_AUTH_HEADER}";
+    proxy_set_header Host $host;
+    proxy_hide_header Cache-Control;
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    add_header X-Accel-Buffering "no" always;
+    add_header Cache-Control "no-cache" always;
+  }
+
+  location /remediation/ {
+    return 404;
+  }
+
+  location /assets/ {
+    include /etc/nginx/security-headers.conf;
+    add_header Cache-Control "public, max-age=31536000, immutable";
+    try_files $uri =404;
+  }
+
+  location / {
+    include /etc/nginx/security-headers.conf;
+    add_header Cache-Control "no-store";
+    try_files $uri /index.html;
+  }
+}
