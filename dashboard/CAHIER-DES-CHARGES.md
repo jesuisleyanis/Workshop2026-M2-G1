@@ -6,7 +6,7 @@
 
 Écran de **supervision pour le jury / l'opérateur**, projeté et filmé pour le Clip Chrono (≤ 60 s, sans coupe). Il montre en direct la boucle *Zero-Touch Recovery* : la santé des services, le score d'anomalie du ML, la timeline **détection -> décision -> action -> vérification**, le MTTD / MTTR, la dernière transaction de vérification, et donne accès à Grafana. Il est **en lecture seule** : aucune action de remédiation n'est déclenchée depuis l'écran (pas d'intervention humaine dans la boucle).
 
-Conception pour la lisibilité à distance : thème sombre à fort contraste, très gros caractères, états portés par du **texte** (pas seulement par la couleur), animations discrètes (désactivées si `prefers-reduced-motion`).
+Design « ZTR Supervision » (console sombre, accent violet, polices Geist auto-hébergées) : barre latérale (état du flux, horloge, source, répétition, Grafana), bandeau de phase, rangée d'indicateurs, courbe du score sur 2 min, timeline en 4 cartes, actions, santé, signaux, playbooks, preuves. Les états sont portés par du **texte** (pas seulement par la couleur).
 
 ## 2. Exigences
 
@@ -14,15 +14,26 @@ Conception pour la lisibilité à distance : thème sombre à fort contraste, tr
 |---|---|---|
 | D1 (R20) | Mise en avant de la phase **AVANT / PENDANT / APRÈS** | `PhaseBanner` + `lib/state.ts#derivePhase` |
 | D2 (R4) | État des services (santé) | `ServicesGrid` (message `health`) |
-| D3 (R4) | Score d'anomalie en direct, seuil, historique | `ScoreGauge` (message `score` et `anomaly_detected`) |
+| D3 (R4) | Score d'anomalie en direct, seuil, historique **par service** (fenêtre 2 min, onglets, marqueurs détection / vérifié) | `ScoreCard` + `ScoreChart` (messages `score` et `anomaly_detected`) |
 | D4 (R4) | Timeline d'incident détection -> décision -> action -> vérification | `IncidentTimeline` + `buildTimeline` |
 | D5 (R4) | MTTD / MTTR (MTTR live pendant l'incident) | `MetricsCards` |
-| D6 | Dernière transaction de vérification (`verify_tx`) | `VerificationCard` |
-| D7 | Liens vers Grafana | `GrafanaLinks` (`VITE_GRAFANA_BASE`) |
-| D8 | Temps réel par SSE, reconnexion automatique, état de connexion visible | `useRemediationStream` |
-| D9 | Messages non conformes comptés et signalés (pas de perte silencieuse) | `rejected` dans l'état, `Header` |
-| D10 | Bouton « Réinitialiser la vue » (reprise de clip) : remet l'affichage à AVANT | `reducer` action `reset` |
+| D6 | Dernière transaction de vérification (`verify_tx`) : statut, durée, ancienneté | `VerificationCard` |
+| D7 | Liens vers Grafana ; preuves de l'anomalie ouvertes dans Explore (Prometheus / Loki pré-remplis) | `GrafanaLinks`, `EvidencePanel` |
+| D8 | Temps réel par SSE, reconnexion automatique, état de connexion visible | `useRemediationStream`, `Sidebar` |
+| D9 | Messages non conformes comptés et signalés (pas de perte silencieuse) | `rejected` dans l'état, en-tête |
+| D10 | « Réinitialiser la vue » (reprise de clip) : écarte l'incident affiché, revient à AVANT, conserve courbes et santé ; les événements tardifs de l'incident écarté sont ignorés | `reducer` action `reset` (`dismissed`) |
 | D11 | Image durcie : non-root, healthcheck, statique + proxy SSE | `Dockerfile`, `docker/` |
+| D12 | Actions de remédiation : plan annoncé par le moteur + résultat de chaque action | `ActionsPanel` (`remediation_started` / `remediation_action`) |
+| D13 | Signaux dominants (z-score des `features_top`) et playbooks de la table de décision, règle active surlignée | `SignalsPanel`, `PlaybooksPanel` (miroir d'affichage de `remediation/decision_table.yml`) |
+| D14 | Simulation locale (répétition sans stack) : mêmes trames JSON que le moteur, validées par le même parseur, **toujours signalée** à l'écran | `lib/simulator.ts`, `VITE_STREAM_SOURCE` |
+| D15 | Déclencheurs de répétition : en simulation, ou en flux réel **en dev uniquement** (mock `GET /trigger`) ; masqués en prod | `Sidebar`, `LIVE_TRIGGERS` |
+
+### Source des événements et déclencheurs
+
+- `VITE_STREAM_SOURCE=live` (défaut, démo jury) : flux réel uniquement. Une coupure affiche « Flux interrompu », **jamais** de bascule silencieuse vers des données générées.
+- `auto` : flux réel ; s'il n'a **jamais** pu s'ouvrir, bascule une fois en simulation avec le bandeau « Flux injoignable — simulation locale active ». Un flux ouvert puis coupé reste en reconnexion.
+- `simulation` : simulation d'emblée. Bouton « Passer en simulation » / « Réessayer le flux réel » dans tous les modes.
+- Les déclencheurs injectent un **incident de démonstration** (simulation locale ou mock) ; ils ne pilotent jamais le moteur de remédiation réel, dont seule la route `GET /stream` est proxifiée par nginx. En démo, les attaques partent du PC Attaquant.
 
 ### Définition des phases (R20)
 
@@ -70,6 +81,8 @@ Points de vigilance côté moteur :
 |---|---|---|---|
 | `VITE_REMEDIATION_BASE` | build | `/remediation` | Base du flux SSE (`<base>/stream`) |
 | `VITE_GRAFANA_BASE` | build | `http://localhost:3000` | Base des liens Grafana (ouverts dans un nouvel onglet : doit être joignable **depuis le navigateur du jury**) |
+| `VITE_STREAM_SOURCE` | build | `live` | `live` \| `auto` \| `simulation` (voir §2) |
+| `VITE_LIVE_TRIGGERS` | build | _vide_ | `true` : déclencheurs aussi en flux réel hors dev (pour un mock servi en preview uniquement) |
 | `REMEDIATION_PROXY_TARGET` | dev | `http://localhost:8005` | Cible du proxy Vite pour `/remediation` |
 | `REMEDIATION_UPSTREAM` | runtime (conteneur) | `remediation:8005` | Hôte:port du moteur pour le proxy nginx |
 | `REMEDIATION_AUTH_HEADER` | runtime | _vide_ | Valeur complète du header `Authorization` injecté par nginx (ex. `Bearer <token SOPS>`). Vide = aucun header |
@@ -86,8 +99,9 @@ Points de vigilance côté moteur :
 - Le moteur de remédiation reste **hors réseau `edge`** ; le dashboard n'y accède que par le proxy nginx en lecture seule. Le jeton éventuel est injecté côté serveur (variable d'environnement du conteneur, fournie via SOPS), **jamais dans le bundle**.
 - **Le dashboard ne doit pas être publié publiquement sans contrôle d'accès** : toute personne qui l'atteint peut lire le flux de supervision. Options : publier sur l'hôte en `127.0.0.1` / réseau d'admin, ou le router via le WAF avec authentification.
 - Image multi-stage, utilisateur `nginx`, CSP stricte (`default-src 'self'`, `connect-src 'self'`), `X-Frame-Options: DENY`, `nosniff`, `server_tokens off`, conf générée dans `/tmp` (compatible `read_only: true` + `tmpfs: /tmp`, `cap_drop: [ALL]`, `no-new-privileges`).
-- Liens Grafana : `rel="noopener noreferrer"`.
+- Liens Grafana : `rel="noopener noreferrer"`. Polices Geist servies depuis le bundle (`@fontsource-variable/*`) : la CSP n'autorise aucun CDN.
+- Pas de bouton d'attaque en prod : les déclencheurs de répétition n'existent qu'en simulation ou en dev (D15).
 
 ## 7. Tests (Vitest + Testing Library)
 
-Parsing d'un AnomalyEvent conforme au contrat (exemple verbatim §3, énumération `incident_type`, cas invalides), parsing des messages du flux, reducer et timeline (4 étapes, échecs), MTTD/MTTR, **garde AVANT / PENDANT / APRÈS** (logique et rendu `aria-current`), composants clés, hook SSE (EventSource simulé : états, rejets, fermeture), rejeu de bout en bout d'un incident `service_flood`. Lancement : `npm run test`.
+Parsing d'un AnomalyEvent conforme au contrat (exemple verbatim §3, énumération `incident_type`, cas invalides), parsing des messages du flux, reducer et timeline (4 étapes, échecs), reset (incident écarté ignoré), MTTD/MTTR, **garde AVANT / PENDANT / APRÈS** (logique et rendu `aria-current`), composants clés (courbe : géométrie de la fenêtre, onglets, marqueurs ; actions ; preuves ; playbooks), hook SSE (EventSource simulé : états, rejets, fermeture), rejeu de bout en bout d'un incident `service_flood`, **simulation locale** jusqu'à APRÈS (`data_corruption` => `restore_pg_dump` seul, jamais de redémarrage), bascule `auto`, déclencheur dev. Lancement : `npm run test`.

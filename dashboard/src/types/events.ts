@@ -140,6 +140,8 @@ export interface DashboardState {
   lastVerification: VerifyTx | null
   /** Messages SSE reçus mais rejetés par la validation (visibilité, pas de perte silencieuse). */
   rejected: number
+  /** Incidents écartés par « Réinitialiser la vue » : leurs événements tardifs sont ignorés. */
+  dismissed: string[]
 }
 
 export type TimelineStepId = 'detection' | 'decision' | 'action' | 'verification'
