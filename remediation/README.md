@@ -134,7 +134,8 @@ Lues par `config.py` (`Settings.from_env`). **Aucun secret n'a de valeur par dé
 | `NOTIFY_WEBHOOK_URL` | — | Webhook optionnel appelé à l'escalade. |
 | `DECISION_TABLE` | `<dossier>/decision_table.yml` | Chemin de la table de décision. |
 | `INCIDENTS_DB` | `incidents.db` | Fichier SQLite du journal (`/var/lib/remediation/incidents.db` dans l'image). |
-| `VERIFY_TX_PATH` | `scripts/verify_tx` | Script de vérification (`/opt/scripts/verify_tx` dans l'image). |
+| `VERIFY_TX_PATH` | `scripts/verify_tx` | Script de vérification (`/opt/scripts/verify_tx` dans l'image, qui le copie depuis `scripts/verify_tx`). |
+| `BASE_URL` | — (compose : `https://waf:8443`) | Lu par `verify_tx` : la transaction de contrôle passe par le WAF comme un vrai client, depuis le réseau `app`. |
 | `VERIFY_TIMEOUT_S` | `30` | Timeout d'une exécution de `verify_tx`. |
 | `VERIFY_RETRIES` | `5` | Essais de `verify_tx` après une action (min. 1). |
 | `VERIFY_INTERVAL_S` | `3` | Pause entre deux essais. |
