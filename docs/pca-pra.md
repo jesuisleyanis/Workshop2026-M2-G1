@@ -136,7 +136,7 @@ Action : `restore_pg_dump` (`remediation/actions/postgres.py`), paramètre `back
 
 ### 5.3 `web_attack`
 
-`confirm_waf_block` (lecture seule Loki : `{service="waf"} |= "waf_blocked"` sur 120 s, filtré par IP) puis `waf_blacklist_ip` (liste `permanent`). Aucune restauration de service nécessaire : le CRS a répondu 403 avant l'application. Retour arrière : retirer la ligne de `blocked_ips.conf` + reload (ou `attacks/reset.sh`).
+`confirm_waf_block` (lecture seule Loki : `{service="waf-exporter"} |= "waf_blocked"` sur 120 s, filtré par IP) puis `waf_blacklist_ip` (liste `permanent`). Aucune restauration de service nécessaire : le CRS a répondu 403 avant l'application. Retour arrière : retirer la ligne de `blocked_ips.conf` + reload (ou `attacks/reset.sh`).
 
 ### 5.4 PRA : reconstruction sur une autre machine (manuel, non éprouvé)
 

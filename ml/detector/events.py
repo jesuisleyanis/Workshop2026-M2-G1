@@ -22,7 +22,8 @@ EVIDENCE: dict[IncidentType, tuple[str, str]] = {
     ),
     IncidentType.WEB_ATTACK: (
         "rate(resilience_waf_blocked_total[1m])",
-        '{service="waf"} |= "waf_blocked"',
+        # label Loki = service compose émetteur (posé par Promtail) : waf-exporter
+        '{service="waf-exporter"} |= "waf_blocked"',
     ),
     IncidentType.DATA_CORRUPTION: (
         "rate(resilience_db_errors_total[1m])",

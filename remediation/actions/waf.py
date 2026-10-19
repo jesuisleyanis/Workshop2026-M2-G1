@@ -84,7 +84,9 @@ class ConfirmWafBlock(Action):
         return "vérifierait la présence d'événements waf_blocked récents dans Loki"
 
     async def execute(self, ctx: ActionContext) -> ActionResult:
-        query = '{service="waf"} |= "waf_blocked"'
+        # Label `service` = nom du service compose (posé par Promtail) : l'event
+        # waf_blocked est émis par le conteneur waf-exporter.
+        query = '{service="waf-exporter"} |= "waf_blocked"'
         if ctx.event and ctx.event.source_ip:
             query += f' |= "{ctx.event.source_ip}"'  # IP validée (ipaddress) -> pas d'injection LogQL
         now_ns = time.time_ns()
