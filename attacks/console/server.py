@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCENARIO_DIR = ROOT / "attacks" / "scenarios"
 RUNLOG = ROOT / "attacks" / ".runlog"
 RUN_SH = ROOT / "attacks" / "run.sh"
+CAMPAIGN_SH = ROOT / "attacks" / "campaign.sh"
 RESET_SH = ROOT / "attacks" / "reset.sh"
 VERIFY = ROOT / "scripts" / "verify_tx"
 STATIC = Path(__file__).resolve().parent / "static"
@@ -130,6 +131,16 @@ class Runner:
         if not DRY:
             self.proc = subprocess.Popen(argv, cwd=str(ROOT))
 
+    def launch_campaign(self, target: str) -> None:
+        if self.running:
+            raise HTTPException(409, f"Un scénario tourne déjà : {self.scenario}")
+        argv = ["bash", str(CAMPAIGN_SH), "--target", target]
+        self.last_argv = argv
+        self.scenario, self.target, self.duration = "campaign", target, None
+        self.started_at = time.time()
+        if not DRY:
+            self.proc = subprocess.Popen(argv, cwd=str(ROOT))
+
     def stop(self) -> None:
         if not DRY:
             subprocess.run(["bash", str(RUN_SH), "--stop"], cwd=str(ROOT), timeout=15)
@@ -176,6 +187,13 @@ def create_app() -> FastAPI:
         runner.launch(req.scenario, target, duration, rate)
         return {**runner.status(), "launched": req.scenario, "target": target,
                 "duration": duration, "rate": rate}
+
+    @app.post("/api/campaign")
+    def campaign(req: RunRequest) -> dict[str, Any]:
+        """Opération Triade : campagne multi-étapes corrélée (auth -> web -> flood)."""
+        target = validate_target(req.target)
+        runner.launch_campaign(target)
+        return {**runner.status(), "launched": "campaign", "target": target}
 
     @app.post("/api/stop")
     def stop() -> dict[str, Any]:

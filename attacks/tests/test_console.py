@@ -78,6 +78,19 @@ def test_no_concurrent_runs(client):
     assert c.post("/api/run", json={"scenario": "auth_abuse"}).status_code == 409
 
 
+def test_campaign_launches_the_orchestrator(client):
+    c, server = client
+    r = c.post("/api/campaign", json={"scenario": "campaign"}).json()
+    assert r["launched"] == "campaign"
+    assert server.runner.last_argv[:2] == ["bash", str(server.CAMPAIGN_SH)]
+
+
+def test_campaign_rejects_invalid_target(client):
+    c, _ = client
+    assert c.post("/api/campaign", json={"scenario": "campaign",
+                                         "target": "ftp://x"}).status_code == 422
+
+
 def test_blue_link_is_optional_and_off_by_default(client):
     c, _ = client
     # Sans REMEDIATION_BASE/TOKEN : liaison Bleu inactive, relais refusé proprement.

@@ -95,6 +95,8 @@
   .params label b{color:var(--amber);font-weight:600;font-variant-numeric:tabular-nums}
   input[type=range]{width:100%;accent-color:var(--amber);height:4px}
   .scn.busy{opacity:.55;pointer-events:none}
+  .scn.campaign{border-color:#5a3a1c;background:linear-gradient(180deg,#1d1409,var(--panel-2))}
+  .scn.campaign .name{color:var(--amber)}
   .note{font-family:var(--mono);font-size:11px;color:var(--faint);border:1px dashed var(--line);
     border-radius:4px;padding:10px 12px;line-height:1.55}
   .note b{color:var(--muted)}
@@ -175,6 +177,16 @@
         <div class="head">
           <span class="ttl">Scénarios</span>
           <span class="hint" id="caps"></span>
+        </div>
+        <div class="scn campaign" id="campaign">
+          <div class="row">
+            <span class="name">Opération Triade</span>
+            <span class="tag it">campagne</span>
+            <span style="flex:1"></span>
+            <span class="tag">3 vagues</span>
+          </div>
+          <div class="chainflow"><b>01 feinte</b> auth_abuse &nbsp;→&nbsp; <b>02 sonde</b> web_attack &nbsp;→&nbsp; <b>03 assaut</b> service_flood<br>décalées, bornées : éprouve la corrélation SOC et la remédiation d'incidents successifs.</div>
+          <button class="btn go campaignbtn" id="go-campaign">Lancer l'opération Triade</button>
         </div>
         <div id="scnlist"></div>
         <div class="note" id="dcnote" hidden></div>
@@ -310,9 +322,10 @@ function applyStatus(st){
   const conn=$('#conn');
   if(st.running){
     conn.className='pill armed'; $('#conntxt').textContent='ARMÉ · '+st.scenario;
-    setNode('n-attaque','active', Math.round(st.remaining_s)+'s');
+    const camp = st.duration_s==null;
+    setNode('n-attaque','active', camp? 'en cours' : Math.round(st.remaining_s)+'s');
     if(BLUE){ refreshBlue(); } else { setNode('n-detect','watch','ML'); setNode('n-remed','watch','auto'); }
-    $('#countdown').textContent = Math.round(st.remaining_s)+'s restant';
+    $('#countdown').textContent = camp? 'campagne en cours' : Math.round(st.remaining_s)+'s restant';
     $('#t-chrono').innerHTML = Math.round(st.elapsed_s)+'<small>s</small>';
   }else{
     conn.className='pill live'; $('#conntxt').textContent = st.dry_run? 'prêt · dry-run':'prêt';
@@ -359,6 +372,17 @@ async function afterVerify(){
   $('#t-after').textContent='KO';$('#t-after').style.color='var(--red)';setNode('n-apres','fail','KO');
 }
 
+async function launchCampaign(){
+  if(RUNNING) return;
+  curIT=null; $('#t-after').textContent='—'; $('#t-after').style.color=''; setNode('n-apres',null,'—');
+  await preVerify();
+  try{
+    const r = await api('/api/campaign',{method:'POST',body:JSON.stringify({scenario:'campaign',target:$('#target').value})});
+    if(r.detail){logLine(new Date().toISOString()+' refus : '+r.detail);return;}
+    logLine(new Date().toISOString()+` Operation Triade lancee -> ${r.target}`);
+  }catch(e){logLine(new Date().toISOString()+' erreur de lancement campagne');}
+}
+$('#go-campaign').onclick=launchCampaign;
 $('#kill').onclick=async()=>{await api('/api/stop',{method:'POST'});logLine(new Date().toISOString()+' kill-switch');};
 $('#reset').onclick=async()=>{logLine(new Date().toISOString()+' reset en cours...');await api('/api/reset',{method:'POST'}).catch(()=>{});};
 $('#verify').onclick=preVerify;
