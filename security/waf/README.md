@@ -75,7 +75,7 @@ docker compose -f infra/compose/docker-compose.yml exec waf-exporter \
 
 ```bash
 # waf-exporter (parseur, métrique exposée au format Prometheus, suivi du journal) + contrat de configuration
-# (upstream front:8080, non-root, TLS, routes, compose, câblage waf-exporter/Prometheus) : 30 tests, sans conteneur
+# (upstream front:8080, non-root, TLS, routes, compose, câblage waf-exporter/Prometheus) : 22 tests, sans conteneur
 python -m pytest security/waf/tests/ -q
 ```
 
