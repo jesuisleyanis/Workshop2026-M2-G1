@@ -38,15 +38,17 @@ services:
     <<: *hardening
     build: { context: ../../security/waf }
     networks: [edge, app]
+    # Image non-root (nginx unprivileged) : écoute 8080/8443 ; seuls 80/443 sont publiés côté hôte.
     ports:
-      - "80:80"
-      - "443:443"
+      - "80:8080"
+      - "443:8443"
     volumes:
       - ../../security/waf/blocked_ips.conf:/etc/nginx/blocked_ips.conf:rw
     depends_on: [front, payment-api, auth]
     mem_limit: 256m
     healthcheck:
-      test: ["CMD", "curl", "-fsk", "https://localhost/ || exit 1"]
+      # /healthz est servi par le WAF lui-même (sans upstream) ; cert auto-signé -> -k.
+      test: ["CMD-SHELL", "curl -fsk https://127.0.0.1:8443/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
