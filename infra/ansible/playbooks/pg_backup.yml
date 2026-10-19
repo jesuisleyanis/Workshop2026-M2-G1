@@ -1,0 +1,40 @@
+---
+# Sauvegarde : crée un dump Postgres SAIN dans backups/ (filet de sécurité du PRA).
+# Prérequis de l'action de remédiation restore_pg_dump (pg_restore.yml) : sans dump
+# sain préalable, la restauration n'a rien à restaurer. À jouer AVANT le scénario
+# data_corruption (état "avant" nominal), ou périodiquement (backup planifié).
+- name: Créer un dump Postgres sain
+  hosts: host
+  gather_facts: false
+  vars:
+    backup_dir: "{{ project_root }}/infra/ansible/backups"
+    db_container: "resilience-g1-postgres-1"
+    db_name: resilience
+    db_user: resilience
+  tasks:
+    - name: S'assurer que le dossier de backups existe
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Horodatage du dump
+      ansible.builtin.set_fact:
+        dump_stamp: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+
+    - name: Produire le dump (format custom, restaurable par pg_restore)
+      ansible.builtin.shell: |
+        docker exec {{ db_container }} pg_dump --format=custom \
+          -U {{ db_user }} -d {{ db_name }} \
+          > "{{ backup_dir }}/resilience-{{ dump_stamp }}.dump"
+      changed_when: true
+
+    - name: Confirmer que le dump est non vide
+      ansible.builtin.stat:
+        path: "{{ backup_dir }}/resilience-{{ dump_stamp }}.dump"
+      register: dump_stat
+
+    - name: Vérifier la taille du dump
+      ansible.builtin.assert:
+        that: dump_stat.stat.size | default(0) | int > 0
+        fail_msg: "Dump vide — vérifier que Postgres est up et seedé"

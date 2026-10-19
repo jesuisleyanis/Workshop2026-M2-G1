@@ -37,3 +37,13 @@ security/hardening/audit.sh
 ```
 
 `gitleaks` et `trivy` sont documentés ici et branchés en pre-commit / avant packaging ; ils ne sont pas exécutés en CI pour l'instant (décision équipe).
+
+### Contrôles de `audit.sh` (exit 0 = conforme, réutilisable en CI)
+
+1. Socket Docker jamais touché par le moteur ; aucun montage en lecture-écriture.
+2. Aucun conteneur `privileged: true`.
+3. Aucun secret en clair (hors exemples factices).
+4. Aucune clé age (`keys.txt`, `*.age`) dans le dépôt.
+5. **Exposition réseau** : seul le WAF publie des ports (R11/R19) — tout autre service `ports:` fait échouer l'audit.
+6. **Durcissement** : ancre `no-new-privileges:true` + `cap_drop: ALL` présente dans le compose.
+7. **DB interne** : réseau `data` en `internal: true` (Postgres jamais joignable depuis l'hôte).

@@ -80,8 +80,14 @@ case "${SCENARIO}" in
     bounded_loop "/../../etc/passwd" GET &
     echo $! >> "${PIDFILE}" ;;
   data_corruption)
-    echo "Scénario data_corruption : exécuter la procédure d'altération réversible de données fictives" \
-         "documentée dans scenarios/data_corruption.yml (via playbook Ansible dédié)." ;;
+    # La base est sur le réseau interne `data` : ce scénario se déclenche côté OPÉRATEUR
+    # (PC Hôte), pas depuis le PC Attaquant. Procédure réversible, données fictives.
+    echo "Scénario data_corruption : à déclencher depuis le PC Hôte (base non exposée)."
+    echo "  1) backup sain   : ansible-playbook infra/ansible/playbooks/pg_backup.yml"
+    echo "  2) corruption    : ansible-playbook infra/ansible/playbooks/db_corrupt_fake.yml"
+    echo "  -> verify_tx passe KO ; la remédiation restore_pg_dump doit rétablir l'état."
+    echo "  annulation manuelle : ansible-playbook infra/ansible/playbooks/db_corrupt_fake.yml -e mode=revert"
+    exit 0 ;;
   *)
     echo "Pas de générateur pour ${SCENARIO}"; exit 1 ;;
 esac

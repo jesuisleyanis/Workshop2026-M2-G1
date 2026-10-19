@@ -43,7 +43,16 @@ C'est ce contrat qui garantit qu'une attaque est toujours reliée à une détect
 
 ## Lancement
 
-Voir `attacks/README.md`. En démo notée : depuis le **PC Attaquant physique**. En dev : profil Compose `attack`.
+Voir `attacks/README.md` et le pas-à-pas `attacks/RUNBOOK-PC-ATTAQUANT.md`. En démo notée : depuis le **PC Attaquant physique**. En dev : profil Compose `attack`.
+
+### Cas particulier `data_corruption` (déclencheur côté opérateur)
+
+La base est sur le réseau interne `data` (non exposée) : ce scénario ne part **pas** du PC Attaquant mais du **PC Hôte**, via deux playbooks côté infra/remédiation :
+
+- `infra/ansible/playbooks/pg_backup.yml` — crée le dump sain préalable (filet de la remédiation `restore_pg_dump`) ;
+- `infra/ansible/playbooks/db_corrupt_fake.yml` — altération **réversible** et **non destructive** (renommage de table, jamais de DROP/DELETE) de la base **fictive** uniquement ; `-e mode=revert` annule.
+
+Contrat vérifié par `tests/test_data_corruption_trigger.py` (réversibilité, non-destruction, base fictive).
 
 ## Tests
 
