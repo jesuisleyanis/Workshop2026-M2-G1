@@ -1,6 +1,15 @@
 # Règles d'alerte SOC (fonction SOC intégrée à la supervision — R12).
 # Corrèlent métriques et logs pour détecter des comportements suspects, en complément
-# du détecteur ML. Les alertes peuvent être routées vers le moteur de remédiation.
+# du détecteur ML. Un `incident_type` (contrat docs/contracts.md §3) est porté en label
+# pour que l'alerte puisse être routée/traduite vers le moteur de remédiation.
+#
+# Structure (alerting unifié Grafana) : A = requête PromQL (instantanée) ->
+# B = réduction (last) -> C = seuil. `condition: C`. Sans l'étape de réduction B,
+# l'évaluateur de seuil refuse une série non réduite.
+#
+# ROUTAGE : voir infra/grafana/provisioning/alerting/README-SOC.md — à ce jour les
+# alertes s'affichent dans Grafana ; le relais vers la remédiation reste à finaliser
+# (point d'intégration ouvert, hors périmètre des règles elles-mêmes).
 apiVersion: 1
 groups:
   - orgId: 1
@@ -11,53 +20,113 @@ groups:
       - uid: soc-auth-abuse
         title: Rafale d'échecs d'authentification
         condition: C
+        for: 30s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, incident_type: auth_abuse }
+        annotations: { summary: "Plus de 5 échecs de login/s — possible abus d'authentification" }
         data:
           - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
             datasourceUid: prometheus
             model:
+              refId: A
+              instant: true
               expr: 'sum(rate(resilience_auth_logins_total{result="failed"}[1m]))'
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
           - refId: C
             datasourceUid: __expr__
             model:
+              refId: C
               type: threshold
-              expression: A
+              expression: B
               conditions:
                 - evaluator: { type: gt, params: [5] }
-        labels: { severity: warning, incident_type: auth_abuse }
-        annotations: { summary: "Plus de 5 échecs de login/s — possible abus d'authentification" }
 
       - uid: soc-service-flood
         title: Pic de 5xx sur payment-api
         condition: C
+        for: 30s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: critical, incident_type: service_flood }
+        annotations: { summary: "Taux de 5xx élevé — possible saturation du service" }
         data:
           - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
             datasourceUid: prometheus
             model:
+              refId: A
+              instant: true
               expr: 'sum(rate(resilience_http_requests_total{service="payment-api",status=~"5.."}[1m]))'
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
           - refId: C
             datasourceUid: __expr__
             model:
+              refId: C
               type: threshold
-              expression: A
+              expression: B
               conditions:
                 - evaluator: { type: gt, params: [2] }
-        labels: { severity: critical, incident_type: service_flood }
-        annotations: { summary: "Taux de 5xx élevé — possible saturation du service" }
 
       - uid: soc-waf-blocks
         title: Hausse des blocages WAF
         condition: C
+        for: 30s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning, incident_type: web_attack }
+        annotations: { summary: "Blocages CRS en hausse — requêtes malveillantes probables" }
         data:
           - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
             datasourceUid: prometheus
             model:
+              refId: A
+              instant: true
               expr: 'sum(rate(resilience_waf_blocked_total[1m]))'
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
           - refId: C
             datasourceUid: __expr__
             model:
+              refId: C
               type: threshold
-              expression: A
+              expression: B
               conditions:
                 - evaluator: { type: gt, params: [1] }
-        labels: { severity: warning, incident_type: web_attack }
-        annotations: { summary: "Blocages CRS en hausse — requêtes malveillantes probables" }
+
+      # Corruption / incohérence de données : erreurs DB côté payment-api. La réponse
+      # attendue est une CORRECTION (restore_pg_dump), pas une restauration de dispo.
+      - uid: soc-data-corruption
+        title: Erreurs base de données sur payment-api
+        condition: C
+        for: 30s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: critical, incident_type: data_corruption }
+        annotations: { summary: "resilience_db_errors_total en hausse — incohérence/corruption de données probable" }
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'sum(rate(resilience_db_errors_total[1m]))'
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [0] }

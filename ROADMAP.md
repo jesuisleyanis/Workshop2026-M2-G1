@@ -73,7 +73,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | docker-socket-proxy + API authentifiée | `remediation/`, `infra/compose` | R15 | — | ✅ | haproxy strict câblé + Bearer statique (ADR 0002) |
 | Playbooks Ansible (deploy + remédiation) | `infra/ansible` | R6 | — | ✅ | deploy, block_ip, restore_pg_dump |
 | Alertmanager → webhook remédiation | `infra/alertmanager` | R7 | — | ✅ | alertmanager.yml |
-| Règles SOC Loki/Grafana | `infra/grafana`, `infra/loki` | R12 | — | ✅ | soc-rules.yml |
+| Règles SOC Loki/Grafana | `infra/grafana`, `infra/loki` | Louis | 🟨 | 4 règles (couvre les 4 incident_type) corrigées (uid datasource, reduce, +data_corruption) ; 5 tests contrat verts. **Routage→remédiation ouvert** : endpoint `/events/alertmanager` absent côté moteur + wiring Prometheus/Alertmanager manquant (voir README-SOC.md) |
 | Dashboard (états, score, timeline, MTTD/MTTR, SSE) | `dashboard/` | R4,R20 | — | ✅ | CDC+README+src+tests |
 | Scénarios d'attaque v1 (depuis PC Attaquant) | `attacks/` | R10 | Louis | ✅ | 4 scénarios ; validateur + runbook PC Attaquant ; déclencheur `data_corruption` (pg_backup + db_corrupt_fake réversible) — 10 tests contrat verts |
 | RAG : indexation docs + journal, UI onglet | `assistant/` | R9 | — | ✅ | 97 tests verts |
@@ -105,7 +105,12 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | J1 | Remédiation via docker-socket-proxy, jamais le socket brut | acté |
 | J1 | Attaque depuis PC physique pour la démo (profil `attack` = dev) | acté |
 
-## Points d'intégration — ✅ TOUS RÉCONCILIÉS (câblage)
+## Points d'intégration
+
+> ⚠️ **I6 — ouvert** (rouvre la section) : routage **SOC → remédiation** non fonctionnel.
+> `alertmanager.yml` poste vers `remediation:8005/events/alertmanager` (endpoint **absent** côté moteur) et `prometheus.yml` n'a ni `rule_files` ni bloc `alerting`. À trancher avec **remédiation** (adaptateur Alertmanager→AnomalyEvent) et **infra** (wiring). Détail : `infra/grafana/provisioning/alerting/README-SOC.md`. Les règles SOC elles-mêmes sont corrigées et testées.
+
+### Câblage initial — réconcilié
 
 | # | Écart | Résolution | Preuve |
 |---|---|---|---|
