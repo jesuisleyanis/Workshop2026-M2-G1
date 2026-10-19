@@ -10,7 +10,7 @@
 | Développement | Métier + reprise | _à renseigner_ | `services/*`, `dashboard/`, `scripts/verify_tx` |
 | Infrastructure | Déploiement, observabilité | _à renseigner_ | `infra/*`, exécution remédiation |
 | IA / Data | Détection ML + RAG | _à renseigner_ | `ml/*`, `assistant/` |
-| Cybersécurité | Red Team, WAF, SOC, secrets | _à renseigner_ | `security/*`, `attacks/` |
+| Cybersécurité | Red Team, WAF, SOC, secrets | Louis | `security/*`, `attacks/` |
 | Transformation | Gouvernance, risques, conformité | _à renseigner_ | `docs/ebios-rm.md`, `docs/pca-pra.md`, `docs/nis2-dora.md` |
 
 > Une personne peut couvrir plusieurs domaines ; un domaine peut mobiliser plusieurs personnes (cf. sujet §3). Ce qui compte : une **contribution identifiable** par membre (traçable dans les commits et ici).
@@ -75,7 +75,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | Alertmanager → webhook remédiation | `infra/alertmanager` | R7 | — | ✅ | alertmanager.yml |
 | Règles SOC Loki/Grafana | `infra/grafana`, `infra/loki` | R12 | — | ✅ | soc-rules.yml |
 | Dashboard (états, score, timeline, MTTD/MTTR, SSE) | `dashboard/` | R4,R20 | — | ✅ | CDC+README+src+tests |
-| Scénarios d'attaque v1 (depuis PC Attaquant) | `attacks/` | R10 | — | ✅ | 4 scénarios (4 tests contrat) |
+| Scénarios d'attaque v1 (depuis PC Attaquant) | `attacks/` | R10 | Louis | ✅ | 4 scénarios (4 tests contrat) ; validateur + tests revérifiés ; runbook PC Attaquant |
 | RAG : indexation docs + journal, UI onglet | `assistant/` | R9 | — | ✅ | 97 tests verts |
 
 ## J4 — Jeudi : recette, chaos, clip, gel du code (17h)
