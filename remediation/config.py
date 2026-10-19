@@ -60,8 +60,10 @@ class Settings:
     verify_retries: int = 5  # la plateforme met du temps à redevenir saine
     verify_interval_s: float = 3.0
     action_timeout_s: float = 300.0
-    # --- Ansible (opérations WAF / restauration) ---
-    ansible_private_data_dir: str = "/opt/ansible"
+    # --- Ansible (opérations WAF / restauration), exécuté DANS le conteneur ---
+    ansible_private_data_dir: str = "/tmp/ansible-runner"  # artefacts (inscriptible)
+    ansible_project_dir: str = "/opt/ansible/project"  # playbooks (lecture seule)
+    waf_service: str = "waf"  # service Compose rechargé (SIGHUP) après mise à jour de la deny-list
     # --- Garde-fous ---
     dry_run: bool = False  # REMEDIATION_DRY_RUN : peut seulement FORCER le dry-run
     never_block_ips: tuple[str, ...] = ("127.0.0.1", "::1", "192.168.137.1")
@@ -94,6 +96,8 @@ class Settings:
             verify_interval_s=float(e.get("VERIFY_INTERVAL_S", d.verify_interval_s)),
             action_timeout_s=float(e.get("ACTION_TIMEOUT_S", d.action_timeout_s)),
             ansible_private_data_dir=e.get("ANSIBLE_PRIVATE_DATA_DIR", d.ansible_private_data_dir),
+            ansible_project_dir=e.get("ANSIBLE_PROJECT_DIR", d.ansible_project_dir),
+            waf_service=e.get("WAF_SERVICE", d.waf_service),
             dry_run=_bool(e.get("REMEDIATION_DRY_RUN")),
             never_block_ips=_csv(e.get("NEVER_BLOCK_IPS"), d.never_block_ips),
             sse_keepalive_s=float(e.get("SSE_KEEPALIVE_S", d.sse_keepalive_s)),

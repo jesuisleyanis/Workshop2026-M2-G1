@@ -1,4 +1,5 @@
-"""Actions WAF : waf_block_ip, waf_blacklist_ip (écriture deny + reload via Ansible)
+"""Actions WAF : waf_block_ip, waf_blacklist_ip (écriture de la deny-list via le playbook
+Ansible `waf_deny_ip.yml`, puis rechargement à chaud du WAF via le docker-socket-proxy)
 et confirm_waf_block (lecture seule des logs)."""
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from typing import Any
 import httpx
 
 from actions.base import Action, ActionContext, ActionError, ActionParamError, ActionResult
+from actions.docker_proxy import DockerProxyError
 from actions.runner import PLAYBOOK_WAF_DENY
 
 
@@ -59,9 +61,20 @@ class _WafDeny(Action):
         )
         if not res.ok:
             raise ActionError(f"playbook {PLAYBOOK_WAF_DENY} en échec ({res.detail or res.rc})")
-        # Idempotent : le playbook (lineinfile) ne duplique pas l'entrée ; changed=False si déjà bloquée.
-        return ActionResult(ok=True, changed=res.changed, data={"ip": ip, "list": self.deny_list},
-                            detail=f"{ip} {'déjà bloquée' if res.changed is False else 'bloquée'} ({self.deny_list})")
+        # Idempotent : le playbook (lineinfile) ne duplique pas l'entrée ; changed=False si déjà bloquée,
+        # auquel cas Nginx n'a pas besoin d'être rechargé.
+        reloaded: list[str] = []
+        if res.changed is not False:
+            try:
+                reloaded = await ctx.docker.find_containers(ctx.settings.waf_service)
+                for cid in reloaded:
+                    await ctx.docker.reload(cid)  # SIGHUP = `nginx -s reload`, via le proxy
+            except DockerProxyError as exc:
+                raise ActionError(f"deny-list écrite mais rechargement du WAF impossible : {exc}") from exc
+        return ActionResult(ok=True, changed=res.changed,
+                            data={"ip": ip, "list": self.deny_list, "reloaded": [c[:12] for c in reloaded]},
+                            detail=f"{ip} {'déjà bloquée' if res.changed is False else 'bloquée'} ({self.deny_list})"
+                                   + (f", WAF rechargé ({len(reloaded)})" if reloaded else ""))
 
 
 class WafBlockIp(_WafDeny):

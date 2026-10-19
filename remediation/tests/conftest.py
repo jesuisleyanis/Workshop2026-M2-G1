@@ -95,6 +95,8 @@ class FakeNetwork:
                 return httpx.Response(200, json=[{"Id": f"cid-{svc}"}])
             if path.endswith("/restart"):
                 return httpx.Response(self.restart_status)
+            if path.endswith("/kill"):  # SIGHUP = reload WAF ; le proxy refuse tout autre signal
+                return httpx.Response(204 if request.url.params.get("signal") == "HUP" else 403)
             return httpx.Response(404)
         if host == "auth" and path == "/internal/tighten-rate-limit":
             return httpx.Response(self.auth_status, json={"ok": True})

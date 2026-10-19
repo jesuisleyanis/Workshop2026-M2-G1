@@ -93,7 +93,8 @@ async def test_verify_ok_after_first_action_skips_remaining_actions(make_env):
     env = make_env(verify=[True])
     sub = await env.run(make_event("service_flood"))
     assert env.action_types(sub.incident_id) == ["waf_block_ip"]  # pas de redémarrage inutile
-    assert env.net.docker_calls() == []
+    # Seul le rechargement à chaud du WAF (SIGHUP) est passé par le proxy : aucun restart.
+    assert env.net.docker_calls() == [("GET", "/containers/json"), ("POST", "/containers/cid-waf/kill")]
 
 
 async def test_failed_action_does_not_block_next_action(make_env):

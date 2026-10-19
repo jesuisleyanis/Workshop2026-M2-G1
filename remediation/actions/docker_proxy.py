@@ -6,7 +6,9 @@ profondeur, ce client applique en plus sa propre liste blanche (méthode + chemi
 même un bug ou une injection dans le moteur ne peut pas émettre d'autre appel.
 
 Profil par défaut = RESTART SEUL : GET /_ping, GET /containers/json,
-GET /containers/{id}/json, POST /containers/{id}/restart.
+GET /containers/{id}/json, POST /containers/{id}/restart, et POST /containers/{id}/kill
+UNIQUEMENT avec `signal=HUP` (rechargement à chaud de Nginx/WAF ; jamais KILL/TERM —
+le proxy haproxy applique la même restriction sur le paramètre de requête).
 Le profil « recreate » (stop/rename/create/start/delete) n'est actif que si
 DOCKER_PROXY_ALLOW_RECREATE=true ET que le proxy a été élargi en conséquence.
 """
@@ -26,7 +28,10 @@ _BASE_ALLOWED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GET", re.compile(r"^/containers/json$")),
     ("GET", re.compile(rf"^/containers/{_ID}/json$")),
     ("POST", re.compile(rf"^/containers/{_ID}/restart$")),
+    ("POST", re.compile(rf"^/containers/{_ID}/kill$")),  # signal=HUP seulement (voir _call)
 )
+_KILL_RX = re.compile(rf"^/containers/{_ID}/kill$")
+_RELOAD_SIGNALS = frozenset({"HUP", "SIGHUP"})
 _RECREATE_ALLOWED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(rf"^/containers/{_ID}/stop$")),
     ("POST", re.compile(rf"^/containers/{_ID}/rename$")),
@@ -58,6 +63,8 @@ class DockerProxy:
     ) -> httpx.Response:
         if not any(m == method and rx.match(path) for m, rx in self._allowed):
             raise DockerProxyError(f"appel Docker non autorisé côté client : {method} {path}")
+        if _KILL_RX.match(path) and (params or {}).get("signal") not in _RELOAD_SIGNALS:
+            raise DockerProxyError("appel Docker non autorisé côté client : kill sans signal=HUP")
         try:
             resp = await self._http.request(
                 method, f"{self._base}{path}", params=params, json=json_body, timeout=30.0
@@ -86,6 +93,10 @@ class DockerProxy:
 
     async def restart(self, container_id: str, timeout_s: int = 10) -> None:
         await self._call("POST", f"/containers/{container_id}/restart", params={"t": str(timeout_s)})
+
+    async def reload(self, container_id: str) -> None:
+        """Rechargement à chaud (SIGHUP au processus principal, ex. `nginx -s reload`)."""
+        await self._call("POST", f"/containers/{container_id}/kill", params={"signal": "HUP"}, ok=(204,))
 
     async def inspect(self, container_id: str) -> dict[str, Any]:
         return (await self._call("GET", f"/containers/{container_id}/json")).json()
