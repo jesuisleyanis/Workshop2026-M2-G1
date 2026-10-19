@@ -5,10 +5,12 @@ import tailwindcss from '@tailwindcss/vite'
 
 // Dev : le navigateur ouvre le flux SSE en same-origin sur /remediation/stream ; Vite
 // proxifie vers REMEDIATION_PROXY_TARGET (par défaut http://localhost:8005, ou le mock
-// `npm run mock`) en retirant le préfixe /remediation.
+// `npm run mock`) en retirant le préfixe /remediation. Idem /prometheus -> PROMETHEUS_PROXY_TARGET
+// (Prometheus réel sur :9090, ou le mock qui sert aussi /api/v1/query).
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '')
   const target = env.REMEDIATION_PROXY_TARGET || 'http://localhost:8005'
+  const prometheus = env.PROMETHEUS_PROXY_TARGET || 'http://localhost:9090'
   return {
     base: './',
     plugins: [react(), tailwindcss()],
@@ -21,6 +23,11 @@ export default defineConfig(({ mode }) => {
           target,
           changeOrigin: true,
           rewrite: (path: string) => path.replace(/^\/remediation/, ''),
+        },
+        '/prometheus': {
+          target: prometheus,
+          changeOrigin: true,
+          rewrite: (path: string) => path.replace(/^\/prometheus/, ''),
         },
       },
     },

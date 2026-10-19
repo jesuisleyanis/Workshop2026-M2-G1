@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { parseStreamMessage } from '../lib/parse'
-import { STREAM_EVENT_NAMES, type ConnectionStatus, type StreamMessage } from '../types/events'
+import { SSE_EVENT_NAMES, type ConnectionStatus, type StreamMessage } from '../types/events'
 
 /** Sous-ensemble d'EventSource utilisé (permet l'injection dans les tests). */
 export interface EventSourceLike {
@@ -41,7 +41,7 @@ export function useRemediationStream(url: string, handlers: Handlers, factory: E
       if (parsed.ok) ref.current.onMessage(parsed.value)
       else ref.current.onRejected()
     }
-    for (const name of STREAM_EVENT_NAMES) es.addEventListener(name, handle(name))
+    for (const name of SSE_EVENT_NAMES) es.addEventListener(name, handle(name))
     es.addEventListener('message', handle('message'))
 
     es.onopen = () => ref.current.onStatus('open')

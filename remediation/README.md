@@ -32,7 +32,7 @@ remediation/
 │   ├── ops.py              dry_run_report, notify_operator
 │   └── runner.py           Port Ansible (ansible-runner) + liste blanche de playbooks
 ├── proxy/
-│   └── haproxy.cfg         Config stricte (4 verbes) pour le docker-socket-proxy
+│   └── haproxy.cfg         Config stricte (5 couples méthode/chemin) pour le docker-socket-proxy
 ├── tests/                  pytest (voir « Tester »)
 ├── Dockerfile              Image durcie (multi-stage, non-root uid 10001)
 ├── Dockerfile.dockerignore
@@ -67,12 +67,12 @@ POST /events ──► main.py (auth Bearer) ──► engine.handle_event ─�
 - **`main.py`** : `create_app(settings, table, services, http_transport)` assemble l'ensemble (injection pour les tests) ; `app_factory()` est le point d'entrée uvicorn (`--factory`) et quitte avec un message clair si la table est invalide. Gère : middleware (`X-Request-ID`, logs d'accès JSON, métriques HTTP), handlers d'erreur au format du contrat, dépendance d'authentification `require_token` (Bearer, `hmac.compare_digest`, fail closed), `lifespan` (marque les incidents orphelins `interrupted` au démarrage, annule les tâches à l'arrêt). `/docs`, `/redoc`, `/openapi.json` sont désactivés.
 - **`engine.py`** : `RemediationEngine`. `handle_event` fait l'admission (rejeu d'`event_id`, doublon de clé `incident_type:service`, cooldown), crée l'incident et lance `_run` en tâche de fond. `_remediate` boucle sur `max_attempts` (avec attente du cooldown entre tentatives) ; `_attempt` exécute les actions de la règle dans l'ordre et vérifie après chaque action mutante réussie et après la dernière ; `_execute` gère le dry-run (plan seulement pour une action mutante), le verrou `_action_lock` (une action mutante à la fois), le timeout, la métrique `remediation_actions_total`, les gauges MTTD/MTTR (bornées à 20 incidents), le journal et la timeline ; `_verify` rejoue `verify_tx` jusqu'à `VERIFY_RETRIES` fois ; `_close`, `_finish_dry_run`, `_escalate` produisent les trois issues. Les dépendances externes sont regroupées dans `Services` (http, docker, runner, verifier) pour être mockées.
 - **`decision.py`** : modèles Pydantic stricts (`extra="forbid"`) de la table (`DecisionTable`, `Defaults`, `Rule`, `ActionSpec`) ; `load_decision_table` (`yaml.safe_load`). La validation vérifie : version `1.0`, une règle exacte par `IncidentType` (ni doublon, ni manquant), actions connues et paramètres valides, escalade non mutante, et les invariants de sécurité (`data_corruption` contient `restore_pg_dump` et jamais `restart/recreate` ; `restore_pg_dump` réservé à `data_corruption` ; `unknown` sans action mutante). Erreur → `DecisionTableError`.
-- **`actions/`** : une action = `type`, `params` (issus de la table), `mutating`, `check_params` (validation au chargement ET à l'exécution), `execute`, `plan` (dry-run). `docker_proxy.py` n'autorise que `GET /_ping`, `GET /containers/json`, `GET /containers/{id}/json`, `POST /containers/{id}/restart` (+ stop/rename/create/start/DELETE si `DOCKER_PROXY_ALLOW_RECREATE`). `waf.py` résout l'IP (`source_ip` de l'événement), refuse les IP protégées (`NEVER_BLOCK_IPS`, loopback…) et passe par le playbook `waf_deny_ip.yml`. `runner.py` n'accepte que `waf_deny_ip.yml` et `pg_restore.yml`. `ops.py` : `dry_run_report` (journalisation) et `notify_operator` (log `remediation_failed` + webhook optionnel).
+- **`actions/`** : une action = `type`, `params` (issus de la table), `mutating`, `check_params` (validation au chargement ET à l'exécution), `execute`, `plan` (dry-run). `docker_proxy.py` n'autorise que `GET /_ping`, `GET /containers/json`, `GET /containers/{id}/json`, `POST /containers/{id}/restart` et `POST /containers/{id}/kill?signal=HUP` (`reload()`, tout autre signal refusé) (+ stop/rename/create/start/DELETE si `DOCKER_PROXY_ALLOW_RECREATE`). `waf.py` résout l'IP (`source_ip` de l'événement), refuse les IP protégées (`NEVER_BLOCK_IPS`, loopback…), écrit la deny-list via le playbook `waf_deny_ip.yml` puis, si elle a changé, recharge le WAF (SIGHUP via le proxy). `runner.py` n'accepte que `waf_deny_ip.yml` et `pg_restore.yml`, exécutés **dans le conteneur** (`hosts: localhost`) depuis `ANSIBLE_PROJECT_DIR` (lecture seule), artefacts dans `ANSIBLE_PRIVATE_DATA_DIR` (tmpfs). `ops.py` : `dry_run_report` (journalisation) et `notify_operator` (log `remediation_failed` + webhook optionnel).
 - **`journal.py`** : SQLite (`INCIDENTS_DB`), accès protégé par verrou. Tables `incidents`, `actions`, `verifications`, `timeline`. Fournit l'idempotence (`incident_for_event`), le cooldown (`last_action_at`), la reprise après redémarrage (`recover_orphans`) et le rejeu de timeline (`timeline_since`, `latest_timeline_id`). Statuts : `in_progress`, puis `closed | escalated | dry_run | interrupted`.
 - **`timeline.py`** : `Broker` (file `asyncio.Queue` de 1000 par abonné ; un abonné trop lent est déconnecté et se reconnecte), `frame()` (trame SSE), `sse_stream()` (abonnement *avant* le rejeu, donc sans trou ni doublon ; commentaire `: keepalive` si inactif).
 - **`verify.py`** : `ScriptVerifier` lance `VERIFY_TX_PATH` sans shell, avec timeout (`VERIFY_TIMEOUT_S`) ; exit 0 = OK ; renvoie `VerifyResult(ok, rc, detail)` (dernière ligne de sortie, 200 caractères max).
 - **`models.py`** : `IncomingEvent` = `AnomalyEvent` (`resilience_common`) + `source_ip` optionnel (une IP littérale) ; champs inconnus ignorés.
-- **`http_metrics.py`** : `resilience_http_requests_total{service,method,path,status}` et `resilience_http_request_duration_seconds{service,method,path}` (chemin = gabarit de route, cardinalité bornée).
+- **`http_metrics.py`** : `resilience_http_requests_total{service,method,path,status}` et `resilience_http_request_duration_seconds{service,method,path}` (chemin = gabarit de route, cardinalité bornée). Les compteurs sont **ceux de `resilience_common.metrics`** (pas de redéclaration : une double déclaration fait crasher le boot avec `DuplicateTimeseries`).
 
 ## Endpoints
 
@@ -139,7 +139,13 @@ Lues par `config.py` (`Settings.from_env`). **Aucun secret n'a de valeur par dé
 | `VERIFY_RETRIES` | `5` | Essais de `verify_tx` après une action (min. 1). |
 | `VERIFY_INTERVAL_S` | `3` | Pause entre deux essais. |
 | `ACTION_TIMEOUT_S` | `300` | Timeout d'une action. |
-| `ANSIBLE_PRIVATE_DATA_DIR` | `/opt/ansible` | Répertoire ansible-runner (playbooks sous `project/`). |
+| `ANSIBLE_PROJECT_DIR` | `/opt/ansible/project` | Playbooks de remédiation (copie de `infra/ansible/playbooks/remediation/`, lecture seule). |
+| `ANSIBLE_PRIVATE_DATA_DIR` | `/tmp/ansible-runner` | Artefacts ansible-runner (inscriptible, tmpfs ; créé au premier usage). |
+| `WAF_SERVICE` | `waf` | Service Compose rechargé (SIGHUP) après mise à jour de la deny-list. |
+| `WAF_DENY_FILE` | `/etc/resilience/waf-deny/blocked_ips.conf` | Deny-list partagée (volume `waf-deny`), lue par `waf_deny_ip.yml`. |
+| `PG_BACKUP_DIR` | `/opt/backups` | Dumps sains (montage `infra/ansible/backups` en lecture seule), lus par `pg_restore.yml`. |
+| `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | `postgres` / `5432` / `resilience` / `resilience` / — | Connexion de `pg_restore.yml` (réseau `data`). |
+| `BASE_URL`, `VERIFY_USER`, `VERIFY_PASSWORD`… | voir `scripts/README.md` | Variables lues par `verify_tx` (en stack : `BASE_URL=https://waf`, `VERIFY_PASSWORD=${SEED_PASSWORD}`). |
 | `REMEDIATION_DRY_RUN` | `false` | Force le dry-run (ne peut jamais le désactiver s'il est actif dans la table). Valeurs vraies : `1`, `true`, `yes`, `on`. |
 | `NEVER_BLOCK_IPS` | `127.0.0.1,::1,192.168.137.1` | IP jamais bloquées (CSV). |
 | `SSE_KEEPALIVE_S` | `15` | Intervalle des keepalive SSE. |
@@ -152,7 +158,7 @@ Les logs sont produits par `resilience_common.get_logger("remediation")` (JSON, 
 
 ### En local (développement)
 
-Depuis la racine du dépôt (`/Users/yanis/EPSI/M2/workshop`) :
+Depuis la racine du dépôt :
 
 ```bash
 cd remediation
@@ -172,13 +178,25 @@ Hors stack Docker, `/ready` renverra `503` tant que le docker-socket-proxy n'est
 
 ### En conteneur
 
-Le service `remediation` est défini dans `infra/compose/docker-compose.yml` (réseau `app` uniquement, aucun `ports:`), derrière `docker-socket-proxy`. Image construite avec le contexte à la **racine du dépôt** (la lib partagée y est copiée) :
+Le service `remediation` est défini dans `infra/compose/docker-compose.yml` (réseaux `app` + `data`, aucun `ports:`, jamais `edge`), derrière `docker-socket-proxy`. Image construite avec le contexte à la **racine du dépôt** (la lib partagée, `scripts/verify_tx` et les playbooks y sont copiés) :
 
 ```bash
 docker build -f remediation/Dockerfile -t resilience/remediation .
 ```
 
-L'image tourne en non-root (uid 10001), n'embarque que le code, `decision_table.yml` et `actions/`, expose 8005 et a un `HEALTHCHECK` sur `/health`. Le point d'entrée est `uvicorn --factory main:app_factory`. En stack : `make up`.
+L'image tourne en non-root (uid 10001), expose 8005 et a un `HEALTHCHECK` sur `/health`. Le point d'entrée est `uvicorn --factory main:app_factory`. En stack : `make up`.
+
+### Plan d'exécution embarqué (tout dans le conteneur, jamais `docker exec`)
+
+| Besoin | Mécanisme | Câblage Compose |
+|---|---|---|
+| Prouver la reprise | `/opt/scripts/verify_tx` (copie de `scripts/verify_tx`), rejoué **à travers le WAF** | `BASE_URL=https://waf`, `VERIFY_PASSWORD=${SEED_PASSWORD}` (réseau `app`) |
+| `waf_block_ip` / `waf_blacklist_ip` | playbook `waf_deny_ip.yml` (`hosts: localhost`) écrit la deny-list, puis le moteur envoie SIGHUP au conteneur `waf` via le proxy | volume `waf-deny` monté rw (`/etc/resilience/waf-deny`), `group_add: ["101"]` (groupe nginx) |
+| `restore_pg_dump` | playbook `pg_restore.yml` : purge des tables `*__corrupted`, `pg_restore --clean --if-exists --no-owner`, contrôle `SELECT count(*)` | réseau `data`, `POSTGRES_*`, client Postgres 16 dans l'image, `infra/ansible/backups` monté en lecture seule sur `/opt/backups` (dump produit par `playbooks/pg_backup.yml` côté hôte) |
+| `restart_service` | `POST /containers/{id}/restart` via `docker-socket-proxy` | — |
+| Artefacts ansible-runner | `/tmp/ansible-runner` (tmpfs) | `tmpfs: ["/tmp"]` |
+
+Détail du modèle et des playbooks : [`../infra/ansible/README.md`](../infra/ansible/README.md).
 
 ## Tester
 
@@ -187,7 +205,7 @@ Les tests mockent tout l'extérieur (proxy Docker, Ansible, `verify_tx`, HTTP, h
 ```bash
 cd remediation
 python3.12 -m venv .venv && source .venv/bin/activate
-pip install -e /Users/yanis/EPSI/M2/workshop/libs/python/resilience_common
+pip install -e ../libs/python/resilience_common
 pip install -r requirements-dev.txt
 pytest -q
 ```
@@ -198,7 +216,8 @@ pytest -q
 |---|---|
 | `tests/test_decision_table.py` | Chargement/validation de la table, invariants disponibilité vs corruption, `unknown` sans action destructive, paramètres dangereux. |
 | `tests/test_engine.py` | Séquences par type, vérification/MTTD/MTTR, cooldown, dédoublonnage, idempotence, `max_attempts`/escalade, dry-run, IP protégées, liste blanche de services, logs et métriques du contrat, couverture de la timeline. |
-| `tests/test_actions.py` | Catalogue d'actions, liste blanche du client Docker, recreate + rollback, `tighten_rate_limit`, `confirm_waf_block`, `notify_operator`, validation des paramètres, liste blanche de playbooks, contrat de `verify_tx`, reprise des incidents orphelins. |
+| `tests/test_actions.py` | Catalogue d'actions, liste blanche du client Docker (dont `kill` limité à `signal=HUP`), `waf_block_ip` (playbook + reload seulement si changé, échec explicite si le proxy refuse), recreate + rollback, `tighten_rate_limit`, `confirm_waf_block`, `notify_operator`, validation des paramètres, liste blanche de playbooks, contrat de `verify_tx`, reprise des incidents orphelins. |
+| `tests/test_playbooks.py` | Contrat moteur ↔ playbooks (`hosts: localhost`, extravars déclarées, jamais `docker exec`), `--syntax-check` de tous les playbooks, **exécution réelle** de `waf_deny_ip.yml` par ansible-runner (deny-list écrite, idempotence, IP invalide refusée). |
 | `tests/test_api.py` | Authentification (401, token en query refusé, fail closed), `POST /events` bout en bout, erreurs au format du contrat, `/incidents`, `/decision-table`, `/stream` avec `Last-Event-ID`, sondes, `/metrics`. |
 | `tests/test_sse.py` | Flux SSE en direct après rejeu, keepalive, format de trame. |
 | `tests/conftest.py`, `tests/broker_helpers.py` | Faux horloge, vérificateur, runner Ansible, réseau ; capture de logs. |

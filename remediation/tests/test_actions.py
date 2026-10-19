@@ -53,6 +53,45 @@ async def test_proxy_client_only_allows_restart_verbs_by_default():
     assert len(net.docker_calls()) == 1  # rien d'autre n'est parti sur le réseau
 
 
+async def test_proxy_client_allows_kill_only_with_sighup():
+    net = FakeNetwork()
+    docker = DockerProxy(client(net), "http://docker-socket-proxy:2375")
+    await docker.reload("cid-waf")
+    assert net.docker_calls() == [("POST", "/containers/cid-waf/kill")]
+    assert net.requests[-1].url.params["signal"] == "HUP"
+    for params in (None, {"signal": "KILL"}, {"signal": "TERM"}):
+        with pytest.raises(DockerProxyError, match="signal=HUP"):
+            await docker._call("POST", "/containers/cid-waf/kill", params=params)
+    assert len(net.docker_calls()) == 1
+
+
+async def test_waf_block_ip_runs_playbook_then_reloads_waf_only_when_changed():
+    net = FakeNetwork()
+    ctx = ctx_for(client(net), event=make_event(source_ip="203.0.113.9"))
+    res = await build_action("waf_block_ip", {"source": "from_event"}).execute(ctx)
+    assert res.ok and res.changed is True
+    assert ctx.runner.calls == [("waf_deny_ip.yml", {"deny_ip": "203.0.113.9", "deny_list": "temporary",
+                                                     "incident_id": "inc-1"})]
+    assert net.docker_calls() == [("GET", "/containers/json"), ("POST", "/containers/cid-waf/kill")]
+    assert res.data["reloaded"] == ["cid-waf"]
+
+    # IP déjà présente : playbook changed=False -> pas de rechargement inutile du WAF.
+    net2 = FakeNetwork()
+    ctx2 = ctx_for(client(net2), event=make_event(source_ip="203.0.113.9"))
+    ctx2.runner.changed = False
+    res2 = await build_action("waf_blacklist_ip", {"source": "from_event"}).execute(ctx2)
+    assert res2.ok and res2.changed is False and "déjà bloquée" in res2.detail
+    assert net2.docker_calls() == [] and ctx2.runner.calls[0][1]["deny_list"] == "permanent"
+
+    # Deny-list écrite mais proxy en échec : l'action échoue explicitement (pas de faux succès).
+    net3 = FakeNetwork()
+    net3.handler_orig = net3.handler
+    net3.handler = lambda r: httpx.Response(500) if r.url.path.endswith("/kill") else net3.handler_orig(r)
+    with pytest.raises(ActionError, match="rechargement du WAF impossible"):
+        await build_action("waf_block_ip", {"source": "from_event"}).execute(
+            ctx_for(client(net3), event=make_event(source_ip="203.0.113.9")))
+
+
 async def test_recreate_is_disabled_without_wider_proxy_profile():
     net = FakeNetwork()
     ctx = ctx_for(client(net))

@@ -24,6 +24,7 @@ COPY --from=build --chown=nginx:nginx /app/dist /usr/share/nginx/html
 
 ENV REMEDIATION_UPSTREAM=remediation:8005 \
     REMEDIATION_AUTH_HEADER="" \
+    PROMETHEUS_UPSTREAM=prometheus:9090 \
     DNS_RESOLVER=127.0.0.11
 
 USER nginx

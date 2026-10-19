@@ -16,6 +16,7 @@
 | `POSTGRES_PASSWORD` | mot de passe DB | postgres, payment-api, auth |
 | `REMEDIATION_TOKEN` | auth de `POST /events` | detector → remediation |
 | `INTERNAL_TOKEN` | auth de `/internal/*` | remediation → auth |
+| `SEED_PASSWORD` | mot de passe des comptes fictifs du seed | `make seed`, `scripts/verify_tx`, remediation (verify) |
 
 ## Mise en place (une fois par poste)
 

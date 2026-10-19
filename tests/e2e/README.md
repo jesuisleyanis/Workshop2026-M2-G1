@@ -4,7 +4,7 @@ Rejouent la chaîne complète **avant → attaque → détection → remédiatio
 
 ```bash
 make up            # lève la stack (profil demo)
-make seed          # données fictives
+make seed          # données fictives (SEED_PASSWORD depuis .env, cf. scripts/README.md)
 RESILIENCE_E2E=1 pytest tests/e2e -q
 ```
 
@@ -26,6 +26,7 @@ Désactivés par défaut (sautés) pour ne pas dépendre de Docker dans la suite
 |---|---|---|
 | `RESILIENCE_E2E=1` | active les tests e2e | désactivé |
 | `BASE_URL` | point d'entrée (WAF) | `https://localhost` |
+| `SEED_PASSWORD` (ou `VERIFY_PASSWORD`) | mot de passe du jeu fictif, requis par `verify_tx` (`set -a; . .env`) | — |
 | `REMEDIATION_BASE` + `REMEDIATION_TOKEN` | *(optionnel)* interroge `GET /incidents` du moteur pour **prouver qu'un incident du bon type a été clos** (`status="closed"`). Sans ces variables, la preuve repose sur `verify_tx`. | non renseigné |
 
 Chaque scénario de `attacks/scenarios/` est rejoué et doit se solder par un `verify_tx` OK **sans intervention humaine** — c'est la preuve attendue par le jury (Axe 1).

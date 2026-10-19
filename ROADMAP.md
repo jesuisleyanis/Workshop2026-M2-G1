@@ -24,8 +24,8 @@ Phase 0  Socle            [#########.]  90%   squelette, contrats, .claude, comp
 Phase 1  Plateforme       [########..]  85%   auth+payment+front livrés et testés
 Phase 2  Infra & observ.  [########..]  85%   configs Prom/Loki/Grafana/Alert/Ansible OK
 Phase 3  Détection ML     [#########.]  90%   collector/training/detector OK (50 tests)
-Phase 4  Remédiation      [######....]  60%   code + CDC + README ; câblage à réconcilier
-Phase 5  Dashboard        [########..]  85%   dashboard + front livrés (src+tests)
+Phase 4  Remédiation      [#########.]  90%   moteur + plan d'exécution câblés (91 tests) ; validation live à faire
+Phase 5  Dashboard        [#########.]  90%   dashboard branché sur le moteur réel + Prometheus ; validation live à faire
 Phase 6  Cyber & attaques [########..]  85%   WAF, SOPS, durcissement, 4 scénarios OK
 Phase 7  Assistant RAG    [#########.]  90%   RAG livré (97 tests)
 Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés à l'archi
@@ -57,9 +57,9 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | auth : login/register, JWT, bcrypt, rate-limit | `services/auth` | R1 | — | ✅ | 35 tests verts (métriques contrat §2) |
 | payment-api : comptes, transactions, health/ready, métriques | `services/payment-api` | R1,R2 | — | ✅ | 54 tests verts (+1 skip Postgres) |
 | front : login, solde, comptes, virement, historique | `services/front` | R1 | — | ✅ | CDC+README+src+tests ; contrat payment-api réaligné (centimes/ids) ; design « Banque Résilience » intégré (44 tests Vitest verts, lint+build OK, vérifié contre auth/payment-api locaux) |
-| seed + verify_tx | `scripts/` | R2 | — | ✅ | scripts/verify_tx, scripts/seed.py |
+| seed + verify_tx | `scripts/` | R2 | — | ✅ | **réalignés sur le contrat** (#4/#5) : `verify_tx` résout les ids de comptes via l'API et poste `TransactionIn` (3 entiers) ; seed unique = `resilience_db.seed` (comptes financés, `SEED_PASSWORD` SOPS), `scripts/seed.py` délègue ; 11 tests `scripts/tests` verts ; `scripts/README.md` |
 | Observabilité provisionnée (Prom/Loki/Grafana/Alert) | `infra/*` | R7 | — | ✅ | configs + provisioning |
-| WAF Nginx+ModSec+CRS devant le front | `security/waf` | R11 | — | ⚠️ | nginx.conf + waf_exporter (5 tests) ; **bloquant : pas de `Dockerfile` → `make up` échoue** ; upstream `front:80` alors que le conteneur front écoute `:8080` |
+| WAF Nginx+ModSec+CRS devant le front | `security/waf` | R11 | — | 🟨 | `Dockerfile` ajouté (#6 : image CRS épinglée, non-root 8080/8443, TLS auto-signé au build) ; upstream corrigé `front:8080` (#7) ; healthcheck compose valide ; 14 tests (exporter + contrat de config) verts. **Reste : build + smoke live (`make up`) sur une machine avec Docker** |
 | Durcissement conteneurs (non-root, cap_drop, read_only) | `security/hardening` | R14 | Louis | ✅ | hardening.md + audit.sh **enrichi** (7 contrôles : +exposition réseau WAF-only, +ancre durcissement, +data interne) — exit 0 |
 | collector (features) + training (IsolationForest) | `ml/collector`, `ml/training` | R8 | — | ✅ | 50 tests ML verts |
 | EBIOS v2 + début NIS2/DORA | `docs/` | R16,R18 | — | ✅ | ebios-rm.md, nis2-dora.md |
@@ -69,12 +69,12 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | Tâche | Composant | Réf. | Propriétaire | Statut | Preuve |
 |---|---|---|---|---|---|
 | detector : score temps réel + émission événement | `ml/detector` | R8 | — | ✅ | detector tests (AnomalyEvent validé) |
-| Moteur de remédiation + table de décision | `remediation/` | R3,R15 | — | 🟨 | code + CDC + README présents (~40 tests, non relancés) ; câblage à réconcilier |
-| docker-socket-proxy + API authentifiée | `remediation/`, `infra/compose` | R15 | — | ✅ | haproxy strict câblé + Bearer statique (ADR 0002) |
-| Playbooks Ansible (deploy + remédiation) | `infra/ansible` | R6 | — | ✅ | deploy, block_ip, restore_pg_dump |
+| Moteur de remédiation + table de décision | `remediation/` | R3,R15 | — | ✅ | 91 tests verts (dont exécution réelle du playbook WAF par ansible-runner) ; boot corrigé (#3) ; **plan d'exécution câblé au conteneur** (#8) : `verify_tx` + playbooks embarqués, exécution in-container (`hosts: localhost`), deny-list WAF en volume partagé + reload SIGHUP via le proxy (5e couple), `pg_restore` en direct sur le réseau `data` (client PG 16, dumps ro), variables alignées, inventaire portable. Reste : validation live `make up` (pas de Docker sur le poste de dev) |
+| docker-socket-proxy + API authentifiée | `remediation/`, `infra/compose` | R15 | — | ✅ | haproxy strict câblé (5 couples, `kill` limité à `signal=HUP`) + Bearer statique (ADR 0002) |
+| Playbooks Ansible (deploy + remédiation) | `infra/ansible` | R6 | — | ✅ | opérateur : deploy, pg_backup, db_corrupt_fake (hôte) ; automate : `playbooks/remediation/{waf_deny_ip,pg_restore}.yml` (in-container) ; `--syntax-check` + run réel en tests ; `infra/ansible/README.md` |
 | Alertmanager → webhook remédiation | `infra/alertmanager` | R7 | — | ✅ | alertmanager.yml |
 | Règles SOC Loki/Grafana | `infra/grafana`, `infra/loki` | Louis | 🟨 | 4 règles (couvre les 4 incident_type) corrigées (uid datasource, reduce, +data_corruption) ; 5 tests contrat verts. **Routage→remédiation ouvert** : endpoint `/events/alertmanager` absent côté moteur + wiring Prometheus/Alertmanager manquant (voir README-SOC.md) |
-| Dashboard (états, score, timeline, MTTD/MTTR, SSE) | `dashboard/` | R4,R20 | — | ✅ | CDC+README+src+tests ; design « ZTR Supervision » (courbe 2 min/service, actions, playbooks, preuves, simulation locale) — 99 tests verts, vérifié contre le mock |
+| Dashboard (états, score, timeline, MTTD/MTTR, SSE) | `dashboard/` | R4,R20 | — | ✅ | CDC+README+src+tests ; design « ZTR Supervision » ; **branché sur l'enveloppe réelle du moteur** (#9 : adaptateur `event: timeline` → kinds internes, testé sur des trames capturées sur le moteur, aucune trame droppée), score/santé lus dans Prometheus via proxy nginx same-origin (`/prometheus/api/v1/query`, GET seul), compose corrigé (variables runtime, Bearer SOPS, healthcheck) — 121 tests verts, build OK, mock aligné |
 | Scénarios d'attaque v1 (depuis PC Attaquant) | `attacks/` | R10 | Louis | ✅ | 4 scénarios ; validateur + runbook PC Attaquant ; déclencheur `data_corruption` (pg_backup + db_corrupt_fake réversible) — 10 tests contrat verts |
 | RAG : indexation docs + journal, UI onglet | `assistant/` | R9 | — | ✅ | 97 tests verts |
 
@@ -116,7 +116,7 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 |---|---|---|---|
 | I1 | Proxy Docker | **haproxy** retenu (liste blanche stricte 4 chemins) ; tecnativa retiré ; câblé dans compose | ADR 0002 maj, `docker-compose.yml` |
 | I2 | Variable verify_tx | compose aligné sur `VERIFY_TX_PATH` | `docker-compose.yml` |
-| I3 | Noms de playbooks | `block_ip.yml`→`waf_deny_ip.yml`, `restore_pg_dump.yml`→`pg_restore.yml` | `infra/ansible/playbooks/` |
+| I3 | Noms de playbooks | `block_ip.yml`→`waf_deny_ip.yml`, `restore_pg_dump.yml`→`pg_restore.yml` ; déplacés dans `playbooks/remediation/` (exécution in-container, #8) | `infra/ansible/playbooks/remediation/` |
 | I4 | Auth moteur | **Bearer statique interne** acté (service non exposé) | `contracts.md §API`, ADR 0002 |
 | I5 | Métriques HTTP lib | `instrument()` réécrit (middleware) → `resilience_http_requests_total{service,method,path,status}` ; `xfail` retirés ; conftests nettoyés | auth 35/35, payment-api 54/54 |
 

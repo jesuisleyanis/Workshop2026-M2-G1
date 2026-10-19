@@ -2,20 +2,28 @@
 
 Seuls des playbooks NOMMÉS ici peuvent être lancés : ni le nom du playbook ni ses
 variables ne viennent de l'événement entrant (pas d'exécution arbitraire).
-Les playbooks vivent dans infra/ansible/playbooks et sont montés en lecture seule sous
-`<ANSIBLE_PRIVATE_DATA_DIR>/project/`. Contrat attendu (à implémenter côté infra) :
+
+Modèle d'exécution : les playbooks tournent DANS le conteneur du moteur (`hosts: localhost`,
+connexion locale), jamais sur l'hôte et jamais via `docker exec`. Ils sont copiés au build
+depuis infra/ansible/playbooks/remediation/ vers `ANSIBLE_PROJECT_DIR` (lecture seule) ;
+ansible-runner écrit ses artefacts dans `ANSIBLE_PRIVATE_DATA_DIR` (tmpfs). Contrat :
 
   waf_deny_ip.yml   extravars: deny_ip, deny_list (temporary|permanent), incident_id
-                    -> écrit l'IP dans le fichier de deny (idempotent : lineinfile)
-                       puis `nginx -s reload`. `changed=false` si déjà présente.
+                    -> ajoute "<ip> 1;" dans la deny-list partagée avec le WAF (volume
+                       `waf-deny`, idempotent : lineinfile). `changed=false` si déjà présente.
+                       Le rechargement de Nginx est fait par l'action (SIGHUP via le proxy).
   pg_restore.yml    extravars: backup ("latest" | nom de dump), incident_id
-                    -> pg_restore du dump planifié (réseau data).
+                    -> pg_restore du dump sain (PG_BACKUP_DIR, lecture seule) vers Postgres
+                       via le réseau `data`, puis contrôle local des tables restaurées.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 PLAYBOOK_WAF_DENY = "waf_deny_ip.yml"
@@ -40,8 +48,9 @@ class AnsibleRunnerPort(Protocol):
 class AnsibleRunnerAdapter:
     """Implémentation réelle basée sur ansible-runner (import paresseux)."""
 
-    def __init__(self, private_data_dir: str) -> None:
+    def __init__(self, private_data_dir: str, project_dir: str | None = None) -> None:
         self.private_data_dir = private_data_dir
+        self.project_dir = project_dir
 
     async def run_playbook(
         self, playbook: str, extravars: dict[str, Any], timeout: float | None = None
@@ -52,11 +61,17 @@ class AnsibleRunnerAdapter:
         def _run() -> RunnerResult:
             import ansible_runner  # noqa: PLC0415 — lourd, chargé seulement si utilisé
 
+            os.makedirs(self.private_data_dir, exist_ok=True)  # tmpfs vide au démarrage du conteneur
+            # ansible-playbook du même environnement Python que le moteur (venv de l'image).
+            path = f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}"
             r = ansible_runner.run(
                 private_data_dir=self.private_data_dir,
+                project_dir=self.project_dir,
                 playbook=playbook,
                 extravars=extravars,
+                envvars={"PATH": path},
                 quiet=True,
+                rotate_artifacts=5,  # tmpfs : ne pas accumuler les artefacts
                 timeout=int(timeout) if timeout else None,
             )
             stats = getattr(r, "stats", None) or {}

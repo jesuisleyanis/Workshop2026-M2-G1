@@ -3,6 +3,8 @@
 
 COMPOSE := docker compose -f infra/compose/docker-compose.yml
 ROOT    := $(shell pwd)
+# Charge .env (produit par `make decrypt`) dans l'environnement d'une cible : SEED_PASSWORD, tokens...
+LOADENV := set -a; [ -f .env ] && . ./.env; set +a;
 
 .PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt
 
@@ -21,14 +23,14 @@ up-full: decrypt ## Lève la stack complète (observabilité + full)
 down: ## Arrête et nettoie la stack
 	$(COMPOSE) --profile demo --profile full --profile attack --profile ai down
 
-seed: ## Peuple les données fictives
-	python3 scripts/seed.py
+seed: ## Peuple les données fictives (resilience_db.seed, via le conteneur payment-api)
+	@$(LOADENV) python3 scripts/seed.py
 
 verify: ## Transaction de contrôle (exit 0 = OK)
-	@python3 scripts/verify_tx
+	@$(LOADENV) python3 scripts/verify_tx
 
 demo: ## Joue les 5 temps de la démo (SC=<scenario>)
-	scripts/demo.sh $(or $(SC),service_flood)
+	@$(LOADENV) scripts/demo.sh $(or $(SC),service_flood)
 
 attack: ## Lance un scénario de test (SC=<scenario>) — dev uniquement
 	attacks/run.sh $(or $(SC),service_flood)
@@ -48,12 +50,12 @@ package: ## Construit l'archive Code.zip du rendu
 # ---- Tests : chaque composant teste son périmètre -------------------------------
 test: test-py test-front ## Lance tous les tests
 
-test-py: ## Tests Python (lib partagée + services + ml + remediation + cyber)
+test-py: ## Tests Python (lib partagée + services + ml + remediation + cyber + scripts)
 	@echo "== Tests Python =="
 	@python3 -m pytest -q \
 	  libs/python/resilience_common \
 	  services ml remediation assistant \
-	  security/waf/tests attacks/tests 2>/dev/null || \
+	  security/waf/tests attacks/tests scripts/tests 2>/dev/null || \
 	  echo "(certains composants nécessitent leur venv — voir leur README)"
 
 test-front: ## Tests front (front + dashboard)

@@ -1,0 +1,37 @@
+---
+# Remédiation : blocage d'une IP source au niveau du WAF (actions waf_block_ip / waf_blacklist_ip).
+#
+# Exécuté PAR LE MOTEUR, DANS SON CONTENEUR (ansible-runner, hosts: localhost) — jamais sur
+# l'hôte, jamais via `docker exec`. La deny-list est un volume partagé avec le WAF
+# (`waf-deny`, monté en rw ici et dans le conteneur waf). Le rechargement à chaud de Nginx
+# n'est pas fait ici : l'action Python envoie SIGHUP au conteneur waf via le docker-socket-proxy
+# (seul canal Docker du moteur), et uniquement si ce playbook a changé quelque chose.
+#
+# Extravars (actions/waf.py) : deny_ip (IP littérale validée), deny_list (temporary|permanent),
+# incident_id. Idempotent : lineinfile -> changed=false si l'IP est déjà présente.
+- name: Bloquer une IP au WAF (deny-list partagée)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    deny_ip: ""
+    deny_list: temporary
+    incident_id: ""
+    deny_file: "{{ lookup('env', 'WAF_DENY_FILE') | default('/etc/resilience/waf-deny/blocked_ips.conf', true) }}"
+  tasks:
+    - name: Vérifier les paramètres fournis par le moteur
+      ansible.builtin.assert:
+        that:
+          - deny_ip | length > 0
+          - deny_ip is match('^[0-9a-fA-F:.]+$')
+          - deny_list in ['temporary', 'permanent']
+        fail_msg: "IP invalide/absente ou liste inconnue"
+
+    - name: Ajouter l'IP à la deny-list (format geo nginx, idempotent)
+      ansible.builtin.lineinfile:
+        path: "{{ deny_file }}"
+        line: "{{ deny_ip }} 1;"
+        regexp: "^{{ deny_ip | regex_escape }} "
+        create: true
+        mode: "0644"

@@ -1,0 +1,106 @@
+---
+# Remédiation : restauration du dernier dump Postgres sain (action restore_pg_dump).
+# Réponse à data_corruption — CORRECTION de données, distincte d'un simple redémarrage.
+#
+# Exécuté PAR LE MOTEUR, DANS SON CONTENEUR (ansible-runner, hosts: localhost) : le conteneur
+# remediation est rattaché au réseau interne `data`, embarque le client Postgres 16 et monte
+# les dumps en lecture seule (PG_BACKUP_DIR, produits par playbooks/pg_backup.yml côté hôte).
+# Aucun `docker exec`, aucun accès au socket Docker.
+#
+# Extravars (actions/postgres.py) : backup ("latest" | nom de fichier simple), incident_id.
+- name: Restaurer la base depuis le dernier dump sain
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    backup: latest
+    incident_id: ""
+    backup_dir: "{{ lookup('env', 'PG_BACKUP_DIR') | default('/opt/backups', true) }}"
+    db_host: "{{ lookup('env', 'POSTGRES_HOST') | default('postgres', true) }}"
+    db_port: "{{ lookup('env', 'POSTGRES_PORT') | default('5432', true) }}"
+    db_name: "{{ lookup('env', 'POSTGRES_DB') | default('resilience', true) }}"
+    db_user: "{{ lookup('env', 'POSTGRES_USER') | default('resilience', true) }}"
+    pg_env:
+      PGHOST: "{{ db_host }}"
+      PGPORT: "{{ db_port }}"
+      PGUSER: "{{ db_user }}"
+      PGDATABASE: "{{ db_name }}"
+      PGPASSWORD: "{{ lookup('env', 'POSTGRES_PASSWORD') }}"
+      PGCONNECT_TIMEOUT: "5"
+    # Tables mises en quarantaine par une corruption (ex. transactions__corrupted) : elles
+    # bloqueraient le DROP des tables saines (clés étrangères) et sont des artefacts à purger.
+    quarantine_pattern: "%__corrupted"
+  tasks:
+    - name: Garde-fou — n'opérer que sur la base de données fictives
+      ansible.builtin.assert:
+        that: db_name == 'resilience'
+        fail_msg: "Refus : ce playbook ne restaure QUE la base fictive 'resilience'"
+
+    - name: Trouver les dumps disponibles
+      ansible.builtin.find:
+        paths: "{{ backup_dir }}"
+        patterns: "{{ 'resilience-*.dump' if backup == 'latest' else backup }}"
+      register: dumps
+
+    - name: Vérifier qu'un dump existe
+      ansible.builtin.assert:
+        that: dumps.files | length > 0
+        fail_msg: "Aucun dump dans {{ backup_dir }} — jouer infra/ansible/playbooks/pg_backup.yml (état sain) d'abord"
+
+    - name: Sélectionner le dump à restaurer (le plus récent)
+      ansible.builtin.set_fact:
+        dump_path: "{{ (dumps.files | sort(attribute='mtime') | last).path }}"
+
+    - name: Purger les tables en quarantaine (artefacts de corruption)
+      ansible.builtin.shell: |
+        set -o pipefail
+        psql -v ON_ERROR_STOP=1 -At -c \
+          "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename LIKE '{{ quarantine_pattern }}'" \
+        | while read -r t; do
+            [ -n "$t" ] && psql -v ON_ERROR_STOP=1 -c "DROP TABLE IF EXISTS \"$t\" CASCADE;"
+          done
+        true
+      args: { executable: /bin/sh }
+      environment: "{{ pg_env }}"
+      changed_when: true
+
+    - name: Vérifier l'intégrité du dump AVANT de toucher à la base (pg_restore --list)
+      ansible.builtin.command:
+        argv: [pg_restore, --list, "{{ dump_path }}"]
+      register: toc
+      changed_when: false
+      failed_when: toc.rc != 0 or (toc.stdout_lines | length) == 0
+
+    - name: Restaurer le dump (drop + recreate, une seule transaction — jamais d'état à moitié restauré)
+      ansible.builtin.command:
+        argv:
+          - pg_restore
+          - --clean
+          - --if-exists
+          - --single-transaction
+          - --no-owner
+          - --no-privileges
+          - --dbname={{ db_name }}
+          - "{{ dump_path }}"
+      environment: "{{ pg_env }}"
+      register: restore
+      failed_when: false   # rc=1 possible sur avertissements bénins : la preuve est le contrôle ci-dessous
+      changed_when: true
+
+    - name: Contrôler que les tables restaurées sont lisibles
+      ansible.builtin.command:
+        argv:
+          - psql
+          - -v
+          - ON_ERROR_STOP=1
+          - -At
+          - -c
+          - "SELECT (SELECT count(*) FROM users) || '/' || (SELECT count(*) FROM accounts) || '/' || (SELECT count(*) FROM transactions)"
+      environment: "{{ pg_env }}"
+      register: check
+      changed_when: false
+
+    - name: Résumé
+      ansible.builtin.debug:
+        msg: "dump {{ dump_path | basename }} restauré (users/accounts/transactions = {{ check.stdout }}) ; pg_restore rc={{ restore.rc }}"

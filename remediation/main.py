@@ -60,7 +60,7 @@ def create_app(
         services = Services(
             http=http,
             docker=DockerProxy(http, settings.docker_proxy_url, settings.docker_allow_recreate),
-            runner=AnsibleRunnerAdapter(settings.ansible_private_data_dir),
+            runner=AnsibleRunnerAdapter(settings.ansible_private_data_dir, settings.ansible_project_dir),
             verifier=ScriptVerifier(settings.verify_tx_path, settings.verify_timeout_s),
         )
     engine = RemediationEngine(table=table, settings=settings, journal=journal, broker=broker,

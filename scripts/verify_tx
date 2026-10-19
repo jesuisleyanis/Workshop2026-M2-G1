@@ -5,8 +5,21 @@ Contrat (docs/contracts.md) : exit 0 = service utilisable, exit 1 = KO.
 Réutilisé par la démo ET par la boucle de vérification du moteur de remédiation :
 un conteneur qui redémarre ne prouve rien ; cette transaction prouve la reprise.
 
-Étapes : login (auth) -> virement fictif (payment-api) -> lecture de l'historique.
-Tout passe par le WAF (BASE_URL) comme un vrai client.
+Étapes (toutes à travers le WAF, comme un vrai client) :
+  1. login (auth)                              -> jeton
+  2. GET /api/v1/accounts (payment-api)        -> id du compte source (entier)
+  3. résolution du compte destinataire         -> VERIFY_DST_ACCOUNT, sinon login VERIFY_DST_USER
+  4. POST /api/v1/transactions {src_account, dst_account, amount_cents}  (contrat TransactionIn)
+  5. GET /api/v1/transactions                  -> la transaction créée apparaît dans l'historique
+
+Variables d'environnement (jeu de données fictif = `resilience_db.seed`, cf. scripts/README.md) :
+  BASE_URL            https://localhost   (depuis le conteneur remediation : https://waf)
+  VERIFY_USER         demo01              compte source (seedé, financé)
+  VERIFY_PASSWORD     <SEED_PASSWORD>     mot de passe du seed ; VERIFY_PASSWORD prime sur SEED_PASSWORD
+  VERIFY_DST_USER     demo02              compte destinataire, résolu par un second login
+  VERIFY_DST_ACCOUNT  (vide)              id entier du compte destinataire : court-circuite la résolution
+  VERIFY_AMOUNT_CENTS 100
+  VERIFY_TIMEOUT      5                   secondes par requête HTTP
 """
 from __future__ import annotations
 
@@ -16,64 +29,162 @@ import ssl
 import sys
 import urllib.error
 import urllib.request
+from typing import Any
 
-BASE_URL = os.environ.get("BASE_URL", "https://localhost")
-USER = os.environ.get("VERIFY_USER", "demo01")
-PASSWORD = os.environ.get("VERIFY_PASSWORD", "demo-pass-01")
-DST = os.environ.get("VERIFY_DST", "FR-FAKE-0002")
-TIMEOUT = float(os.environ.get("VERIFY_TIMEOUT", "5"))
+OK_STATUSES = frozenset({"created", "accepted", "ok"})
+
+
+class TransportError(Exception):
+    """Service injoignable (réseau, TLS, timeout) : verify_tx renvoie 1."""
+
 
 # Certificat auto-signé du WAF : contexte non vérifié (environnement de labo fermé).
-_CTX = ssl.create_default_context()
-_CTX.check_hostname = False
-_CTX.verify_mode = ssl.CERT_NONE
+def _insecure_context() -> ssl.SSLContext:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 
-def _post(path: str, payload: dict, token: str | None = None) -> dict:
-    data = json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(BASE_URL + path, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=TIMEOUT, context=_CTX) as resp:
-        return json.loads(resp.read() or b"{}")
+class HttpClient:
+    """Client minimal (stdlib) : renvoie (status, corps JSON) ; 4xx/5xx n'est pas une exception."""
+
+    def __init__(self, base_url: str, timeout: float) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self._ctx = _insecure_context()
+
+    def request(
+        self, method: str, path: str, payload: dict | None = None, token: str | None = None
+    ) -> tuple[int, Any]:
+        headers = {"Accept": "application/json"}
+        data = None
+        if payload is not None:
+            data = json.dumps(payload).encode()
+            headers["Content-Type"] = "application/json"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(self.base_url + path, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx) as resp:
+                return resp.status, _decode(resp.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, _decode(exc.read())
+        except (urllib.error.URLError, TimeoutError, ssl.SSLError, OSError) as exc:
+            raise TransportError(str(exc)) from exc
 
 
-def _get(path: str, token: str) -> dict:
-    req = urllib.request.Request(
-        BASE_URL + path, headers={"Authorization": f"Bearer {token}"}, method="GET"
-    )
-    with urllib.request.urlopen(req, timeout=TIMEOUT, context=_CTX) as resp:
-        return json.loads(resp.read() or b"{}")
+def _decode(raw: bytes) -> Any:
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return {"raw": raw[:200].decode("utf-8", "replace")}
+
+
+def _fail(message: str) -> int:
+    print(f"verify_tx: {message}", file=sys.stderr)
+    return 1
+
+
+def _error_detail(body: Any) -> str:
+    """Corps d'erreur du contrat {"error": {"code", "message"}} -> 'code: message'."""
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        err = body["error"]
+        return f"{err.get('code', '?')}: {err.get('message', '')}".strip()
+    return str(body)[:200]
+
+
+def _login(client: HttpClient, username: str, password: str) -> str | None:
+    status, body = client.request("POST", "/api/v1/login", {"username": username, "password": password})
+    if status != 200 or not isinstance(body, dict):
+        return None
+    return body.get("access_token") or body.get("token")
+
+
+def _first_account_id(client: HttpClient, token: str) -> int | None:
+    status, body = client.request("GET", "/api/v1/accounts", token=token)
+    if status != 200 or not isinstance(body, list) or not body:
+        return None
+    acc = body[0]
+    return acc.get("id") if isinstance(acc, dict) and isinstance(acc.get("id"), int) else None
+
+
+def run(
+    client: HttpClient,
+    *,
+    user: str,
+    password: str,
+    dst_user: str,
+    dst_account: int | None,
+    amount_cents: int,
+) -> int:
+    """Joue la transaction de contrôle. 0 = OK, 1 = KO (toujours, quelle que soit la cause)."""
+    try:
+        token = _login(client, user, password)
+        if not token:
+            return _fail(f"échec login de {user} (pas de jeton)")
+
+        src_account = _first_account_id(client, token)
+        if src_account is None:
+            return _fail(f"aucun compte pour {user} (seed manquant ?)")
+
+        if dst_account is None:
+            dst_token = _login(client, dst_user, password)
+            if not dst_token:
+                return _fail(f"échec login du destinataire {dst_user}")
+            dst_account = _first_account_id(client, dst_token)
+            if dst_account is None:
+                return _fail(f"aucun compte pour le destinataire {dst_user}")
+
+        status, body = client.request(
+            "POST",
+            "/api/v1/transactions",
+            {"src_account": src_account, "dst_account": dst_account, "amount_cents": amount_cents},
+            token,
+        )
+        if status != 201 or not isinstance(body, dict) or body.get("status") not in OK_STATUSES:
+            return _fail(f"transaction refusée (HTTP {status}) — {_error_detail(body)}")
+        tx_id = body.get("id")
+
+        status, history = client.request("GET", "/api/v1/transactions", token=token)
+        items = history if isinstance(history, list) else (history or {}).get("items", [])
+        if status != 200 or not any(isinstance(t, dict) and t.get("id") == tx_id for t in items):
+            return _fail(f"transaction {tx_id} absente de l'historique (HTTP {status})")
+
+        print(
+            f"verify_tx: OK — transaction fictive {tx_id} créée "
+            f"({src_account} -> {dst_account}, {amount_cents} centimes)"
+        )
+        return 0
+    except TransportError as exc:
+        return _fail(f"service injoignable: {exc}")
+    except Exception as exc:  # noqa: BLE001 — le script doit toujours renvoyer 0/1
+        return _fail(f"erreur inattendue: {exc}")
 
 
 def main() -> int:
+    env = os.environ
+    password = env.get("VERIFY_PASSWORD") or env.get("SEED_PASSWORD")
+    if not password:
+        return _fail("VERIFY_PASSWORD (ou SEED_PASSWORD) manquant — voir scripts/README.md")
+    dst_raw = env.get("VERIFY_DST_ACCOUNT", "").strip()
     try:
-        login = _post("/api/v1/login", {"username": USER, "password": PASSWORD})
-        token = login.get("access_token") or login.get("token")
-        if not token:
-            print("verify_tx: échec login (pas de token)", file=sys.stderr)
-            return 1
-
-        tx = _post("/api/v1/transactions", {"dst_account": DST, "amount_cents": 100}, token)
-        if tx.get("status") not in ("created", "accepted", "ok"):
-            print(f"verify_tx: transaction refusée: {tx}", file=sys.stderr)
-            return 1
-
-        history = _get("/api/v1/transactions", token)
-        items = history if isinstance(history, list) else history.get("items", [])
-        if not items:
-            print("verify_tx: historique vide après transaction", file=sys.stderr)
-            return 1
-
-        print("verify_tx: OK — transaction fictive réussie")
-        return 0
-    except (urllib.error.URLError, TimeoutError, ssl.SSLError) as exc:
-        print(f"verify_tx: service injoignable: {exc}", file=sys.stderr)
-        return 1
-    except Exception as exc:  # noqa: BLE001 — le script doit toujours renvoyer 0/1
-        print(f"verify_tx: erreur inattendue: {exc}", file=sys.stderr)
-        return 1
+        dst_account = int(dst_raw) if dst_raw else None
+        amount = int(env.get("VERIFY_AMOUNT_CENTS", "100"))
+        timeout = float(env.get("VERIFY_TIMEOUT", "5"))
+    except ValueError as exc:
+        return _fail(f"variable d'environnement invalide: {exc}")
+    client = HttpClient(env.get("BASE_URL", "https://localhost"), timeout)
+    return run(
+        client,
+        user=env.get("VERIFY_USER", "demo01"),
+        password=password,
+        dst_user=env.get("VERIFY_DST_USER", "demo02"),
+        dst_account=dst_account,
+        amount_cents=amount,
+    )
 
 
 if __name__ == "__main__":

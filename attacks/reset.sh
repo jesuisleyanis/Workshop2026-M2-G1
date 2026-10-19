@@ -8,13 +8,18 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 echo "== reset du banc d'essai =="
 "${ROOT}/attacks/run.sh" --stop || true
 
-# Vide la liste de blocage IP du WAF.
-: > "${ROOT}/security/waf/blocked_ips.conf"
-echo "# vidé par attacks/reset.sh" >> "${ROOT}/security/waf/blocked_ips.conf"
+# Vide la deny-list IP du WAF (volume partagé `waf-deny`) et recharge Nginx à chaud.
+COMPOSE=(docker compose -f "${ROOT}/infra/compose/docker-compose.yml")
+if "${COMPOSE[@]}" ps --status running waf >/dev/null 2>&1; then
+  "${COMPOSE[@]}" exec -T waf sh -c \
+    'printf "# vidé par attacks/reset.sh\n" > /etc/nginx/deny/blocked_ips.conf && nginx -s reload' \
+    || echo "(deny-list : WAF non joignable, à vider manuellement)"
+fi
 
 # Annule une éventuelle corruption data_corruption (renommage inverse, idempotent).
 if command -v ansible-playbook >/dev/null 2>&1; then
-  ansible-playbook "${ROOT}/infra/ansible/playbooks/db_corrupt_fake.yml" -e mode=revert \
+  ansible-playbook -i "${ROOT}/infra/ansible/inventory/hosts.ini" \
+    "${ROOT}/infra/ansible/playbooks/db_corrupt_fake.yml" -e mode=revert \
     >/dev/null 2>&1 || echo "(revert data_corruption : ignoré si non applicable)"
 fi
 

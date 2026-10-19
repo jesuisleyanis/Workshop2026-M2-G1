@@ -26,6 +26,7 @@ networks:
 
 volumes:
   pgdata:
+  waf-deny:        # deny-list Nginx partagée WAF (lecture) <-> remediation (écriture via playbook)
   grafana-data:
   loki-data:
   chroma-data:
@@ -38,15 +39,17 @@ services:
     <<: *hardening
     build: { context: ../../security/waf }
     networks: [edge, app]
+    # Image non-root (nginx unprivileged) : écoute 8080/8443 ; seuls 80/443 sont publiés côté hôte.
     ports:
-      - "80:80"
-      - "443:443"
+      - "80:8080"
+      - "443:8443"
     volumes:
-      - ../../security/waf/blocked_ips.conf:/etc/nginx/blocked_ips.conf:rw
+      - waf-deny:/etc/nginx/deny:rw
     depends_on: [front, payment-api, auth]
     mem_limit: 256m
     healthcheck:
-      test: ["CMD", "curl", "-fsk", "https://localhost/ || exit 1"]
+      # /healthz est servi par le WAF lui-même (sans upstream) ; cert auto-signé -> -k.
+      test: ["CMD-SHELL", "curl -fsk https://127.0.0.1:8443/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -147,7 +150,8 @@ services:
   # ---------------------------------------------------------------- remédiation
   docker-socket-proxy:
     # Proxy strict basé sur la config haproxy de la remédiation (ADR 0002) :
-    # n'autorise QUE 4 couples (méthode, chemin), dont POST /containers/{id}/restart.
+    # n'autorise QUE 5 couples (méthode, chemin) : ping/list/inspect, POST .../restart et
+    # POST .../kill?signal=HUP (reload à chaud du WAF) — jamais exec/create/kill arbitraire.
     # Plus restrictif que tecnativa (CONTAINERS=1+POST=1 ouvrirait /containers/create).
     <<: *hardening
     image: haproxy:2.9-alpine
@@ -160,15 +164,30 @@ services:
   remediation:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: remediation/Dockerfile }
-    networks: [app]            # jamais sur edge
+    # app : API + proxy Docker + WAF (verify_tx) ; data : pg_restore (correction de corruption).
+    # Jamais sur edge, aucun `ports:`.
+    networks: [app, data]
     environment:
       DOCKER_PROXY_URL: http://docker-socket-proxy:2375
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       AUTH_URL: http://auth:8002
-      VERIFY_TX_PATH: /app/verify_tx
-    depends_on: [docker-socket-proxy]
-    tmpfs: ["/tmp"]
+      # verify_tx : rejoué à travers le WAF (réseau app, cert auto-signé) avec le jeu fictif seedé
+      BASE_URL: https://waf
+      VERIFY_PASSWORD: ${SEED_PASSWORD}
+      # restore_pg_dump : playbook pg_restore.yml dans ce conteneur (client PG 16, réseau data)
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: resilience
+      POSTGRES_USER: resilience
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # waf_block_ip : deny-list partagée + SIGHUP du service `waf` via le proxy
+      WAF_SERVICE: waf
+    volumes:
+      - waf-deny:/etc/resilience/waf-deny:rw                 # écrite par waf_deny_ip.yml
+      - ../../infra/ansible/backups:/opt/backups:ro          # dumps sains (pg_backup.yml côté hôte)
+    group_add: ["101"]         # groupe nginx du WAF : droit d'écrire dans le volume waf-deny
+    depends_on: [docker-socket-proxy, postgres]
+    tmpfs: ["/tmp"]            # artefacts ansible-runner
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8005/health').status==200 else 1)"]
       interval: 15s
@@ -179,10 +198,24 @@ services:
   dashboard:
     <<: *hardening
     build: { context: ../../dashboard }
+    # Le navigateur ne parle qu'au nginx du dashboard (same-origin, CSP connect-src 'self') :
+    # /remediation/stream -> remediation:8005/stream (Bearer injecté côté serveur),
+    # /prometheus/api/v1/query -> prometheus:9090 (score ML + santé, GET lecture seule).
+    # VITE_* sont des build-args Vite, pas des variables runtime : la base /remediation est le défaut du build.
     networks: [app]
     environment:
-      VITE_REMEDIATION_BASE: http://remediation:8005
+      REMEDIATION_UPSTREAM: remediation:8005
+      REMEDIATION_AUTH_HEADER: "Bearer ${REMEDIATION_TOKEN}"
+      PROMETHEUS_UPSTREAM: prometheus:9090
+    depends_on: [remediation, prometheus]
+    read_only: true
+    tmpfs: ["/tmp"]
     mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
 
   # ---------------------------------------------------------------- observabilité
   prometheus:
