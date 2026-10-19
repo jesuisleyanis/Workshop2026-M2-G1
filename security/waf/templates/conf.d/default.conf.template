@@ -48,10 +48,13 @@ server {
     # Blocage des sources mises en liste noire par la remédiation.
     if ($blocked_source) { return 403; }
 
-    # En-têtes de sécurité
+    # En-têtes de sécurité, posés par le WAF seul (ceux du backend sont masqués : pas de doublon)
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy no-referrer always;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Referrer-Policy;
 
     # X-Forwarded-For ÉCRASÉ (pas $proxy_add_x_forwarded_for) : un client ne peut pas
     # usurper une autre IP source auprès des services (logs, rate-limit de l'auth).
@@ -80,4 +83,10 @@ server {
     # API d'authentification (rate-limit applicatif en plus du CRS)
     location /api/v1/login    { proxy_pass $auth_api; }
     location /api/v1/register { proxy_pass $auth_api; }
+
+    # Refus explicites (défense en profondeur) : une route d'API non déclarée ci-dessus et
+    # les chemins internes ne tombent jamais dans le `location /` du front.
+    location /api/           { return 404; }
+    location ^~ /internal/   { return 404; }
+    location = /metrics      { return 404; }
 }

@@ -54,7 +54,8 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `transaction_created` | payment-api | Virement fictif accepté |
 | `transaction_rejected` | payment-api | Virement refusé (solde, validation) |
 | `db_error` | payment-api | Erreur base de données |
-| `waf_blocked` | waf (via log Nginx/ModSec) | Requête bloquée par le CRS |
+| `waf_blocked` | waf (émis par le service `waf-exporter`, label Loki `service="waf-exporter"`) | Requête bloquée par le CRS |
+| `http_request` | waf (access log Nginx) | Une requête reçue par le WAF. Écart assumé : `ts` au format Nginx `$time_iso8601` (secondes, `+00:00`), durée en `request_time_s` (secondes) — Nginx ne fournit ni millisecondes ISO ni durée en ms |
 | `anomaly_detected` | detector | Le score dépasse le seuil |
 | `remediation_started` | remediation | Début d'une action corrective |
 | `remediation_action` | remediation | Action unitaire exécutée |

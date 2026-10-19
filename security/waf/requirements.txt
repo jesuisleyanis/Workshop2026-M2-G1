@@ -1,0 +1,2 @@
+# Dépendances runtime du waf-exporter (même version que services/*).
+prometheus-client==0.26.0
