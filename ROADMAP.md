@@ -90,6 +90,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | Dossier PDF 8–12 p + slides | `docs/dossier/` | §7 | — | ⬜ | — |
 | **Clip Chrono ≤ 60 s** | `Workshop2026-M2-G1-VidChrono.mp4` | §7 | — | ⬜ | — |
 | `Code.zip` (sans secrets) | `scripts/package_deliverables.sh` | §7 | — | ✅ | package_deliverables.sh (audit intégré) |
+| `make test` = agrégat réel du dépôt | `Makefile`, `README.md` | — | — | ✅ | #19 : un process pytest **par composant** (métriques Prometheus déclarées à l'import → `DuplicateTimeseries` en process unique), `infra/tests` + `tests/e2e` ajoutés, échec propagé (plus de `\|\| echo`), `PYTHON=` surchargeable ; procédure venv documentée (README § Tests) ; 2 tests contrat `scripts/tests/test_makefile.py` ; recette rejouée : 12 composants verts |
 | **Gel du code 17h** | — | — | — | ⬜ | — |
 
 ---
