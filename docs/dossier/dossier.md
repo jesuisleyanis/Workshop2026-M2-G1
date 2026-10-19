@@ -172,7 +172,7 @@ L'attaque principale de la démo est `service_flood` : crédible pour une platef
 | `services/front` / `dashboard` (Vitest) | 44 / 121 | parcours utilisateur ; adaptation de l'enveloppe SSE réelle du moteur, lecture Prometheus |
 | `ml/*` | 50 | vecteur de features figé, entraînement reproductible, seuil, événement conforme |
 | `remediation` | 105 | invariants de la table, séquences par type, cooldown/idempotence/escalade, listes blanches, auth (401/503), SSE, **exécution réelle du playbook WAF**, chemin SOC |
-| `security/waf`, `attacks`, `infra`, `scripts`, libs | 25 / 16 / 11 / 16 / 10 | contrats de configuration (Dockerfile, nginx, compose, Prometheus, SOC), scénarios Red/Blue, seed et `verify_tx`, packaging sans secret |
+| `security/waf`, `attacks`, `infra`, `scripts`, libs | 25 / 30 / 11 / 16 / 10 | contrats de configuration (Dockerfile, nginx, compose, Prometheus, SOC), scénarios Red/Blue, seed et `verify_tx`, packaging sans secret |
 | `assistant` | 97 | indexation, réponse, mode dégradé sans Ollama |
 | `tests/e2e` | 7 (sautés hors stack) | rejeu des 5 temps contre la stack réelle, dont `data_corruption` KO → OK |
 

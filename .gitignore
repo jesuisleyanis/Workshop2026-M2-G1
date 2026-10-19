@@ -42,3 +42,5 @@ infra/ansible/backups/*
 
 # Livrables générés (scripts/package_deliverables.sh) — produits à la demande, jamais commités
 Workshop2026-M2-G1-*
+# venv de travail cyber (local)
+.venv-cyber/
