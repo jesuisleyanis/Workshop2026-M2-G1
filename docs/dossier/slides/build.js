@@ -215,10 +215,10 @@ s.addText("Résultats : prouvé, et encore à mesurer", { placeholder: "title" }
 s.addChart(pres.ChartType.bar, [{
   name: "Tests automatisés verts (19 oct. 2026)",
   labels: ["dashboard", "remediation", "assistant", "payment-api", "ml", "front", "auth", "waf", "attacks", "scripts", "infra", "libs"],
-  values: [121, 104, 97, 54, 50, 44, 35, 22, 16, 16, 11, 10],
+  values: [121, 105, 97, 54, 50, 44, 35, 25, 16, 16, 11, 10],
 }], {
   x: 0.5, y: 1.25, w: 5.3, h: 3.8, barDir: "bar", chartColors: [THEME.colors.accent3],
-  showTitle: true, title: "Tests automatisés verts par composant (580 au total)", titleFontSize: 12, titleColor: THEME.colors.dk1, titleFontFace: "+mn-lt",
+  showTitle: true, title: "Tests automatisés verts par composant (583 au total)", titleFontSize: 12, titleColor: THEME.colors.dk1, titleFontFace: "+mn-lt",
   showValue: true, dataLabelPosition: "outEnd", dataLabelFontSize: 10, dataLabelColor: THEME.colors.dk2, dataLabelFontFace: "+mn-lt",
   catAxisLabelFontSize: 10, catAxisLabelColor: THEME.colors.dk2, catAxisLabelFontFace: "+mn-lt", catGridLine: { style: "none" },
   valAxisLabelFontSize: 9, valAxisLabelColor: THEME.colors.accent5, valAxisLabelFontFace: "+mn-lt", valGridLine: { color: THEME.colors.accent6, size: 0.5 },

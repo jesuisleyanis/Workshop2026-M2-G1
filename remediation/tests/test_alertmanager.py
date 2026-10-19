@@ -138,3 +138,9 @@ def test_webhook_reports_skipped_alerts_and_rejects_non_webhook_bodies(client):
     bad = client.post("/events/alertmanager", json={"service": "payment-api"}, headers=AUTH)  # un AnomalyEvent, pas un webhook
     assert bad.status_code == 422 and bad.json()["error"]["code"] == "invalid_request"
     assert client.post("/events/alertmanager", json=webhook(), headers=AUTH).status_code == 422  # alerts vide
+
+
+def test_non_finite_numbers_from_templates_fall_back_to_defaults():
+    out = to_event(AlertmanagerPayload.model_validate(webhook(alert(
+        labels={"anomaly_score": "inf"}, annotations={"value": "NaN", "threshold": "nan"}))).alerts[0])
+    assert out.anomaly_score == 1.0 and out.threshold == 1.0 and out.features_top[0].value == 0.0

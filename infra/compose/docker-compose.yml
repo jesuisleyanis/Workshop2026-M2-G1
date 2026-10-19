@@ -26,6 +26,8 @@ networks:
 
 # Secret Compose alimenté depuis .env (SOPS) : monté en fichier dans Alertmanager (credentials_file),
 # jamais écrit dans alertmanager.yml (fichier versionné).
+# Requiert Docker Compose >= 2.23.1 (source `environment:` des secrets) ; sinon, remplacer par
+# `file: ../../.remediation_token` produit par scripts/decrypt-secrets.sh (voir README-SOC.md).
 secrets:
   remediation_token:
     environment: REMEDIATION_TOKEN

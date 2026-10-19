@@ -149,7 +149,8 @@ def test_follow_starts_at_end_by_default_so_restarts_do_not_recount(tmp_path):
     got: list[str] = []
     t = threading.Thread(target=lambda: got.extend(follow(audit, poll_s=0.01, stop=stop)), daemon=True)
     t.start()
-    _wait(lambda: t.is_alive(), 0.05)
+    import time
+    time.sleep(0.1)  # laisse le suiveur se positionner sur la fin du fichier existant (poll 10 ms)
     with audit.open("a", encoding="utf-8") as fh:
         fh.write(_modsec_block(rule="new") + "\n")
     _wait(lambda: "new" in "".join(got))
@@ -166,3 +167,46 @@ def _wait(cond, timeout: float = 2.0) -> None:
             return
         time.sleep(0.01)
     assert cond(), "condition non atteinte"
+
+
+def test_follow_reads_from_start_when_the_file_appears_after_startup(tmp_path):
+    # Cas réel : ModSecurity crée audit.json au PREMIER blocage ; il ne doit pas être perdu.
+    audit = tmp_path / "audit.json"
+    stop = threading.Event()
+    got: list[str] = []
+    t = threading.Thread(target=lambda: got.extend(follow(audit, poll_s=0.01, stop=stop)), daemon=True)
+    t.start()
+    import time
+    time.sleep(0.05)
+    audit.write_text(_modsec_block(rule="first") + "\n", encoding="utf-8")
+    _wait(lambda: "first" in "".join(got))
+    stop.set()
+    t.join(1)
+    assert [e.rule for e in iter_block_events(got)] == ["first"]
+
+
+def test_follow_recomposes_a_utf8_character_split_across_reads(tmp_path):
+    audit = tmp_path / "audit.json"
+    stop = threading.Event()
+    got: list[str] = []
+    t = threading.Thread(target=lambda: got.extend(follow(audit, from_start=True, poll_s=0.01, stop=stop)), daemon=True)
+    t.start()
+    # json.dumps échappe par défaut (\\u00e9) : on force l'UTF-8 brut, comme ModSecurity l'écrit.
+    line = json.dumps(json.loads(_modsec_block(rule="1", uri="/café")), ensure_ascii=False).encode()
+    cut = line.index("é".encode()) + 1  # coupe au milieu des 2 octets de « é »
+    with audit.open("wb") as fh:
+        fh.write(line[:cut])
+        fh.flush()
+        _wait(lambda: len("".join(got)) >= cut - 1)
+        fh.write(line[cut:] + b"\n")
+    _wait(lambda: "".join(got).endswith("}\n"))
+    stop.set()
+    t.join(1)
+    events = list(iter_block_events(got))
+    assert [e.http_path for e in events] == ["/café"]
+
+
+def test_unclosed_object_does_not_block_the_stream():
+    from waf_exporter import MAX_PENDING_BYTES
+    noise = '{"transaction": {"never": "closed' + " " * (MAX_PENDING_BYTES + 10)
+    assert [e.rule for e in iter_block_events([noise, _modsec_block(rule="after")])] == ["after"]

@@ -52,6 +52,14 @@ Conséquences :
 - Alertmanager est dans le profil `full` (`make up-full`). En profil `demo`, Prometheus évalue les règles
   (visibles dans son UI) mais ne peut pas joindre Alertmanager : erreurs de résolution DNS journalisées,
   sans effet sur la démo.
+- Prérequis : Docker Compose **≥ 2.23.1** (secret Compose alimenté par `environment: REMEDIATION_TOKEN`).
+  Avec une version plus ancienne, déclarer le secret avec `file:` pointant sur un fichier produit par
+  `scripts/decrypt-secrets.sh` (jamais commité).
+- Ré-émissions : l'`event_id` dérive de (`fingerprint`, `startsAt`), donc une alerte qui **reste firing**
+  après la clôture de l'incident est rejouée (`replayed`) à chaque `repeat_interval` sans rouvrir
+  d'incident. C'est voulu (pas de boucle de remédiation sur une alerte collante) : le ré-armement du
+  chemin SOC passe par la résolution puis le nouveau déclenchement de l'alerte (nouveau `startsAt`) ;
+  le détecteur ML, chemin principal, n'a pas cette limite.
 - Les règles SOC sont des agrégats : pas de label `source_ip`. Les actions `waf_block_ip` échouent
   proprement (« aucune IP source ») et la règle enchaîne sur l'action suivante (restart, rate-limit, restore).
 

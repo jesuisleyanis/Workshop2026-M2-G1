@@ -110,6 +110,9 @@ uv pip install -e "libs/python/resilience_common[fastapi,test]" -e "libs/python/
 make test                                             # ou : make test-py PYTHON=.venv/bin/python
 ```
 
+Les tests front exigent leurs dépendances (`npm ci` dans `services/front` et `dashboard`) : sans elles, `make test`
+échoue (c'est voulu : l'agrégat reflète l'état réel). `make test-py` ne lance que la partie Python.
+
 Chaque composant reste testable seul depuis son répertoire (`cd remediation && pytest`), voir son `README.md`.
 
 ## Scénario de démonstration
