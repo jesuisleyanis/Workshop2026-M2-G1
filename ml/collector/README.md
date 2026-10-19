@@ -30,10 +30,25 @@ Prérequis : `status` non groupé (`should_group_status_codes=False`, déjà le 
 - `GET /api/v1/features` -> `{"feature_names": [...], "vector": [...], "ts": "...Z", "missing": [...], "window_seconds": 15}` ; **503** `{"error": {...}}` si pas de donnée fraîche.
 - `GET /health` (liveness), `GET /ready` (200 seulement si une collecte récente a réussi), `GET /metrics`.
 
+## Capture de séries réelles (`capture.py`, pour ré-entraîner le modèle)
+
+Rejoue **les mêmes requêtes** (`build_queries`, même fenêtre) sur une période passée via `/api/v1/query_range` et écrit un CSV
+de fenêtres (`ml/shared/csvio.py`), mêmes règles de trous que la collecte temps réel (absent/NaN -> 0.0 + `missing`, fenêtre
+vide ignorée). Lancée dans le conteneur (seul à joindre Prometheus) ; `--window`/`--step` valent par défaut
+`PROM_RATE_WINDOW`/`COLLECT_INTERVAL_SECONDS` du conteneur.
+
+```bash
+docker compose -f infra/compose/docker-compose.yml exec -T collector \
+  python -m ml.collector.capture --last 30m --label normal > ml/training/data/baseline_real.csv
+# ou --start/--end ISO 8601 UTC, --label <scenario>, --no-header pour concaténer (>>)
+```
+
+Cibles `make capture-baseline` / `make capture-attack SC=...` : voir `ml/training/README.md` §6.
+
 ## Lancer / tester
 
 ```bash
 uvicorn ml.collector.app:create_app --factory --port 8004     # depuis la racine du dépôt
-cd ml && python -m pytest collector                            # Prometheus simulé (httpx.MockTransport)
+cd ml && python -m pytest collector                            # Prometheus simulé (httpx.MockTransport), capture comprise
 docker build -f ml/collector/Dockerfile -t resilience/collector .   # depuis la racine
 ```

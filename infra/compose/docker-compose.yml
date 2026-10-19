@@ -133,7 +133,8 @@ services:
     build: { context: ../.., dockerfile: ml/detector/Dockerfile }
     networks: [app, obs]
     environment:
-      REMEDIATION_URL: http://remediation:8005
+      # URL COMPLÈTE de l'endpoint (le detector POSTe tel quel, cf. ml/detector/core.py)
+      REMEDIATION_URL: http://remediation:8005/events
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
     depends_on: [collector, remediation]
     read_only: true

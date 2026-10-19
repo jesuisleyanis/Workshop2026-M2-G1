@@ -1,4 +1,9 @@
-"""Génération programmatique du dataset (trafic normal simulé + attaques simulées).
+"""Données d'entraînement : séries RÉELLES capturées (CSV) ou dataset simulé.
+
+`load_csv` charge les fenêtres capturées sur Prometheus par `ml.collector.capture`
+(format : `ml.shared.csvio`). C'est la source à utiliser avant le jury.
+
+Le reste du module est la génération programmatique (trafic normal simulé + attaques simulées).
 
 Le modèle est NON supervisé : il n'est entraîné que sur du trafic normal
 (`generate_baseline`). Les attaques (`generate_attack`) ne servent qu'à ÉVALUER le
@@ -13,9 +18,19 @@ Prometheus (voir README, section Limites).
 
 from __future__ import annotations
 
+import csv
+import math
+from dataclasses import dataclass
+from pathlib import Path
+
 import numpy as np
 
+from ml.shared.csvio import CSV_COLUMNS, write_csv  # noqa: F401 (ré-export)
 from ml.shared.features import FEATURE_NAMES, N_FEATURES
+
+#: Nombre minimal de fenêtres pour entraîner sur des données réelles (quantile 99,9 %
+#: et moyennes/écarts-types peu fiables en dessous ; 200 x 15 s = 50 min).
+MIN_TRAINING_ROWS = 200
 
 ATTACK_KINDS: tuple[str, ...] = (
     "service_flood",
@@ -23,6 +38,60 @@ ATTACK_KINDS: tuple[str, ...] = (
     "web_attack",
     "data_corruption",
 )
+
+
+@dataclass(frozen=True)
+class Series:
+    """Fenêtres réelles chargées d'un CSV, triées par horodatage croissant."""
+
+    data: np.ndarray  # (n, 9) dans l'ordre de FEATURE_NAMES
+    ts: tuple[str, ...]  # ISO 8601 UTC
+    labels: tuple[str, ...]
+
+    def __len__(self) -> int:
+        return len(self.ts)
+
+    def select(self, label: str) -> Series:
+        idx = [i for i, lab in enumerate(self.labels) if lab == label]
+        return Series(self.data[idx], tuple(self.ts[i] for i in idx),
+                      tuple(self.labels[i] for i in idx))
+
+
+def load_csv(path: Path | str, min_rows: int = MIN_TRAINING_ROWS,
+             label: str | None = None) -> Series:
+    """Charge et VALIDE un CSV de fenêtres réelles (colonnes : CSV_COLUMNS).
+
+    Les colonnes de features sont lues par nom (l'ordre du fichier est libre) puis
+    remises dans l'ordre de FEATURE_NAMES. Lève ValueError si une feature manque,
+    si une valeur n'est pas un réel fini >= 0, ou s'il reste moins de `min_rows`
+    lignes (après filtrage sur `label` le cas échéant). `label` absent = "normal".
+    """
+    path = Path(path)
+    with path.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        header = reader.fieldnames or []
+        absent = [c for c in ("ts", *FEATURE_NAMES) if c not in header]
+        if absent:
+            raise ValueError(f"{path}: colonnes manquantes {absent}")
+        rows = []
+        for lineno, rec in enumerate(reader, start=2):
+            lab = (rec.get("label") or "normal").strip()
+            if label is not None and lab != label:
+                continue
+            try:
+                vec = [float(rec[name]) for name in FEATURE_NAMES]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{path}:{lineno}: valeur non numérique ({exc})") from exc
+            if not all(math.isfinite(v) and v >= 0 for v in vec):
+                raise ValueError(f"{path}:{lineno}: valeur non finie ou négative {vec}")
+            rows.append((rec["ts"], vec, lab))
+    if len(rows) < min_rows:
+        raise ValueError(
+            f"{path}: {len(rows)} fenêtre(s) exploitable(s), minimum {min_rows}"
+            + (f" pour le label {label!r}" if label else ""))
+    rows.sort(key=lambda r: r[0])  # ISO 8601 UTC : l'ordre lexical est chronologique
+    data = np.array([r[1] for r in rows], dtype=float).reshape(len(rows), N_FEATURES)
+    return Series(data, tuple(r[0] for r in rows), tuple(r[2] for r in rows))
 
 
 def generate_baseline(n: int, seed: int = 42) -> np.ndarray:

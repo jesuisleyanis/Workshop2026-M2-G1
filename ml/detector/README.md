@@ -8,7 +8,7 @@ Service FastAPI (port interne **8003**, réseau `app`). Relève `collector`, sco
 |---|---|---|
 | `MODEL_DIR` | `/app/artifacts` | `model.joblib` + `baseline_stats.json` (produits par `ml/training`) |
 | `COLLECTOR_URL` | `http://collector:8004` | source des features |
-| `REMEDIATION_URL` | `http://remediation:8005/events` | destination des `AnomalyEvent` |
+| `REMEDIATION_URL` | `http://remediation:8005/events` | destination des `AnomalyEvent` — URL **complète** de l'endpoint, POSTée telle quelle (testé : `tests/test_compose_wiring.py`) |
 | `REMEDIATION_TOKEN` / `REMEDIATION_TOKEN_FILE` | — | token Bearer (le fichier, ex. secret SOPS, est prioritaire) |
 | `TARGET_SERVICE` | `payment-api` | label `service` de la métrique et de l'événement |
 | `POLL_INTERVAL_SECONDS` | `15` | période de relève |
@@ -40,5 +40,9 @@ python -m ml.training.train                                     # 1) produire le
 MODEL_DIR=ml/training/artifacts REMEDIATION_TOKEN=... \
   uvicorn ml.detector.app:create_app --factory --port 8003      # 2) depuis la racine du dépôt
 cd ml && python -m pytest detector                              # tests (POST remédiation mocké)
-docker build -f ml/detector/Dockerfile -t resilience/detector . # image (artefacts requis dans ml/training/artifacts/)
+docker build -f ml/detector/Dockerfile -t resilience/detector . # image : le modèle est entraîné AU BUILD
 ```
+
+L'image n'attend aucun artefact pré-calculé : son étape `trainer` lance `ml.training.train` sur
+`ml/training/data/baseline_real.csv` (+ `calibration.json`) s'ils sont versionnés, sinon sur la baseline synthétique
+(cf. `ml/training/README.md` §6). Le scikit-learn d'entraînement est donc toujours celui du runtime.
