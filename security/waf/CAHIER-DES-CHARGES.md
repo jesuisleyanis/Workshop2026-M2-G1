@@ -10,7 +10,8 @@ Pare-feu applicatif en frontal, **seul point exposé** de la plateforme. Couvre 
 
 - Reverse-proxy vers le front (statique) et les API métier (`/api/v1/...`).
 - ModSecurity + jeu de règles OWASP CRS actifs.
-- TLS auto-signé (environnement de labo fermé).
+- TLS auto-signé généré au build de l'image (environnement de labo fermé).
+- Image officielle OWASP CRS (nginx *unprivileged*, non-root) : écoute 8080/8443, publiée 80/443 par Compose.
 - **Liste de blocage IP rechargeable à chaud** (`blocked_ips.conf`), pilotée par le moteur de remédiation.
 - `waf_exporter.py` : transforme les blocages ModSecurity en métrique `resilience_waf_blocked_total{rule}` et en log event `waf_blocked` (contrat §1).
 
@@ -41,4 +42,4 @@ Hors périmètre : terminaison TLS de production, gestion de certificats signés
 
 ## Tests
 
-`python -m pytest security/waf/tests/ -q` — parsing des blocages ModSecurity → métrique/event (5 tests). La validation du proxy complet se fait avec la stack levée.
+`python -m pytest security/waf/tests/ -q` — parsing des blocages ModSecurity → métrique/event (5 tests) + contrat de configuration Dockerfile / nginx.conf / compose (9 tests : upstream `front:8080`, non-root, TLS au build, routes publiques seules, healthcheck). La validation du proxy complet se fait avec la stack levée.

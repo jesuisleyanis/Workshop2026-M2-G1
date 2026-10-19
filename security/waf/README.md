@@ -10,11 +10,29 @@ Reverse-proxy unique en frontal de la plateforme. **Seul composant exposé** sur
 
 ```
 security/waf/
+├── Dockerfile          # image owasp/modsecurity-crs:*-nginx-alpine épinglée, non-root, TLS auto-signé au build
 ├── nginx.conf          # reverse-proxy + ModSecurity + liste de blocage
 ├── blocked_ips.conf    # liste de deny rechargeable (gérée par la remédiation)
 ├── waf_exporter.py     # logs de blocage -> métrique resilience_waf_blocked_total + event waf_blocked
-├── tls/                # certificat auto-signé (généré au build, non commité)
-└── tests/              # tests du waf-exporter
+└── tests/              # tests du waf-exporter + contrat de configuration (Dockerfile/nginx.conf/compose)
+```
+
+## Image et build
+
+| Point | Choix |
+|---|---|
+| Base | `owasp/modsecurity-crs:4.25.2-nginx-alpine-lts` (ModSecurity v3 + OWASP CRS préinstallés, configurés par l'entrypoint de l'image : `BLOCKING_PARANOIA=1`, `ANOMALY_INBOUND=5`, `ANOMALY_OUTBOUND=4`) |
+| Utilisateur | **non-root** (`nginx`, image *unprivileged*) → écoute **8080 / 8443** ; Compose publie `80:8080` et `443:8443` (seul service avec `ports:`) |
+| TLS | certificat **auto-signé généré au build** (`openssl req -x509`, ECDSA P-256, SAN `localhost`/`waf`/`192.168.137.1`) dans `/etc/nginx/conf/` — jamais commité ; les clients de labo utilisent `-k` / contexte non vérifié |
+| Config | `nginx.conf` du projet copié tel quel (les templates `nginx.conf`/`conf.d` de l'image sont retirés) ; les templates `modsecurity.d` de l'image restent et rendent `/etc/modsecurity.d/setup.conf` au démarrage |
+| Upstreams | `front:8080` (le conteneur front est lui aussi non-root sur 8080), `payment-api:8001`, `auth:8002` |
+| Sonde | `GET /healthz` servi par le WAF (sans upstream) ; healthcheck image + Compose `curl -fsk https://127.0.0.1:8443/healthz` |
+| Logs | access log JSON `json_waf` et audit ModSecurity (JSON, blocages) sur **stdout** → Promtail/Loki |
+
+```bash
+docker compose -f infra/compose/docker-compose.yml build waf
+curl -k https://localhost/healthz                      # ok
+curl -k "https://localhost/?q=<script>alert(1)</script>"   # 403 (CRS)
 ```
 
 ## Interface de blocage IP (consommée par la remédiation)
@@ -37,9 +55,8 @@ Les requêtes des IP listées reçoivent **403**. Interface stable — ne pas ch
 # Test unitaire du parseur (sans conteneur)
 python -m pytest security/waf/tests/ -q
 
-# Génération du certificat auto-signé (fait au build de l'image WAF)
-openssl req -x509 -newkey rsa:2048 -nodes -days 7 \
-  -keyout tls/server.key -out tls/server.crt -subj "/CN=resilience-g1"
+# Contrat de configuration (upstream front:8080, non-root, TLS, routes, compose) : inclus ci-dessus (14 tests)
 ```
 
 Le WAF est déclaré dans `infra/compose/docker-compose.yml` sur le réseau `edge` (seul service publiant des ports) + `app`.
+La validation complète (build de l'image, blocage CRS effectif, parcours login → virement via le WAF) se fait stack levée (`make up`).
