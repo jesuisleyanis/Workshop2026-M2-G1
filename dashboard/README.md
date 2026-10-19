@@ -33,11 +33,15 @@ Déclencher un incident de démonstration : boutons **Répétition · déclenche
 |---|---|---|
 | `VITE_REMEDIATION_BASE` | `/remediation` | build : base du flux (`<base>/stream`) |
 | `VITE_GRAFANA_BASE` | `http://localhost:3000` | build : liens Grafana et Explore |
+| `VITE_PROMETHEUS_BASE` | `/prometheus` | build : base du proxy Prometheus (score ML + santé via `GET <base>/api/v1/query`) ; vide = polling désactivé |
+| `VITE_METRICS_POLL_MS` | `2000` | build : période du polling Prometheus |
 | `VITE_STREAM_SOURCE` | `live` | build : `live` \| `auto` (bascule en simulation si flux injoignable) \| `simulation` |
 | `VITE_LIVE_TRIGGERS` | _vide_ | build : `true` = déclencheurs en flux réel hors dev (mock uniquement) |
-| `REMEDIATION_PROXY_TARGET` | `http://localhost:8005` | dev : cible du proxy Vite |
+| `REMEDIATION_PROXY_TARGET` | `http://localhost:8005` | dev : cible du proxy Vite `/remediation` |
+| `PROMETHEUS_PROXY_TARGET` | `http://localhost:9090` | dev : cible du proxy Vite `/prometheus` (mettre `http://localhost:8005` pour le mock) |
 | `REMEDIATION_UPSTREAM` | `remediation:8005` | conteneur : upstream du proxy nginx |
 | `REMEDIATION_AUTH_HEADER` | _vide_ | conteneur : header `Authorization` injecté (ex. `Bearer ...`) |
+| `PROMETHEUS_UPSTREAM` | `prometheus:9090` | conteneur : upstream du proxy `/prometheus/api/v1/query` |
 | `DNS_RESOLVER` | `127.0.0.11` | conteneur : résolveur DNS |
 
 ## Architecture
@@ -98,7 +102,8 @@ Multi-stage `node:22-alpine` -> `nginx:1.27-alpine`, utilisateur `nginx`, port *
 
 ### Câblage compose
 
-- Service `dashboard` sur le réseau `app` (joint `remediation:8005`), `depends_on: remediation`.
+- Service `dashboard` sur le réseau `app` (joint `remediation:8005` et `prometheus:9090`), `depends_on: [remediation, prometheus]`, variables runtime `REMEDIATION_UPSTREAM`, `REMEDIATION_AUTH_HEADER`, `PROMETHEUS_UPSTREAM` (les `VITE_*` sont des build-args, sans effet à l'exécution).
+- Le flux réel est l'enveloppe `event: timeline` du moteur (voir CDC §3) ; score et santé sont lus dans Prometheus par polling, jamais fournis par le moteur.
 - Publier avec précaution (le dashboard donne la vue d'ensemble du SI) : `127.0.0.1:<port>:8080` ou via le WAF **avec authentification**. Ne pas l'exposer librement sur `edge`.
 - Token du moteur (si `/stream` est authentifié) : `REMEDIATION_AUTH_HEADER="Bearer <token>"` depuis SOPS, jamais en clair dans le compose.
 - `VITE_GRAFANA_BASE` est ouvert par le navigateur du jury : mettre l'adresse atteignable depuis la machine de projection.
