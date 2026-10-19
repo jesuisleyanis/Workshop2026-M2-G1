@@ -166,7 +166,9 @@ services:
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       AUTH_URL: http://auth:8002
-      VERIFY_TX_PATH: /app/verify_tx
+      # verify_tx : rejoué à travers le WAF (réseau app, cert auto-signé) avec le jeu fictif seedé
+      BASE_URL: https://waf
+      VERIFY_PASSWORD: ${SEED_PASSWORD}
     depends_on: [docker-socket-proxy]
     tmpfs: ["/tmp"]
     healthcheck:
