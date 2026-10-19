@@ -19,7 +19,9 @@ COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/security-headers.conf /etc/nginx/security-headers.conf
 COPY docker/dashboard.conf.template /etc/nginx/templates/dashboard.conf.template
 COPY --chmod=755 docker/entrypoint.sh /entrypoint.sh
-RUN rm -f /etc/nginx/conf.d/default.conf
+# Garde-fou CRLF (checkout Windows sans .gitattributes) : un shebang `#!/bin/sh\r` est introuvable.
+RUN sed -i 's/\r$//' /entrypoint.sh \
+ && rm -f /etc/nginx/conf.d/default.conf
 COPY --from=build --chown=nginx:nginx /app/dist /usr/share/nginx/html
 
 ENV REMEDIATION_UPSTREAM=remediation:8005 \
