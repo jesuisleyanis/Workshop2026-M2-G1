@@ -9,7 +9,14 @@ import pytest
 from ml.training.calibrate import MIN_THRESHOLD, calibrate, main, mttd_seconds, split_runs
 from ml.training.dataset import ATTACK_KINDS, generate_attack, generate_baseline, load_csv
 from ml.training.tests.test_real_data import T0, write_series
-from ml.training.train import anomaly_scores, model_fingerprint, save, train
+from ml.training.train import (
+    EXIT_STALE_CALIBRATION,
+    StaleCalibrationError,
+    anomaly_scores,
+    model_fingerprint,
+    save,
+    train,
+)
 from ml.training.train import main as train_main
 
 
@@ -107,11 +114,37 @@ def test_cli_end_to_end_calibrate_then_retrain(setup, tmp_path, capsys):
     assert stats["threshold"] == calib["threshold"]
 
 
-def test_retrain_with_stale_calibration_warns(setup, tmp_path, capsys):
+def test_stale_calibration_fails_and_writes_nothing(setup, tmp_path, capsys):
+    """Seuil calibré sur un autre modèle : la CLI échoue (code 3) -> le build detector aussi."""
     _, normal_csv, _, _, _ = setup
     calib = tmp_path / "calibration.json"
     calib.write_text(json.dumps({"threshold": 0.6, "model_fingerprint": "périmée"}),
                      encoding="utf-8")
-    train_main(["--data", str(normal_csv), "--n-estimators", "50", "--calibration", str(calib),
-                "--out", str(tmp_path / "a")])
-    assert "ATTENTION" in capsys.readouterr().out
+    out = tmp_path / "a"
+    rc = train_main(["--data", str(normal_csv), "--n-estimators", "50",
+                     "--calibration", str(calib), "--out", str(out)])
+    assert rc == EXIT_STALE_CALIBRATION
+    assert not (out / "baseline_stats.json").exists()
+    assert "make calibrate" in capsys.readouterr().err
+
+
+def test_allow_stale_calibration_falls_back_to_quantile(setup, tmp_path, capsys):
+    _, normal_csv, _, _, _ = setup
+    calib = tmp_path / "calibration.json"
+    calib.write_text(json.dumps({"threshold": 0.51, "model_fingerprint": "périmée"}),
+                     encoding="utf-8")
+    out = tmp_path / "a"
+    assert train_main(["--data", str(normal_csv), "--n-estimators", "50", "--calibration",
+                       str(calib), "--allow-stale-calibration", "--out", str(out)]) == 0
+    stats = json.loads((out / "baseline_stats.json").read_text())
+    assert stats["threshold"] != 0.51 and "quantile" in stats["threshold_source"]
+    assert stats["calibration_ignored"]["calibrated_on"] == "périmée"
+    assert "calibration" not in stats
+    assert "IGNORÉE" in capsys.readouterr().out
+
+
+def test_stale_calibration_raises_in_python_api(setup):
+    _, normal_csv, _, _, _ = setup
+    with pytest.raises(StaleCalibrationError):
+        train(real=load_csv(normal_csv), n_estimators=50,
+              calibration={"threshold": 0.6, "model_fingerprint": "autre"})

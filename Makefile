@@ -5,7 +5,7 @@ COMPOSE := docker compose -f infra/compose/docker-compose.yml
 ROOT    := $(shell pwd)
 
 .PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt \
-        traffic train capture-baseline capture-attack calibrate
+        traffic train capture-baseline capture-attack calibrate ml-tools test-ml
 
 ML_DATA  := ml/training/data
 # Baseline : 60 min = 240 fenêtres de 15 s (minimum MIN_ROWS = ml.training.dataset.MIN_TRAINING_ROWS)
@@ -15,6 +15,12 @@ MIN_ROWS := 200
 # délai avant que les rate() retombent après l'attaque
 ATTACK_S ?= 20
 RATE_LAG := 30
+VERSION  ?= 1.1.0
+ML_TOOLS := resilience/ml-tools
+ML_SRC   := $(shell pwd -W 2>/dev/null || pwd)
+ML_DOCKER = MSYS_NO_PATHCONV=1 docker run --rm -v "$(ML_SRC):/src"
+TRAIN_DATA_ARGS = $(if $(wildcard $(ML_DATA)/baseline_real.csv),--data $(ML_DATA)/baseline_real.csv) \
+  $(if $(wildcard $(ML_DATA)/attacks_real.csv),--attack-data $(ML_DATA)/attacks_real.csv)
 
 help: ## Affiche cette aide
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -84,14 +90,26 @@ capture-attack: ## Joue le scénario SC (ATTACK_S s, sur fond de trafic normal) 
 	  else mv $(ML_DATA)/attacks_real.csv.tmp $(ML_DATA)/attacks_real.csv; fi; \
 	  echo "$(SC) ajouté à $(ML_DATA)/attacks_real.csv"
 
-train: ## Entraîne le modèle (vraie baseline + calibration si présentes)
-	python3 -m ml.training.train --version $(or $(VERSION),1.1.0) \
-	  $(if $(wildcard $(ML_DATA)/baseline_real.csv),--data $(ML_DATA)/baseline_real.csv) \
-	  $(if $(wildcard $(ML_DATA)/attacks_real.csv),--attack-data $(ML_DATA)/attacks_real.csv) \
+# train / calibrate / test-ml tournent dans l'image `ml-tools` (étape du Dockerfile detector) :
+# même Python 3.12 et même scikit-learn que le build du detector. Le modèle calibré est donc
+# exactement celui que le build ré-entraîne (model_fingerprint identique) — et rien à
+# installer sur le poste. `pwd -W` + MSYS_NO_PATHCONV : chemins Docker corrects sous Git Bash.
+ml-tools: ## Construit l'image d'outils ML (Python + scikit-learn du runtime)
+	docker build -f ml/detector/Dockerfile --target ml-tools -t $(ML_TOOLS) .
+
+train: ml-tools ## Entraîne le modèle (vraie baseline + calibration si présentes)
+	$(ML_DOCKER) -w /src $(ML_TOOLS) python -m ml.training.train --version $(VERSION) \
+	  $(TRAIN_DATA_ARGS) \
 	  $(if $(wildcard $(ML_DATA)/calibration.json),--calibration $(ML_DATA)/calibration.json)
 
-calibrate: ## Calibre le seuil sur les attaques réelles capturées (puis rebuild detector)
-	python3 -m ml.training.calibrate
+# Calibre le modèle qu'il vient lui-même d'entraîner SANS calibration (sinon une
+# calibration périmée ferait échouer l'entraînement nécessaire à la recalibrer).
+calibrate: ml-tools ## Ré-entraîne sur la baseline puis calibre le seuil sur les attaques réelles
+	$(ML_DOCKER) -w /src $(ML_TOOLS) python -m ml.training.train --version $(VERSION) $(TRAIN_DATA_ARGS)
+	$(ML_DOCKER) -w /src $(ML_TOOLS) python -m ml.training.calibrate
+
+test-ml: ml-tools ## Tests ML (pytest) dans l'image d'outils, Python 3.12
+	$(ML_DOCKER) -w /src/ml $(ML_TOOLS) python -m pytest -p no:cacheprovider
 
 audit: ## Audit de durcissement du dépôt
 	security/hardening/audit.sh

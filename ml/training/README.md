@@ -70,7 +70,12 @@ Les chiffres complets sont écrits dans `baseline_stats.json` (`evaluation`) à 
 
 ## 6. Ré-entraîner sur les vraies séries Prometheus (procédure avant le jury)
 
-Prérequis : `make up-full` (Prometheus + cAdvisor), `make seed`. Toutes les captures tournent **dans le conteneur collector**
+Prérequis : Docker, `make` (Windows : `winget install ezwinports.make`, à lancer depuis Git Bash), `make up-full`
+(Prometheus + cAdvisor), `make seed`. **Aucun Python ML à installer sur le poste** : `train`, `calibrate` et `test-ml`
+tournent dans l'image `ml-tools` (étape du Dockerfile detector), qui a le même Python 3.12 et le même scikit-learn que le
+build du detector. C'est ce qui garantit que le modèle calibré est **exactement** celui que l'image ré-entraîne.
+
+Toutes les captures tournent **dans le conteneur collector**
 (seul à joindre Prometheus, réseau `obs`) avec **sa** fenêtre `PROM_RATE_WINDOW` et **son** pas `COLLECT_INTERVAL_SECONDS` :
 les fenêtres capturées ont exactement la définition de celles que le detector score en démo. Si ces deux variables changent,
 il faut tout recapturer.
@@ -78,10 +83,10 @@ il faut tout recapturer.
 | # | Commande | Effet |
 |---|---|---|
 | 1 | `make capture-baseline` (`DURATION=60m` par défaut) | joue 60 min de trafic légitime (`scripts/gen_normal_traffic.py`), capture dans un `.tmp` et ne remplace `data/baseline_real.csv` que s'il contient au moins 200 fenêtres (50 min à 15 s) |
-| 2 | `make train` | modèle sur la baseline réelle (held-out chronologique) |
+| 2 | `make train` (facultatif) | aperçu : modèle sur la baseline réelle (held-out chronologique), faux positifs |
 | 3 | `make capture-attack SC=service_flood` (puis `auth_abuse`, `web_attack`, `data_corruption`) | joue le scénario (`ATTACK_S=20` s) sur fond de trafic normal ; étiquette **seulement** la fenêtre attaque + 30 s (retombée des `rate()`) et l'ajoute à `data/attacks_real.csv` via un `.tmp` |
-| 4 | `make calibrate` | seuil entre le normal et le pic le plus faible des attaques ; MTTD par scénario ; écrit `data/calibration.json` |
-| 5 | `make train` | ré-entraîne avec la calibration ; rapport `attaques RÉELLES` (détection, score max, routage) |
+| 4 | `make calibrate` | ré-entraîne **sans** calibration puis place le seuil entre le normal et le pic le plus faible des attaques ; MTTD par scénario ; écrit `data/calibration.json` (+ `calibration.report.json`, toujours) |
+| 5 | `make train` | ré-entraîne avec la calibration (même empreinte, sinon échec) ; rapport `attaques RÉELLES` (détection, score max, routage) |
 | 6 | `git add ml/training/data/*.csv ml/training/data/calibration.json` puis `docker compose -f infra/compose/docker-compose.yml build detector` | l'image du detector embarque le modèle réel |
 
 Lecture des résultats de `calibrate` (code retour) :
@@ -95,6 +100,11 @@ Lecture des résultats de `calibrate` (code retour) :
 Le MTTD de `calibrate` est celui du **modèle** (résolution = un pas de capture). En démo s'y ajoutent le scrape Prometheus,
 la relève du detector (`POLL_INTERVAL_SECONDS`) et la remédiation : c'est le MTTD affiché par le dashboard qui fait foi.
 
-`model_fingerprint` (scores du modèle sur un jeu sonde fixe) est écrit dans `baseline_stats.json` et `calibration.json` : si
-`train --calibration` produit un modèle différent de celui calibré (données, seed ou scikit-learn changés), il l'affiche
-(`ATTENTION`) et il faut relancer `make calibrate`.
+**Garde-fou d'empreinte.** `model_fingerprint` (scores du modèle sur un jeu sonde fixe) est écrit dans
+`baseline_stats.json` et `calibration.json`. Si `train --calibration` produit un modèle différent de celui qui a été calibré
+(baseline recapturée, seed ou scikit-learn changés), il **échoue** (code 3, rien n'est écrit) : appliquer un seuil calculé pour
+un autre modèle donnerait un detector mal réglé sans aucun signe visible. Le build du detector échoue donc aussi, au lieu
+d'embarquer ce seuil. Remède : `make calibrate`. `--allow-stale-calibration` force l'entraînement en **ignorant** la
+calibration (retour au seuil par quantile, tracé dans `calibration_ignored`), jamais en gardant le seuil périmé.
+
+Tests en Python 3.12 sans rien installer : `make test-ml`.

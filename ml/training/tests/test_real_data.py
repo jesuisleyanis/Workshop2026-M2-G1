@@ -108,11 +108,13 @@ def test_train_reports_real_attacks_separately(baseline_csv, attacks_csv):
 
 def test_calibration_overrides_threshold(baseline_csv):
     real = load_csv(baseline_csv)
+    model, _ = train(real=real, n_estimators=50, version="t")
+    fp = model_fingerprint(model)
     _, stats = train(real=real, n_estimators=50, version="t",
-                     calibration={"threshold": 0.58, "model_fingerprint": "abc"})
+                     calibration={"threshold": 0.58, "model_fingerprint": fp})
     assert stats["threshold"] == 0.58
     assert "calibration" in stats["threshold_source"]
-    assert stats["calibration"]["model_fingerprint"] == "abc"
+    assert stats["calibration"]["model_fingerprint"] == fp == stats["model_fingerprint"]
     with pytest.raises(ValueError):
         train(real=real, n_estimators=50, calibration={"threshold": 1.5})
 

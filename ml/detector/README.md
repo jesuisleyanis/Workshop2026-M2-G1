@@ -45,4 +45,7 @@ docker build -f ml/detector/Dockerfile -t resilience/detector . # image : le mod
 
 L'image n'attend aucun artefact pré-calculé : son étape `trainer` lance `ml.training.train` sur
 `ml/training/data/baseline_real.csv` (+ `calibration.json`) s'ils sont versionnés, sinon sur la baseline synthétique
-(cf. `ml/training/README.md` §6). Le scikit-learn d'entraînement est donc toujours celui du runtime.
+(cf. `ml/training/README.md` §6). Le scikit-learn d'entraînement est donc toujours celui du runtime. Si
+`calibration.json` a été calculée sur un autre modèle, l'entraînement échoue (code 3) et **le build aussi** : l'image ne
+part jamais avec un seuil qui ne correspond pas à son modèle. L'étape `ml-tools` du même Dockerfile sert aux cibles
+`make train` / `calibrate` / `test-ml` (dev uniquement, hors image finale).
