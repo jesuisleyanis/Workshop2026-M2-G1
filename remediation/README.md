@@ -81,6 +81,7 @@ API sur le port **8005** (interne, réseau `app` ; jamais publié). Sauf sondes,
 | Méthode | Chemin | Auth | Description |
 |---|---|---|---|
 | `POST` | `/events` | oui | Reçoit un `AnomalyEvent` (+ `source_ip` optionnel). `202` `{incident_id, decision, dry_run, detail}` avec `decision` ∈ `started`, `duplicate`, `replayed`, `cooldown`. `422` si le corps est invalide. |
+| `POST` | `/manual-actions` | oui | Action confirmée par un opérateur (dashboard). Voir « Action manuelle » ci-dessous. |
 | `GET` | `/incidents?limit=50` | oui | Derniers incidents (`limit` 1 à 500). |
 | `GET` | `/incidents/{incident_id}` | oui | Détail : incident + `actions` + `verifications` + `timeline`. `404 incident_not_found`. |
 | `GET` | `/decision-table` | oui | Table de décision chargée (JSON). |
@@ -88,6 +89,22 @@ API sur le port **8005** (interne, réseau `app` ; jamais publié). Sauf sondes,
 | `GET` | `/health` | non | Liveness : `{"status": "ok"}`. |
 | `GET` | `/ready` | non | Readiness : `200`/`503` avec `checks` = `decision_table`, `journal`, `auth_configured`, `docker_socket_proxy` (ping du proxy). |
 | `GET` | `/metrics` | non | Métriques Prometheus (`resilience_remediation_actions_total`, `resilience_mttd_seconds`, `resilience_mttr_seconds`, métriques HTTP). |
+
+### Action manuelle (`POST /manual-actions`)
+
+Appelée **uniquement par le dashboard** après confirmation opérateur (nginx injecte le Bearer côté serveur). L'assistant ne l'appelle jamais.
+
+```json
+{"action": "waf_block_ip",    "params": {"source": "203.0.113.9"},  "reason": "optionnel, <= 200 car."}
+{"action": "restart_service", "params": {"service": "payment-api"}}
+```
+
+- Liste blanche **stricte** (`engine.MANUAL_ACTIONS`) : `waf_block_ip` (param unique `source` = IP littérale, `from_event` refusé) et `restart_service` (param unique `service`). Toute autre action, clé de `params` en trop/absente ou champ inconnu → `422`.
+- Mêmes garde-fous qu'en automatique, vérifiés **avant** toute écriture : `NEVER_BLOCK_IPS` + loopback/multicast/non spécifiée, après dépliage des IPv6 mappées IPv4 (`::ffff:127.0.0.1` = `127.0.0.1`) ; IPv6 avec zone (`%eth0`) refusée (`422 action_refused`), `RESTARTABLE_SERVICES` (`422 action_refused`), validation des paramètres (`422 invalid_params` / `invalid_request`). En cas de refus : rien n'est exécuté ni journalisé.
+- Exécution via le même chemin que le moteur (`build_action` → `RemediationEngine._execute` : verrou d'actions, timeout, dry-run, métrique `resilience_remediation_actions_total`).
+- Journal : un incident `incident_type = "manual_action"` (`service` = IP ou service ciblé, `event_id = manual-<incident_id>`, `reason` = motif opérateur), l'action, puis clôture (`closed` si OK, `dry_run`, `escalated` si l'action a échoué). Timeline SSE : `decision` (`data.manual = true`, `reason`) → `action` (running, puis résultat) → `closure`. Exporté par `export_journal.py` comme tout incident. Log `remediation_manual_action`.
+- Pas de `verify_tx` ni de rejeu : l'opérateur décide, il voit le résultat de l'action.
+- Réponse `200` : `{"incident_id", "action", "status", "detail"}` avec `status` ∈ `ok`, `dry_run`, `failed`.
 
 Codes d'erreur d'authentification : `401 unauthorized` (+ `WWW-Authenticate: Bearer`), `503 auth_not_configured` si le token est absent ou fait moins de 16 caractères (fail closed). Corps d'erreur : `{"error": {"code", "message", "request_id"}}`.
 
@@ -116,7 +133,7 @@ Le dashboard consomme **Server-Sent Events** (pas de WebSocket) sur `GET /stream
 - `phase` : `detection` → `decision` → `action` → `verification` → `closure` | `escalation`. `status` : `info`, `running`, `ok`, `ko`, `failed`, `skipped`, `dry_run`.
 - Réponse : `text/event-stream`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`.
 - L'`id` SSE est l'id SQLite de la timeline : persistant, croissant, rejouable après reconnexion ou redémarrage du moteur.
-- Un `EventSource` navigateur ne peut pas poser de header : le dashboard passe par son reverse-proxy nginx (`GET /remediation/stream` → `/stream`) qui injecte `Authorization` (variable `REMEDIATION_AUTH_HEADER` du conteneur dashboard). Voir [`../dashboard/README.md`](../dashboard/README.md).
+- Un `EventSource` navigateur ne peut pas poser de header : le dashboard passe par son reverse-proxy nginx (`GET /remediation/stream` → `/stream`) qui injecte `Authorization` (variable `REMEDIATION_AUTH_HEADER` du conteneur dashboard). Ce proxy n'expose que `GET /remediation/stream` et `POST /remediation/manual-actions` (`application/json` exigé) ; tout autre chemin `/remediation/*` répond `404`. Voir [`../dashboard/README.md`](../dashboard/README.md).
 
 ## Variables d'environnement
 
@@ -215,6 +232,7 @@ pytest -q
 | `tests/test_engine.py` | Séquences par type, vérification/MTTD/MTTR, cooldown, dédoublonnage, idempotence, `max_attempts`/escalade, dry-run, IP protégées, liste blanche de services, logs et métriques du contrat, couverture de la timeline. |
 | `tests/test_actions.py` | Catalogue d'actions, liste blanche du client Docker, recreate + rollback, `tighten_rate_limit`, `confirm_waf_block`, `notify_operator`, validation des paramètres, liste blanche de playbooks, contrat de `verify_tx`, reprise des incidents orphelins. |
 | `tests/test_api.py` | Authentification (401, token en query refusé, fail closed), `POST /events` bout en bout, erreurs au format du contrat, `/incidents`, `/decision-table`, `/stream` avec `Last-Event-ID`, sondes, `/metrics`. |
+| `tests/test_manual_actions.py` | `POST /manual-actions` : blocage IP et restart OK, liste blanche (422), IP protégées refusées, 401 sans token, dry-run, journal + SSE + log `remediation_manual_action`, export. |
 | `tests/test_sse.py` | Flux SSE en direct après rejeu, keepalive, format de trame. |
 | `tests/test_export_journal.py` | Export JSON pour l'assistant : contenu complet, `--limit`, lecture seule, écriture atomique, base absente. |
 | `tests/conftest.py`, `tests/broker_helpers.py` | Faux horloge, vérificateur, runner Ansible, réseau ; capture de logs. |

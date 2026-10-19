@@ -4,7 +4,7 @@
 
 ## 1. Rôle
 
-Écran de **supervision pour le jury / l'opérateur**, projeté et filmé pour le Clip Chrono (≤ 60 s, sans coupe). Il montre en direct la boucle *Zero-Touch Recovery* : la santé des services, le score d'anomalie du ML, la timeline **détection -> décision -> action -> vérification**, le MTTD / MTTR, la dernière transaction de vérification, et donne accès à Grafana. Il est **en lecture seule** : aucune action de remédiation n'est déclenchée depuis l'écran (pas d'intervention humaine dans la boucle).
+Écran de **supervision pour le jury / l'opérateur**, projeté et filmé pour le Clip Chrono (≤ 60 s, sans coupe). Il montre en direct la boucle *Zero-Touch Recovery* : la santé des services, le score d'anomalie du ML, la timeline **détection -> décision -> action -> vérification**, le MTTD / MTTR, la dernière transaction de vérification, et donne accès à Grafana. La boucle automatique reste **sans intervention humaine** : l'écran ne pilote jamais la remédiation d'un incident. Seule exception, hors boucle : le panneau « Commande opérateur » (D18) permet une action manuelle **explicitement confirmée** (liste blanche du moteur).
 
 Design « ZTR Supervision » (console sombre, accent violet, polices Geist auto-hébergées) : barre latérale (état du flux, horloge, source, répétition, Grafana), bandeau de phase, rangée d'indicateurs, courbe du score sur 2 min, timeline en 4 cartes, actions, santé, signaux, playbooks, preuves. Les états sont portés par du **texte** (pas seulement par la couleur).
 
@@ -28,13 +28,15 @@ Design « ZTR Supervision » (console sombre, accent violet, polices Geist auto-
 | D14 | Simulation locale (répétition sans stack) : mêmes trames JSON que le moteur, validées par le même parseur, **toujours signalée** à l'écran | `lib/simulator.ts`, `VITE_STREAM_SOURCE` |
 | D15 | Déclencheurs de répétition : en simulation, ou en flux réel **en dev uniquement** (mock `GET /trigger`) ; masqués en prod | `Sidebar`, `LIVE_TRIGGERS` |
 | D16 | Onglet « Assistant » : UI de l'assistant RAG en iframe same-origin (`/assistant/`), supervision gardée montée | `AssistantTab` (`VITE_ASSISTANT_URL`), onglets dans `App` |
+| D17 | « Rapport d'incident » : résumé DSI **à la demande** (`POST /assistant/api/v1/summarize`, mis en cache par incident, badge « mode dégradé ») ; post-mortem téléchargé en `postmortem-<id>.md` (`/postmortem`), actif seulement pour un incident terminé (vérifié ou en échec) | `IncidentReportPanel` (`components/OperatorTools.tsx`) |
+| D18 | « Commande opérateur » : texte libre -> proposition de l'assistant (`POST /assistant/api/v1/propose`) -> motif optionnel -> **Confirmer** / Annuler. Rien n'est exécuté sans clic sur Confirmer (désactivé pendant la requête) ; Confirmer appelle `POST /remediation/manual-actions` et affiche `status` / `detail` ; les 422 (`action_refused`, `invalid_params`…) sont affichés en clair ; `proposal: null` affiche `message` sans bouton Confirmer | `OperatorCommandPanel` (`components/OperatorTools.tsx`) |
 
 ### Source des événements et déclencheurs
 
 - `VITE_STREAM_SOURCE=live` (défaut, démo jury) : flux réel uniquement. Une coupure affiche « Flux interrompu », **jamais** de bascule silencieuse vers des données générées.
 - `auto` : flux réel ; s'il n'a **jamais** pu s'ouvrir, bascule une fois en simulation avec le bandeau « Flux injoignable — simulation locale active ». Un flux ouvert puis coupé reste en reconnexion.
 - `simulation` : simulation d'emblée. Bouton « Passer en simulation » / « Réessayer le flux réel » dans tous les modes.
-- Les déclencheurs injectent un **incident de démonstration** (simulation locale ou mock) ; ils ne pilotent jamais le moteur de remédiation réel, dont seule la route `GET /stream` est proxifiée par nginx. En démo, les attaques partent du PC Attaquant.
+- Les déclencheurs injectent un **incident de démonstration** (simulation locale ou mock) ; ils ne pilotent jamais le moteur de remédiation réel (nginx n'en proxifie que `GET /stream` et `POST /manual-actions`, cette dernière réservée à D18). En démo, les attaques partent du PC Attaquant.
 
 ### Définition des phases (R20)
 
@@ -48,7 +50,18 @@ Une vérification en échec ne fait **jamais** passer en APRÈS. Un nouvel incid
 
 ## 3. Interfaces consommées
 
-Une seule : le **flux SSE du moteur de remédiation**, `GET http://remediation:8005/stream` (docs/contracts.md : « SSE/WebSocket -> Dashboard »). Le navigateur n'appelle jamais `remediation:8005` directement : il ouvre `<VITE_REMEDIATION_BASE>/stream` (défaut `/remediation/stream`), proxifié par Vite en dev et par nginx en prod.
+Principale : le **flux SSE du moteur de remédiation**, `GET http://remediation:8005/stream` (docs/contracts.md : « SSE/WebSocket -> Dashboard »). Le navigateur n'appelle jamais `remediation:8005` directement : il ouvre `<VITE_REMEDIATION_BASE>/stream` (défaut `/remediation/stream`), proxifié par Vite en dev et par nginx en prod.
+
+À la demande de l'opérateur (D17, D18), via les mêmes proxys :
+
+| Appel navigateur | Cible | Corps -> réponse |
+|---|---|---|
+| `POST /assistant/api/v1/summarize` | assistant | `{incident}` (objet `Incident` de l'état) -> `{summary, degraded, model}` |
+| `POST /assistant/api/v1/postmortem` | assistant | `{incident}` -> `{markdown, degraded, model}` |
+| `POST /assistant/api/v1/propose` | assistant | `{command}` (3..300 car.) -> `{proposal: {action, params, explanation} \| null, message, degraded}` |
+| `POST /remediation/manual-actions` | moteur (`/manual-actions`, Bearer injecté par nginx) | `{action, params, reason?}` -> `{incident_id, action, status, detail}` ; 422 `invalid_request` / `invalid_params` / `action_refused` |
+
+Erreurs au format `{error:{code,message,request_id}}`, affichées « `code : message` » ; service injoignable (ex. simulation sans stack) -> « Service injoignable », sans effet sur le flux.
 
 ### Schémas
 
@@ -95,17 +108,19 @@ Points de vigilance côté moteur :
 ## 5. Exécution et exposition
 
 - Dev : `npm run dev` sur le port **5174** (strict).
-- Prod : conteneur nginx non-root écoutant **8080**, réseau `app` (doit joindre `remediation:8005`). nginx sert le statique **et** proxifie **uniquement** `GET /remediation/stream` (SSE : `proxy_buffering off`, timeout 1 h) et les 3 routes de l'assistant RAG `GET /assistant/`, `GET /assistant/static/*`, `POST /assistant/api/v1/ask` (préfixe retiré, timeout 130 s) ; tout autre `/remediation/*` ou `/assistant/*` renvoie 404. L'API `/events` du moteur n'est jamais atteignable depuis le navigateur. Healthcheck : `GET /healthz`.
+- Prod : conteneur nginx non-root écoutant **8080**, réseau `app` (doit joindre `remediation:8005`). nginx sert le statique **et** proxifie **uniquement** `GET /remediation/stream` (SSE : `proxy_buffering off`, timeout 1 h), `POST /remediation/manual-actions` (corps ≤ 4 Ko, jeton injecté) et les routes de l'assistant RAG `GET /assistant/`, `GET /assistant/static/*`, `POST /assistant/api/v1/(ask|summarize|postmortem|propose)` (préfixe retiré, timeout 130 s) ; tout autre `/remediation/*` ou `/assistant/*` renvoie 404, et toute autre méthode 403. L'API `/events` du moteur n'est jamais atteignable depuis le navigateur. Healthcheck : `GET /healthz`.
 - Le build utilise `base: './'` : l'app peut être servie à la racine d'un hôte ou sous un sous-chemin (dans ce cas régler `VITE_REMEDIATION_BASE` au build en conséquence).
 
 ## 6. Sécurité
 
-- Le moteur de remédiation reste **hors réseau `edge`** ; le dashboard n'y accède que par le proxy nginx en lecture seule. Le jeton éventuel est injecté côté serveur (variable d'environnement du conteneur, fournie via SOPS), **jamais dans le bundle**.
+- Le moteur de remédiation reste **hors réseau `edge`** ; le dashboard n'y accède que par le proxy nginx (flux en lecture seule + la seule route d'action manuelle). Le jeton éventuel est injecté côté serveur (variable d'environnement du conteneur, fournie via SOPS), **jamais dans le bundle**.
 - **Le dashboard ne doit pas être publié publiquement sans contrôle d'accès** : toute personne qui l'atteint peut lire le flux de supervision. Options : publier sur l'hôte en `127.0.0.1` / réseau d'admin, ou le router via le WAF avec authentification.
 - Image multi-stage, utilisateur `nginx`, CSP stricte (`default-src 'self'`, `connect-src 'self'`), `X-Frame-Options: DENY`, `nosniff` (sauf sur `/assistant/` : pas de `X-Frame-Options`, l'assistant pose sa propre CSP `frame-ancestors 'self'` pour être embarqué ; l'iframe same-origin est permise par `default-src 'self'`), `server_tokens off`, conf générée dans `/tmp` (compatible `read_only: true` + `tmpfs: /tmp`, `cap_drop: [ALL]`, `no-new-privileges`).
 - Liens Grafana : `rel="noopener noreferrer"`. Polices Geist servies depuis le bundle (`@fontsource-variable/*`) : la CSP n'autorise aucun CDN.
+- **Route d'action `POST /remediation/manual-actions`** : nginx y injecte le jeton du moteur, donc **quiconque atteint le dashboard peut l'appeler**. Sa protection repose uniquement sur (1) l'exposition réseau du dashboard (127.0.0.1 / réseau d'admin / WAF authentifié), (2) la confirmation explicite dans l'UI (non opposable à un appel direct), (3) la liste blanche du moteur (`waf_block_ip` hors IP protégées, `restart_service` limité à `RESTARTABLE_SERVICES`, 422 sinon) et sa journalisation. L'assistant ne fait que proposer : il n'appelle jamais le moteur.
+- Pas de `dangerouslySetInnerHTML` : textes de l'assistant rendus en texte brut ; le post-mortem n'est pas rendu, seulement téléchargé.
 - Pas de bouton d'attaque en prod : les déclencheurs de répétition n'existent qu'en simulation ou en dev (D15).
 
 ## 7. Tests (Vitest + Testing Library)
 
-Parsing d'un AnomalyEvent conforme au contrat (exemple verbatim §3, énumération `incident_type`, cas invalides), parsing des messages du flux, reducer et timeline (4 étapes, échecs), reset (incident écarté ignoré), MTTD/MTTR, **garde AVANT / PENDANT / APRÈS** (logique et rendu `aria-current`), composants clés (courbe : géométrie de la fenêtre, onglets, marqueurs ; actions ; preuves ; playbooks), hook SSE (EventSource simulé : états, rejets, fermeture), rejeu de bout en bout d'un incident `service_flood`, **simulation locale** jusqu'à APRÈS (`data_corruption` => `restore_pg_dump` seul, jamais de redémarrage), bascule `auto`, déclencheur dev. Lancement : `npm run test`.
+Parsing d'un AnomalyEvent conforme au contrat (exemple verbatim §3, énumération `incident_type`, cas invalides), parsing des messages du flux, reducer et timeline (4 étapes, échecs), reset (incident écarté ignoré), MTTD/MTTR, **garde AVANT / PENDANT / APRÈS** (logique et rendu `aria-current`), composants clés (courbe : géométrie de la fenêtre, onglets, marqueurs ; actions ; preuves ; playbooks), hook SSE (EventSource simulé : états, rejets, fermeture), rejeu de bout en bout d'un incident `service_flood`, **simulation locale** jusqu'à APRÈS (`data_corruption` => `restore_pg_dump` seul, jamais de redémarrage), bascule `auto`, déclencheur dev ; outils opérateur (`fetch` simulé) : résumé + mode dégradé, téléchargement du post-mortem, propose -> Confirmer -> `/remediation/manual-actions`, Annuler sans appel, `proposal: null` sans Confirmer, 422 du moteur affiché, service injoignable. Lancement : `npm run test` (Node ≥ 22.22 / 24.15, exigé par jsdom).

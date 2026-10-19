@@ -11,15 +11,17 @@ import hmac
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from pydantic import BaseModel, ConfigDict, Field
 from resilience_common import get_logger
 
+from actions import ActionError, ActionParamError
 from actions.docker_proxy import DockerProxy
 from actions.runner import AnsibleRunnerAdapter
 from config import Settings
@@ -33,6 +35,15 @@ from verify import ScriptVerifier
 
 SERVICE = "remediation"
 PROBES = frozenset({"/health", "/ready", "/metrics"})
+
+
+class ManualAction(BaseModel):
+    """Corps de POST /manual-actions : liste blanche stricte (cf. engine.MANUAL_ACTIONS)."""
+
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["waf_block_ip", "restart_service"]
+    params: dict[str, Any]
+    reason: str | None = Field(default=None, max_length=200)
 
 
 def _error(status: int, code: str, message: str, request: Request) -> JSONResponse:
@@ -162,6 +173,15 @@ def create_app(
         sub = await engine.handle_event(event)
         return {"incident_id": sub.incident_id, "decision": sub.decision,
                 "dry_run": sub.dry_run, "detail": sub.detail}
+
+    @app.post("/manual-actions", dependencies=[auth])
+    async def post_manual_action(body: ManualAction, request: Request):
+        """Action confirmée par un opérateur depuis le dashboard (jamais appelée par l'assistant)."""
+        try:
+            return await engine.run_manual(body.action, body.params, body.reason)
+        except (ActionParamError, ActionError) as exc:  # rien n'a été exécuté ni journalisé
+            code = "invalid_params" if isinstance(exc, ActionParamError) else "action_refused"
+            return _error(422, code, str(exc), request)
 
     @app.get("/incidents", dependencies=[auth])
     async def list_incidents(limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:

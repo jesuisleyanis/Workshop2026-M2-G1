@@ -103,6 +103,14 @@ describe('parseStreamMessage', () => {
     expect(b.ok && b.value).toMatchObject({ action: 'waf_block_ip', result: 'failed' })
   })
 
+  it("remediation_started d'une action manuelle (incident_type hors énumération) : accepté, type ramené à null", () => {
+    const r = parseStreamMessage(
+      'remediation_started',
+      JSON.stringify({ incident_id: 'm', incident_type: 'manual_action', service: '203.0.113.9', actions: ['waf_block_ip'] }),
+    )
+    expect(r.ok && r.value).toMatchObject({ kind: 'remediation_started', incidentType: null, actions: [{ type: 'waf_block_ip' }] })
+  })
+
   it('rejette JSON invalide, type inconnu, incident_id manquant', () => {
     expect(parseStreamMessage('health', '{pas json').ok).toBe(false)
     expect(parseStreamMessage('inconnu', '{}').ok).toBe(false)

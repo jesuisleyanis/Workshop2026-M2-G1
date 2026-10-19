@@ -17,8 +17,9 @@ server {
     return 200 "ok\n";
   }
 
-  # Flux SSE du moteur de remédiation. UNIQUEMENT ce chemin (lecture seule) est exposé :
-  # l'API /events du moteur reste inaccessible depuis le navigateur. Le jeton éventuel est
+  # Flux SSE du moteur de remédiation. Seuls deux chemins du moteur sont exposés : ce flux
+  # (GET, lecture seule) et POST /remediation/manual-actions (action opérateur confirmée, liste
+  # blanche côté moteur). L'API /events reste inaccessible depuis le navigateur. Le jeton est
   # injecté ici côté serveur ; il n'atteint jamais le bundle JS.
   location = /remediation/stream {
     include /etc/nginx/security-headers.conf;
@@ -39,12 +40,29 @@ server {
     add_header Cache-Control "no-cache" always;
   }
 
+  # Action manuelle confirmée par l'opérateur (panneau « Commande opérateur »). Protégée par
+  # l'exposition réseau du dashboard + la confirmation UI + la liste blanche du moteur (422 sinon).
+  location = /remediation/manual-actions {
+    include /etc/nginx/security-headers.conf;
+    limit_except POST { deny all; }
+    client_max_body_size 4k;
+    # Anti-CSRF : application/json impose un preflight CORS (OPTIONS -> 403 ci-dessus) à toute page
+    # tierce ; sans ce contrôle, un POST « simple » sans Content-Type serait lu comme JSON par FastAPI.
+    if ($content_type !~* "^application/json") { return 415; }
+    set $remediation_upstream "http://${REMEDIATION_UPSTREAM}";
+    rewrite ^/remediation/manual-actions$ /manual-actions break;
+    proxy_pass $remediation_upstream;
+    proxy_set_header Authorization "${REMEDIATION_AUTH_HEADER}";
+    proxy_set_header Host $host;
+  }
+
   location /remediation/ {
     return 404;
   }
 
-  # Assistant RAG (onglet iframe, lecture seule). UNIQUEMENT GET /assistant/, GET /assistant/static/*
-  # et POST /assistant/api/v1/ask ; tout le reste de /assistant/ -> 404. PAS de security-headers.conf
+  # Assistant RAG (onglet iframe + appels du dashboard, sans action sur le système). UNIQUEMENT
+  # GET /assistant/, GET /assistant/static/* et POST /assistant/api/v1/(ask|summarize|postmortem|propose) ;
+  # tout le reste de /assistant/ -> 404. PAS de security-headers.conf
   # ici (X-Frame-Options DENY / frame-ancestors 'none' bloqueraient l'iframe) : les add_header locaux
   # coupent l'héritage du niveau server, et l'assistant envoie sa propre CSP (frame-ancestors 'self').
   location ~ ^/assistant/(static/.+)?$ {
@@ -57,7 +75,7 @@ server {
     add_header Referrer-Policy "no-referrer" always;
   }
 
-  location = /assistant/api/v1/ask {
+  location ~ ^/assistant/api/v1/(ask|summarize|postmortem|propose)$ {
     limit_except POST { deny all; }
     set $assistant_upstream "http://${ASSISTANT_UPSTREAM}";
     rewrite ^/assistant/(.*)$ /$1 break;

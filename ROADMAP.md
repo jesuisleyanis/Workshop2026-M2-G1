@@ -77,6 +77,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | Dashboard (états, score, timeline, MTTD/MTTR, SSE) | `dashboard/` | R4,R20 | — | ✅ | CDC+README+src+tests ; design « ZTR Supervision » (courbe 2 min/service, actions, playbooks, preuves, simulation locale) — 99 tests verts, vérifié contre le mock |
 | Scénarios d'attaque v1 (depuis PC Attaquant) | `attacks/` | R10 | Louis | ✅ | 4 scénarios ; validateur + runbook PC Attaquant ; déclencheur `data_corruption` (pg_backup + db_corrupt_fake réversible) — 10 tests contrat verts |
 | RAG : indexation docs + journal, UI onglet | `assistant/` | R9 | — | ✅ | 97 tests verts |
+| Résumé DSI, commande opérateur confirmée (`POST /manual-actions`, liste blanche), post-mortem `.md` | `assistant/`, `remediation/`, `dashboard/` | R9 | — | 🟨 | tests unitaires verts ; **ouvert** : le dashboard n'écoute pas `event: timeline` du moteur (enveloppe SSE à aligner) → actions manuelles absentes de la timeline live |
 
 ## J4 — Jeudi : recette, chaos, clip, gel du code (17h)
 

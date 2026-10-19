@@ -2,7 +2,7 @@
 
 Assistant **documentaire en lecture seule** : il répond aux questions de l'opérateur (« que s'est-il passé ? », « quelle procédure pour `service_flood` ? ») à partir de `docs/`, de la table de décision et du journal d'incidents, avec **sources citées**.
 
-> **FRONTIÈRE DE SÉCURITÉ.** L'assistant n'est **pas** le moteur de remédiation. Il ne déclenche **aucune action**, n'a **aucun accès privilégié** (ni socket Docker, ni Ansible, ni token de remédiation, ni appel au moteur) et n'est **pas dans la boucle de reprise**. Seule `remediation/` agit. Détails et preuves (tests négatifs) : [`CAHIER-DES-CHARGES.md`](CAHIER-DES-CHARGES.md) §2.
+> **FRONTIÈRE DE SÉCURITÉ.** L'assistant n'est **pas** le moteur de remédiation. Il peut **proposer** une action (`/propose`, liste blanche) mais n'en **exécute aucune** : l'opérateur confirme dans le dashboard, qui transmet au moteur. Il ne déclenche **aucune action**, n'a **aucun accès privilégié** (ni socket Docker, ni Ansible, ni token de remédiation, ni appel au moteur) et n'est **pas dans la boucle de reprise**. Seule `remediation/` agit. Détails et preuves (tests négatifs) : [`CAHIER-DES-CHARGES.md`](CAHIER-DES-CHARGES.md) §2.
 
 ## Architecture
 
@@ -22,6 +22,7 @@ Assistant **documentaire en lecture seule** : il répond aux questions de l'opé
 | `app/store.py` / `app/indexer.py` | Chroma persistant ; indexation (rebuild complet, idempotent) + CLI |
 | `app/rag.py` | Récupération (testable sans LLM), prompt, génération |
 | `app/llm.py` | `ChatOllama` + sonde de joignabilité |
+| `app/incident_text.py` | Résumé DSI, post-mortem (chronologie déterministe), proposition d'action (liste blanche, validation, repli regex) |
 | `app/main.py` | API FastAPI, middleware logs/`request_id`, erreurs au format du contrat |
 | `app/static/` | UI (HTML + JS + CSS, sans inline) |
 
@@ -51,6 +52,21 @@ Exemple :
 curl -s localhost:8006/api/v1/ask -H 'content-type: application/json' \
   -d '{"question":"Quelle procédure pour un incident service_flood ?"}'
 # {"answer":"...","sources":[{"doc":"runbooks/service_flood.md","extrait":"...","section":"...","kind":"doc","score":0.45}],"degraded":false,"model":"qwen2.5:7b"}
+```
+
+### Routes incident (sans état, données fournies par l'appelant)
+
+| Route | Requête | Réponse |
+|---|---|---|
+| `POST /api/v1/summarize` | `{"incident": {...}}` (objet SSE du dashboard, JSON <= 50 Ko) | `{"summary", "degraded", "model"}` : 4-6 phrases pour un DSI |
+| `POST /api/v1/postmortem` | `{"incident": {...}}` | `{"markdown", "degraded", "model"}` : post-mortem sans blâme ; chronologie et actions générées en Python |
+| `POST /api/v1/propose` | `{"command": "bloque l'IP 192.168.137.50"}` (3..300 car.) | `{"proposal": {"action", "params", "explanation"} \| null, "message", "degraded"}` |
+
+`/propose` n'accepte que `waf_block_ip` (`params.source` = IP valide présente dans la commande) et `restart_service` (`params.service` conforme à `^[a-z0-9][a-z0-9_-]{0,62}$`). **Rien n'est exécuté** : le dashboard affiche la proposition, l'opérateur confirme, le moteur exécute. Ollama absent -> `degraded: true` (gabarit déterministe / repli regex). Incident > 50 Ko -> `422 incident_too_large`.
+
+```bash
+curl -s localhost:8006/api/v1/propose -H 'content-type: application/json' -d '{"command":"redémarre payment-api"}'
+# {"proposal":{"action":"restart_service","params":{"service":"payment-api"},"explanation":"Redémarrer le service « payment-api » ..."},"message":"Proposition uniquement : rien n'a été exécuté. ...","degraded":false}
 ```
 
 ## Docker
@@ -140,7 +156,7 @@ Onglet « Assistant » intégré au dashboard : iframe sur `/assistant/`, proxif
 
 ## Logs, métriques, sondes
 
-- Logs JSON du contrat (`service: "assistant"`), `request_id` (reprend `X-Request-ID` ou en génère un). Événements émis : `assistant_index_built`, `assistant_index_empty`, `assistant_store_error`, `assistant_http_request`, `assistant_question_answered`, `assistant_llm_unavailable` (déclarés dans `docs/contracts.md §1`) ; ils ne sont pas utilisés par les règles d'alerte.
+- Logs JSON du contrat (`service: "assistant"`), `request_id` (reprend `X-Request-ID` ou en génère un). Événements émis : `assistant_index_built`, `assistant_index_empty`, `assistant_store_error`, `assistant_http_request`, `assistant_question_answered`, `assistant_incident_summarized`, `assistant_postmortem_generated`, `assistant_action_proposed`, `assistant_llm_unavailable` (contenus libres jamais journalisés, seulement les longueurs ; déclarés dans `docs/contracts.md §1`) ; ils ne sont pas utilisés par les règles d'alerte.
 - `/metrics` : `resilience_http_requests_total`, `resilience_http_request_duration_seconds`.
 - `GET /health` (liveness), `GET /ready` (200 si Chroma chargé et non vide ; Ollama sondé, absence tolérée -> `mode: "degraded"`).
 - Erreurs : `{"error": {"code", "message", "request_id"}}`.
@@ -159,7 +175,8 @@ Aucun accès réseau : Ollama est mocké, `/ready` sonde un faux Ollama, corpus 
 | `tests/test_indexing.py` | chunks produits, Chroma peuplé et persistant, ré-indexation idempotente, sources optionnelles |
 | `tests/test_retrieval.py` | bons passages pour une question donnée, **sans LLM** |
 | `tests/test_api.py` | `/ask` -> `{answer, sources}` (LLM mocké), mode dégradé, `/health`, `/ready`, erreurs |
-| `tests/test_security_guard.py` | **test négatif** : aucun endpoint d'action, aucune capacité d'exécution, conteneur non-root |
+| `tests/test_incident_routes.py` | `/summarize`, `/postmortem`, `/propose` : nominal, dégradé, validation, injection, payload trop gros |
+| `tests/test_security_guard.py` | **test négatif** : aucun endpoint d'action, aucune capacité d'exécution, `/propose` sans processus ni appel sortant, conteneur non-root |
 
 ## Limites connues
 

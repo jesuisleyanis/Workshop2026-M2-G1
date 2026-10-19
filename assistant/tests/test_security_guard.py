@@ -1,7 +1,8 @@
-"""Garde de sécurité (test NÉGATIF) : l'assistant est en lecture documentaire seule.
+"""Garde de sécurité (test NÉGATIF) : l'assistant ne produit que du texte.
 
-Il ne doit exposer aucun endpoint déclenchant une action de remédiation, ni embarquer de
-capacité d'exécution (docker, subprocess, ansible), ni appeler le moteur de remédiation.
+Il peut PROPOSER une action (liste blanche, /propose) mais ne doit exposer aucun endpoint
+déclenchant une action de remédiation, ni embarquer de capacité d'exécution (docker,
+subprocess, ansible), ni appeler le moteur de remédiation.
 """
 
 import ast
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
 
 from app.main import create_app
 from app.store import open_store
@@ -25,7 +27,11 @@ ALLOWED_ROUTES = {
     ("GET", "/ready"),
     ("GET", "/"),
     ("POST", "/api/v1/ask"),
+    ("POST", "/api/v1/summarize"),
+    ("POST", "/api/v1/postmortem"),
+    ("POST", "/api/v1/propose"),  # texte seulement : propose, n'exécute jamais
 }
+TEXT_POST_ROUTES = {(m, p) for m, p in ALLOWED_ROUTES if m == "POST"}
 FORBIDDEN_WORDS = re.compile(
     r"restart|reboot|block|blacklist|restore|remediat|execute|exec|trigger|run|action|"
     r"rollback|recreate|kill|delete|rate[-_]?limit|playbook|ansible|docker|events",
@@ -51,16 +57,18 @@ def test_only_allowed_routes_are_exposed(settings, fake_llm):
     assert exposed == ALLOWED_ROUTES
 
 
-def test_no_mutating_method_except_ask(settings, fake_llm):
+def test_no_mutating_method_except_text_routes(settings, fake_llm):
     app = create_app(settings, store=open_store(settings), llm=fake_llm)
     mutating = {(m, r.path) for r in _app_routes(app) for m in r.methods if m in {"PUT", "PATCH", "DELETE", "POST"}}
-    assert mutating == {("POST", "/api/v1/ask")}
+    assert mutating == TEXT_POST_ROUTES == {
+        ("POST", "/api/v1/ask"), ("POST", "/api/v1/summarize"), ("POST", "/api/v1/postmortem"), ("POST", "/api/v1/propose"),
+    }
 
 
 def test_no_route_name_suggests_an_action(settings, fake_llm):
     app = create_app(settings, store=open_store(settings), llm=fake_llm)
     for r in _app_routes(app):
-        # "ask" est la seule route métier ; aucun mot d'action dans les chemins.
+        # Routes métier textuelles uniquement ; aucun mot d'action dans les chemins.
         assert not FORBIDDEN_WORDS.search(r.path), f"chemin suspect : {r.path}"
 
 
@@ -84,6 +92,42 @@ def test_ask_never_acts_even_when_asked_to(client, fake_llm):
     assert r.status_code == 200
     assert set(r.json()) == {"answer", "sources", "degraded", "model"}
     # Le LLM n'a reçu aucun outil : un seul appel invoke(messages), pas de bind_tools.
+    fake_llm.bind_tools.assert_not_called()
+
+
+def test_propose_never_executes_nor_calls_out(client, fake_llm, monkeypatch):
+    """/propose renvoie une proposition TEXTE : aucun processus, aucun appel HTTP/socket sortant (LLM mocké)."""
+    import os
+    import socket
+    import subprocess
+    import urllib.request
+
+    import httpx
+
+    calls: list[str] = []
+
+    def trap(name):
+        def _f(*a, **k):
+            calls.append(name)
+            raise AssertionError(f"appel interdit : {name}")
+        return _f
+
+    monkeypatch.setattr(subprocess, "Popen", trap("subprocess.Popen"))
+    monkeypatch.setattr(os, "system", trap("os.system"))
+    monkeypatch.setattr(socket.socket, "connect", trap("socket.connect"))
+    monkeypatch.setattr(urllib.request, "urlopen", trap("urlopen"))
+    # Transports réseau réels d'httpx (le TestClient utilise son propre transport en mémoire).
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", trap("httpx"))
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", trap("httpx-async"))
+
+    fake_llm.invoke.return_value = AIMessage(content='{"action": "restart_service", "params": {"service": "payment-api"}}')
+    r = client.post("/api/v1/propose", json={"command": "redémarre payment-api"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["proposal"]["action"] == "restart_service"
+    assert "confirm" in body["message"] and "moteur" in body["message"]
+    assert calls == []
+    fake_llm.invoke.assert_called_once()  # seul appel externe : le LLM (Ollama), en génération de texte
     fake_llm.bind_tools.assert_not_called()
 
 

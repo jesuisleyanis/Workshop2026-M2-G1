@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AssistantTab } from './components/AssistantTab'
 import { ActionsPanel, EvidencePanel, PlaybooksPanel, SignalsPanel } from './components/IncidentDetails'
 import { IncidentTimeline } from './components/IncidentTimeline'
+import { IncidentReportPanel, OperatorCommandPanel } from './components/OperatorTools'
 import { MetricsCards, ScoreCard, VerificationCard } from './components/MetricsCards'
 import { PhaseBanner } from './components/PhaseBanner'
 import { ScoreChart } from './components/ScoreChart'
@@ -210,8 +211,10 @@ function Console({ streamUrl, assistantUrl, eventSourceFactory, simulated, fallb
             />
             <IncidentTimeline incident={incident} now={now} />
             <ActionsPanel incident={incident} />
+            <IncidentReportPanel incident={incident} />
           </div>
           <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-[18px]">
+            <OperatorCommandPanel />
             <ServicesGrid services={state.services} />
             <SignalsPanel incident={incident} />
             <PlaybooksPanel incident={incident} />

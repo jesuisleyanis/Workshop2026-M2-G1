@@ -30,6 +30,10 @@ def resolve_source_ip(params: dict[str, Any], ctx: ActionContext) -> str:
     if not raw:
         raise ActionError("aucune IP source dans l'événement (champ source_ip absent)")
     ip = ipaddress.ip_address(str(raw))
+    # ::ffff:a.b.c.d désigne a.b.c.d : sans ce dépliage, never_block_ips/loopback seraient contournés.
+    ip = getattr(ip, "ipv4_mapped", None) or ip
+    if getattr(ip, "scope_id", None):  # fe80::1%eth0 : invalide dans une directive nginx deny
+        raise ActionError(f"adresse IPv6 avec zone refusée : {ip}")
     protected = {ipaddress.ip_address(p) for p in ctx.settings.never_block_ips}
     if ip in protected or ip.is_loopback or ip.is_unspecified or ip.is_multicast:
         raise ActionError(f"refus de bloquer l'adresse protégée {ip}")
