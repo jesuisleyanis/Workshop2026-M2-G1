@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "marquee",
+        "value": "*",
+        "files": [
+          "attacks/console/static/index.html"
+        ],
+        "createdAt": "2026-10-19T10:44:12.694Z",
+        "reason": "indicateur de télémétrie live : sweep du nœud actif pendant une attaque en cours + ping 'flux connecté', liés à un état qui change ; garde prefers-reduced-motion ajouté"
+      }
+    ]
+  }
+}

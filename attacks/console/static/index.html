@@ -115,6 +115,10 @@
   .node[data-state=fail]{border-color:#6d2130;background:linear-gradient(180deg,#240f13,var(--panel-2))}
   .node[data-state=fail] .v{color:var(--red)}
   @keyframes sweep{to{transform:translateX(100%)}}
+  @media(prefers-reduced-motion:reduce){
+    .node[data-state=active]::before{animation:none}
+    .pill.live .dot{animation:none}
+  }
 
   .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-top:13px}
   .tile{border:1px solid var(--line);border-radius:11px;background:var(--panel-2);padding:11px}
