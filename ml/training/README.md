@@ -80,6 +80,11 @@ Toutes les captures tournent **dans le conteneur collector**
 les fenêtres capturées ont exactement la définition de celles que le detector score en démo. Si ces deux variables changent,
 il faut tout recapturer.
 
+**Le detector est arrêté pendant chaque capture** (`make capture-*`), puis relancé quoi qu'il arrive (succès, échec,
+Ctrl-C). Sinon l'ancien modèle pourrait déclencher des remédiations (redémarrage, limite resserrée, blocage d'IP) dont les
+effets finiraient dans la baseline « normale » ; et en dev, l'attaque et le trafic de fond partant de la même IP,
+`waf_deny_ip` bloquerait aussi le trafic de fond. La remédiation, elle, reste disponible pour Alertmanager.
+
 | # | Commande | Effet |
 |---|---|---|
 | 1 | `make capture-baseline` (`DURATION=60m` par défaut) | joue 60 min de trafic légitime (`scripts/gen_normal_traffic.py`), capture dans un `.tmp` et ne remplace `data/baseline_real.csv` que s'il contient au moins 200 fenêtres (50 min à 15 s) |
