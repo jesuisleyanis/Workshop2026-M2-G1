@@ -89,7 +89,9 @@ def _fmt(value: Any) -> str:
     if isinstance(value, list):
         return "; ".join(_fmt(v) for v in value)
     if isinstance(value, dict):
-        return ", ".join(f"{k}={_fmt(v)}" for k, v in value.items())
+        # imbrication (ex. params d'une action) en JSON compact : sinon ses clés se mêlent à celles du parent
+        return ", ".join(f"{k}={json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else _fmt(v)}"
+                         for k, v in value.items())
     return str(value)
 
 

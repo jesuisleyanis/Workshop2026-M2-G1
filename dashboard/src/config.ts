@@ -6,6 +6,9 @@ export const REMEDIATION_BASE: string = trim(import.meta.env.VITE_REMEDIATION_BA
 /** GET <base>/stream - flux SSE temps réel. */
 export const STREAM_URL = `${REMEDIATION_BASE}/stream`
 
+/** UI de l'assistant RAG (iframe). Slash final requis : l'UI utilise des chemins relatifs. */
+export const ASSISTANT_URL: string = import.meta.env.VITE_ASSISTANT_URL ?? '/assistant/'
+
 export const GRAFANA_BASE: string = trim(import.meta.env.VITE_GRAFANA_BASE ?? 'http://localhost:3000')
 
 /**

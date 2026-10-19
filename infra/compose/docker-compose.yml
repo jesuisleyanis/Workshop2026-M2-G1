@@ -30,6 +30,7 @@ volumes:
   loki-data:
   chroma-data:
   ollama-models:
+  incidents-export:      # remediation (rw, export_journal.py) -> assistant (ro)
 
 services:
 
@@ -168,6 +169,8 @@ services:
       AUTH_URL: http://auth:8002
       VERIFY_TX_PATH: /app/verify_tx
     depends_on: [docker-socket-proxy]
+    volumes:
+      - incidents-export:/var/lib/remediation/export              # copie JSON du journal pour l'assistant
     tmpfs: ["/tmp"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8005/health').status==200 else 1)"]
@@ -182,6 +185,7 @@ services:
     networks: [app]
     environment:
       VITE_REMEDIATION_BASE: http://remediation:8005
+      ASSISTANT_UPSTREAM: assistant:8006
     mem_limit: 128m
 
   # ---------------------------------------------------------------- observabilité
@@ -273,13 +277,23 @@ services:
     profiles: [ai]
     networks: [app]
     environment:
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}   # ou http://<IP-PC-IA>:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      FRAME_ANCESTORS: ${DASHBOARD_ORIGIN:-}                      # inutile via /assistant/ (same-origin)
     volumes:
-      - chroma-data:/app/chroma
-      - ../../docs:/app/docs:ro
+      - chroma-data:/data/chroma                                  # seul volume en écriture
+      - ../../docs:/data/docs:ro
+      - ../../remediation/decision_table.yml:/data/remediation/decision_table.yml:ro
+      - incidents-export:/data/incidents:ro                       # produit par `remediation: python export_journal.py`
     depends_on: [ollama]
+    mem_limit: 1g          # chromadb + onnxruntime : 512m insuffisant
+    read_only: true
     tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8006/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
   # ---------------------------------------------------------------- banc d'essai (profil attack)
   attacker:

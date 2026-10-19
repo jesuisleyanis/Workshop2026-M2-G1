@@ -1,9 +1,10 @@
-// UI minimale : appelle POST {base}/api/v1/ask. Tout est rendu via textContent (pas d'innerHTML).
-// `base` = vide par défaut (même origine que la page servie par l'assistant). Surchargeable avec
-// <meta name="assistant-api-base" content="http://..."> si la page est hébergée ailleurs.
+// UI minimale : appelle POST api/v1/ask. Tout est rendu via textContent (pas d'innerHTML).
+// URL relative par défaut : marche à la racine (/) comme sous un préfixe proxifié (/assistant/).
+// Surchargeable avec <meta name="assistant-api-base" content="http://..."> si la page est hébergée ailleurs.
 (function () {
   const meta = document.querySelector('meta[name="assistant-api-base"]');
-  const base = (meta && meta.content) || "";
+  const base = ((meta && meta.content) || "").replace(/\/+$/, "");
+  const askUrl = base ? base + "/api/v1/ask" : "api/v1/ask";
   const $ = (id) => document.getElementById(id);
 
   $("ask-form").addEventListener("submit", async (ev) => {
@@ -14,7 +15,7 @@
     $("status").className = "";
     $("status").textContent = "Recherche en cours...";
     try {
-      const res = await fetch(base + "/api/v1/ask", {
+      const res = await fetch(askUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question }),

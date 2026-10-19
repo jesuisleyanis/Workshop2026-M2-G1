@@ -134,6 +134,7 @@ Lues par `config.py` (`Settings.from_env`). **Aucun secret n'a de valeur par dé
 | `NOTIFY_WEBHOOK_URL` | — | Webhook optionnel appelé à l'escalade. |
 | `DECISION_TABLE` | `<dossier>/decision_table.yml` | Chemin de la table de décision. |
 | `INCIDENTS_DB` | `incidents.db` | Fichier SQLite du journal (`/var/lib/remediation/incidents.db` dans l'image). |
+| `INCIDENTS_EXPORT_PATH` | `/var/lib/remediation/export/incidents.json` | Fichier produit par `export_journal.py` (CLI uniquement). |
 | `VERIFY_TX_PATH` | `scripts/verify_tx` | Script de vérification (`/opt/scripts/verify_tx` dans l'image). |
 | `VERIFY_TIMEOUT_S` | `30` | Timeout d'une exécution de `verify_tx`. |
 | `VERIFY_RETRIES` | `5` | Essais de `verify_tx` après une action (min. 1). |
@@ -180,6 +181,20 @@ docker build -f remediation/Dockerfile -t resilience/remediation .
 
 L'image tourne en non-root (uid 10001), n'embarque que le code, `decision_table.yml` et `actions/`, expose 8005 et a un `HEALTHCHECK` sur `/health`. Le point d'entrée est `uvicorn --factory main:app_factory`. En stack : `make up`.
 
+### Exploitation : export du journal pour l'assistant
+
+L'assistant RAG n'indexe qu'une **copie** JSON du journal (jamais l'API ni la base). Commande à lancer à la demande (aucun hook dans la boucle de remédiation) :
+
+```bash
+docker compose exec remediation python export_journal.py [--db PATH] [--out PATH] [--limit N]
+# -> 12 incident(s) exporté(s) vers /var/lib/remediation/export/incidents.json
+```
+
+- Écrit `{"exported_at": "...", "incidents": [<GET /incidents/{id}> ...]}` (incident complet avec `actions`, `verifications`, `timeline`, les `--limit` plus récents, 200 par défaut), UTF-8.
+- Base ouverte en **lecture seule** (`file:...?mode=ro`) ; base absente = code retour `2`, aucune base vide créée.
+- Écriture **atomique** (temporaire dans le même dossier + `os.replace`) : l'assistant ne lit jamais un fichier partiel.
+- `/var/lib/remediation/export` est le volume nommé `incidents-export`, monté en `:ro` sur l'assistant (`/data/incidents`). Ré-indexation complète : `make assistant-reindex` (voir [`../assistant/README.md`](../assistant/README.md)).
+
 ## Tester
 
 Les tests mockent tout l'extérieur (proxy Docker, Ansible, `verify_tx`, HTTP, horloge) : aucun Docker ni réseau requis.
@@ -201,6 +216,7 @@ pytest -q
 | `tests/test_actions.py` | Catalogue d'actions, liste blanche du client Docker, recreate + rollback, `tighten_rate_limit`, `confirm_waf_block`, `notify_operator`, validation des paramètres, liste blanche de playbooks, contrat de `verify_tx`, reprise des incidents orphelins. |
 | `tests/test_api.py` | Authentification (401, token en query refusé, fail closed), `POST /events` bout en bout, erreurs au format du contrat, `/incidents`, `/decision-table`, `/stream` avec `Last-Event-ID`, sondes, `/metrics`. |
 | `tests/test_sse.py` | Flux SSE en direct après rejeu, keepalive, format de trame. |
+| `tests/test_export_journal.py` | Export JSON pour l'assistant : contenu complet, `--limit`, lecture seule, écriture atomique, base absente. |
 | `tests/conftest.py`, `tests/broker_helpers.py` | Faux horloge, vérificateur, runner Ansible, réseau ; capture de logs. |
 
 ## Voir aussi

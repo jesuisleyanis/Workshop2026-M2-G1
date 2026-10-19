@@ -47,6 +47,16 @@ def test_incident_journal_json_and_jsonl(tmp_path):
     assert load_incident_journal(tmp_path / "absent.json") == []  # journal optionnel
 
 
+def test_incident_journal_reads_remediation_export():
+    # incidents_export.json = sortie réelle de `remediation/export_journal.py` ({"exported_at", "incidents"})
+    docs = load_incident_journal(FIXTURES / "incidents_export.json")
+    assert [d.metadata["doc"] for d in docs] == ["journal/inc-auth-0002", "journal/inc-flood-0001"]
+    flood = docs[1].page_content
+    assert "(type service_flood)" in flood and "status : closed" in flood and "mttr_seconds : 41.0" in flood
+    assert 'type=waf_block_ip, params={"ip": "203.0.113.7", "ttl_s": 900}, result=ok' in flood
+    assert "type=restart_service" in flood and "message=incident résolu" in flood
+
+
 def test_build_index_populates_persistent_chroma(settings):
     stats = build_index(settings)
     assert stats["documents"] == 3 + 3 + 2  # md + (defaults + 2 règles) + 2 incidents

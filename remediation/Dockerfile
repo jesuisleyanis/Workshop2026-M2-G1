@@ -25,14 +25,15 @@ ENV PYTHONUNBUFFERED=1 \
     DOCKER_PROXY_URL=http://docker-socket-proxy:2375
 RUN groupadd --system --gid 10001 remediation \
  && useradd --system --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin remediation \
- && mkdir -p /var/lib/remediation \
- && chown 10001:10001 /var/lib/remediation
+ && mkdir -p /var/lib/remediation/export \
+ && chown -R 10001:10001 /var/lib/remediation
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 # Code et table en lecture seule pour l'utilisateur d'exécution (propriété root).
 COPY remediation/*.py remediation/decision_table.yml /app/
 COPY remediation/actions /app/actions
-# Seul point inscriptible : le journal d'incidents (volume dédié).
+# Seul point inscriptible : le journal d'incidents (volume dédié) ; export/ = copie JSON pour
+# l'assistant (export_journal.py), volume nommé `incidents-export` en Compose.
 VOLUME ["/var/lib/remediation"]
 USER 10001:10001
 EXPOSE 8005

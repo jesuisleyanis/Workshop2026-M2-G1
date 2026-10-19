@@ -4,7 +4,7 @@
 COMPOSE := docker compose -f infra/compose/docker-compose.yml
 ROOT    := $(shell pwd)
 
-.PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt
+.PHONY: help up up-full down seed verify demo attack stop-attack reset assistant-reindex test test-py test-front audit package decrypt
 
 help: ## Affiche cette aide
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -38,6 +38,11 @@ stop-attack: ## Kill-switch des scénarios
 
 reset: ## Remet la cible à l'état "avant"
 	attacks/reset.sh
+
+assistant-reindex: ## Exporte le journal d'incidents puis ré-indexe l'assistant (profil ai)
+	$(COMPOSE) exec remediation python export_journal.py
+	$(COMPOSE) --profile ai exec assistant python -m app.indexer
+	$(COMPOSE) --profile ai restart assistant
 
 audit: ## Audit de durcissement du dépôt
 	security/hardening/audit.sh

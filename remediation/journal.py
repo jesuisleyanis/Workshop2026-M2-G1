@@ -75,7 +75,8 @@ FINAL_STATUSES = ("closed", "escalated", "dry_run", "interrupted")
 class Journal:
     def __init__(self, path: str = ":memory:") -> None:
         self._lock = threading.RLock()
-        self._db = sqlite3.connect(path, check_same_thread=False)
+        # uri : permet `file:...?mode=ro` (export_journal.py) ; les chemins simples sont inchangés.
+        self._db = sqlite3.connect(path, check_same_thread=False, uri=path.startswith("file:"))
         self._db.row_factory = sqlite3.Row
         with self._lock:
             self._db.executescript(SCHEMA)

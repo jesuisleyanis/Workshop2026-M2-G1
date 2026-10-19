@@ -27,6 +27,7 @@ Design « ZTR Supervision » (console sombre, accent violet, polices Geist auto-
 | D13 | Signaux dominants (z-score des `features_top`) et playbooks de la table de décision, règle active surlignée | `SignalsPanel`, `PlaybooksPanel` (miroir d'affichage de `remediation/decision_table.yml`) |
 | D14 | Simulation locale (répétition sans stack) : mêmes trames JSON que le moteur, validées par le même parseur, **toujours signalée** à l'écran | `lib/simulator.ts`, `VITE_STREAM_SOURCE` |
 | D15 | Déclencheurs de répétition : en simulation, ou en flux réel **en dev uniquement** (mock `GET /trigger`) ; masqués en prod | `Sidebar`, `LIVE_TRIGGERS` |
+| D16 | Onglet « Assistant » : UI de l'assistant RAG en iframe same-origin (`/assistant/`), supervision gardée montée | `AssistantTab` (`VITE_ASSISTANT_URL`), onglets dans `App` |
 
 ### Source des événements et déclencheurs
 
@@ -83,22 +84,25 @@ Points de vigilance côté moteur :
 | `VITE_GRAFANA_BASE` | build | `http://localhost:3000` | Base des liens Grafana (ouverts dans un nouvel onglet : doit être joignable **depuis le navigateur du jury**) |
 | `VITE_STREAM_SOURCE` | build | `live` | `live` \| `auto` \| `simulation` (voir §2) |
 | `VITE_LIVE_TRIGGERS` | build | _vide_ | `true` : déclencheurs aussi en flux réel hors dev (pour un mock servi en preview uniquement) |
+| `VITE_ASSISTANT_URL` | build | `/assistant/` | URL de l'UI de l'assistant (iframe ; slash final requis) |
 | `REMEDIATION_PROXY_TARGET` | dev | `http://localhost:8005` | Cible du proxy Vite pour `/remediation` |
+| `ASSISTANT_PROXY_TARGET` | dev | `http://localhost:8006` | Cible du proxy Vite pour `/assistant` |
 | `REMEDIATION_UPSTREAM` | runtime (conteneur) | `remediation:8005` | Hôte:port du moteur pour le proxy nginx |
+| `ASSISTANT_UPSTREAM` | runtime (conteneur) | `assistant:8006` | Hôte:port de l'assistant RAG pour le proxy nginx |
 | `REMEDIATION_AUTH_HEADER` | runtime | _vide_ | Valeur complète du header `Authorization` injecté par nginx (ex. `Bearer <token SOPS>`). Vide = aucun header |
 | `DNS_RESOLVER` | runtime | `127.0.0.11` | Résolveur DNS Docker (résolution paresseuse de `remediation`) |
 
 ## 5. Exécution et exposition
 
 - Dev : `npm run dev` sur le port **5174** (strict).
-- Prod : conteneur nginx non-root écoutant **8080**, réseau `app` (doit joindre `remediation:8005`). nginx sert le statique **et** proxifie **uniquement** `GET /remediation/stream` (SSE : `proxy_buffering off`, timeout 1 h) ; `/remediation/*` autre renvoie 404. L'API `/events` du moteur n'est jamais atteignable depuis le navigateur. Healthcheck : `GET /healthz`.
+- Prod : conteneur nginx non-root écoutant **8080**, réseau `app` (doit joindre `remediation:8005`). nginx sert le statique **et** proxifie **uniquement** `GET /remediation/stream` (SSE : `proxy_buffering off`, timeout 1 h) et les 3 routes de l'assistant RAG `GET /assistant/`, `GET /assistant/static/*`, `POST /assistant/api/v1/ask` (préfixe retiré, timeout 130 s) ; tout autre `/remediation/*` ou `/assistant/*` renvoie 404. L'API `/events` du moteur n'est jamais atteignable depuis le navigateur. Healthcheck : `GET /healthz`.
 - Le build utilise `base: './'` : l'app peut être servie à la racine d'un hôte ou sous un sous-chemin (dans ce cas régler `VITE_REMEDIATION_BASE` au build en conséquence).
 
 ## 6. Sécurité
 
 - Le moteur de remédiation reste **hors réseau `edge`** ; le dashboard n'y accède que par le proxy nginx en lecture seule. Le jeton éventuel est injecté côté serveur (variable d'environnement du conteneur, fournie via SOPS), **jamais dans le bundle**.
 - **Le dashboard ne doit pas être publié publiquement sans contrôle d'accès** : toute personne qui l'atteint peut lire le flux de supervision. Options : publier sur l'hôte en `127.0.0.1` / réseau d'admin, ou le router via le WAF avec authentification.
-- Image multi-stage, utilisateur `nginx`, CSP stricte (`default-src 'self'`, `connect-src 'self'`), `X-Frame-Options: DENY`, `nosniff`, `server_tokens off`, conf générée dans `/tmp` (compatible `read_only: true` + `tmpfs: /tmp`, `cap_drop: [ALL]`, `no-new-privileges`).
+- Image multi-stage, utilisateur `nginx`, CSP stricte (`default-src 'self'`, `connect-src 'self'`), `X-Frame-Options: DENY`, `nosniff` (sauf sur `/assistant/` : pas de `X-Frame-Options`, l'assistant pose sa propre CSP `frame-ancestors 'self'` pour être embarqué ; l'iframe same-origin est permise par `default-src 'self'`), `server_tokens off`, conf générée dans `/tmp` (compatible `read_only: true` + `tmpfs: /tmp`, `cap_drop: [ALL]`, `no-new-privileges`).
 - Liens Grafana : `rel="noopener noreferrer"`. Polices Geist servies depuis le bundle (`@fontsource-variable/*`) : la CSP n'autorise aucun CDN.
 - Pas de bouton d'attaque en prod : les déclencheurs de répétition n'existent qu'en simulation ou en dev (D15).
 

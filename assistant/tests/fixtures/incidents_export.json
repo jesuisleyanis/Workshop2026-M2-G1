@@ -1,0 +1,116 @@
+{
+  "exported_at": "2026-10-19T11:52:33.201Z",
+  "incidents": [
+    {
+      "incident_id": "inc-auth-0002",
+      "incident_type": "auth_abuse",
+      "service": "auth",
+      "event_id": "evt-0002",
+      "status": "escalated",
+      "dry_run": false,
+      "attempts": 0,
+      "detected_at": "2026-10-21T10:14:35.000Z",
+      "first_action_at": null,
+      "closed_at": "2026-10-21T10:15:35.000Z",
+      "mttd_seconds": null,
+      "mttr_seconds": null,
+      "reason": "vérification en échec après 1 tentative",
+      "actions": [
+        {
+          "ts": "2026-10-21T10:14:43.000Z",
+          "attempt": 1,
+          "type": "tighten_rate_limit",
+          "params": {
+            "service": "auth"
+          },
+          "result": "ok",
+          "detail": "rate-limit resserré",
+          "duration_ms": 300
+        }
+      ],
+      "verifications": [
+        {
+          "ts": "2026-10-21T10:15:05.000Z",
+          "attempt": 1,
+          "ok": false,
+          "rc": 1,
+          "detail": "verify_tx en échec"
+        }
+      ],
+      "timeline": []
+    },
+    {
+      "incident_id": "inc-flood-0001",
+      "incident_type": "service_flood",
+      "service": "payment-api",
+      "event_id": "evt-0001",
+      "status": "closed",
+      "dry_run": false,
+      "attempts": 0,
+      "detected_at": "2026-10-21T09:14:35.000Z",
+      "first_action_at": "2026-10-21T09:14:47.000Z",
+      "closed_at": "2026-10-21T09:15:16.000Z",
+      "mttd_seconds": 12.0,
+      "mttr_seconds": 41.0,
+      "reason": null,
+      "actions": [
+        {
+          "ts": "2026-10-21T09:14:47.000Z",
+          "attempt": 1,
+          "type": "waf_block_ip",
+          "params": {
+            "ip": "203.0.113.7",
+            "ttl_s": 900
+          },
+          "result": "ok",
+          "detail": "IP bloquée par le WAF",
+          "duration_ms": 850
+        },
+        {
+          "ts": "2026-10-21T09:14:49.000Z",
+          "attempt": 1,
+          "type": "restart_service",
+          "params": {
+            "service": "payment-api"
+          },
+          "result": "ok",
+          "detail": "conteneur redémarré",
+          "duration_ms": 4200
+        }
+      ],
+      "verifications": [
+        {
+          "ts": "2026-10-21T09:15:15.000Z",
+          "attempt": 1,
+          "ok": true,
+          "rc": 0,
+          "detail": "verify_tx ok"
+        }
+      ],
+      "timeline": [
+        {
+          "id": 1,
+          "incident_id": "inc-flood-0001",
+          "incident_type": "service_flood",
+          "ts": "2026-10-21T09:14:35.000Z",
+          "phase": "detected",
+          "status": "info",
+          "message": "anomalie détectée sur payment-api",
+          "data": {
+            "anomaly_score": 0.87
+          }
+        },
+        {
+          "id": 2,
+          "incident_id": "inc-flood-0001",
+          "incident_type": "service_flood",
+          "ts": "2026-10-21T09:15:16.000Z",
+          "phase": "closed",
+          "status": "ok",
+          "message": "incident résolu",
+          "data": {}
+        }
+      ]
+    }
+  ]
+}

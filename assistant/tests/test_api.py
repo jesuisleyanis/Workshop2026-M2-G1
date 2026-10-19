@@ -127,3 +127,5 @@ def test_ui_is_served_with_frame_policy(client):
     assert r.status_code == 200 and "Assistant opérateur" in r.text
     assert "frame-ancestors 'self'" in r.headers["content-security-policy"]
     assert client.get("/static/assistant.js").status_code == 200
+    # chemins relatifs : la page reste fonctionnelle derrière le proxy /assistant/ du dashboard
+    assert 'src="static/assistant.js"' in r.text and 'href="static/assistant.css"' in r.text

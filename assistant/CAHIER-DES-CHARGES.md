@@ -36,7 +36,7 @@ Il répond **uniquement à partir de la documentation indexée** et **cite ses s
 |---|---|---|
 | F1 | Modèle local Ollama <= 8B | `OLLAMA_MODEL` (défaut `qwen2.5:7b` ; alternative `llama3.1:8b`), `OLLAMA_BASE_URL` (défaut `http://ollama:11434`), déployable sur le **PC IA** distant |
 | F2 | RAG LangChain + Chroma | `langchain-chroma` (persistant), `langchain-text-splitters`, `langchain-ollama`, `ChatPromptTemplate` |
-| F3 | Corpus | `docs/**/*.md` (runbooks, PCA/PRA, architecture, contrats), `remediation/decision_table.yml`, journal d'incidents exporté (JSON/JSONL, optionnel) |
+| F3 | Corpus | `docs/**/*.md` (runbooks, PCA/PRA, architecture, contrats), `remediation/decision_table.yml`, journal d'incidents exporté (JSON/JSONL, optionnel ; producteur : `remediation/export_journal.py`, volume `incidents-export`) |
 | F4 | `POST /api/v1/ask {question}` -> `{answer, sources:[{doc, extrait}]}` | + champs additifs `degraded`, `model`, et par source `section`, `kind`, `score` |
 | F5 | `GET /health`, `GET /ready` | `/ready` = index Chroma chargé et non vide. Ollama est sondé mais **toléré absent** (mode dégradé) |
 | F6 | Logs contrat §1 | `resilience_common.get_logger("assistant")`, `request_id`, `duration_ms`, `http_*` |
@@ -71,4 +71,4 @@ Déclenchement ou simulation d'actions, authentification applicative (l'accès e
 - [x] `pytest` vert (indexation, récupération sans LLM, `/ask` avec Ollama mocké, garde de sécurité).
 - [x] `/ready` 200 avec Ollama absent (mode dégradé), 503 si index vide.
 - [x] Aucun endpoint d'action ; aucune capacité d'exécution (tests négatifs).
-- [ ] Intégration compose (profil `ai`, réseau `app`) et onglet dashboard : à brancher par les propriétaires de `infra/compose/` et `dashboard/` (voir README).
+- [x] Intégration compose (profil `ai`, réseau `app`, `read_only`, volumes `/data/*`) et onglet dashboard (iframe `/assistant/` proxifiée par le nginx du dashboard) : voir README.

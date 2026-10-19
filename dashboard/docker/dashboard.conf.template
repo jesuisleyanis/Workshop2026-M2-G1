@@ -1,4 +1,5 @@
-# Variables substituées au démarrage : REMEDIATION_UPSTREAM, REMEDIATION_AUTH_HEADER, DNS_RESOLVER.
+# Variables substituées au démarrage : REMEDIATION_UPSTREAM, REMEDIATION_AUTH_HEADER, DNS_RESOLVER,
+# ASSISTANT_UPSTREAM.
 server {
   listen 8080;
   server_name _;
@@ -39,6 +40,36 @@ server {
   }
 
   location /remediation/ {
+    return 404;
+  }
+
+  # Assistant RAG (onglet iframe, lecture seule). UNIQUEMENT GET /assistant/, GET /assistant/static/*
+  # et POST /assistant/api/v1/ask ; tout le reste de /assistant/ -> 404. PAS de security-headers.conf
+  # ici (X-Frame-Options DENY / frame-ancestors 'none' bloqueraient l'iframe) : les add_header locaux
+  # coupent l'héritage du niveau server, et l'assistant envoie sa propre CSP (frame-ancestors 'self').
+  location ~ ^/assistant/(static/.+)?$ {
+    limit_except GET { deny all; }
+    set $assistant_upstream "http://${ASSISTANT_UPSTREAM}";
+    rewrite ^/assistant/(.*)$ /$1 break;
+    proxy_pass $assistant_upstream;
+    proxy_set_header Host $host;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+  }
+
+  location = /assistant/api/v1/ask {
+    limit_except POST { deny all; }
+    set $assistant_upstream "http://${ASSISTANT_UPSTREAM}";
+    rewrite ^/assistant/(.*)$ /$1 break;
+    proxy_pass $assistant_upstream;
+    proxy_set_header Host $host;
+    # La génération Ollama peut durer jusqu'à 120 s.
+    proxy_read_timeout 130s;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+  }
+
+  location /assistant/ {
     return 404;
   }
 

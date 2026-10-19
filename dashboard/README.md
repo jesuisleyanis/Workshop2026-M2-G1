@@ -1,7 +1,6 @@
 # dashboard - Supervision RESILIENCE-ALPHA (React + Vite + TypeScript + Tailwind)
 
-Console de supervision jury / opérateur (design « ZTR Supervision »), conçue pour être filmée : **AVANT / PENDANT / APRÈS**, score d'anomalie ML en direct et courbe 2 min par service, timeline détection -> décision -> action -> vérification, MTTD/MTTR, transaction de vérification, actions de remédiation, état des services, signaux dominants, playbooks, preuves Prometheus/Loki, liens Grafana. Quoi et pourquoi : [`CAHIER-DES-CHARGES.md`](CAHIER-DES-CHARGES.md). Contrats : [`docs/contracts.md`](../docs/contracts.md).
-
+Console de supervision jury / opérateur (design « ZTR Supervision »), conçue pour être filmée : **AVANT / PENDANT / APRÈS**, score d'anomalie ML en direct et courbe 2 min par service, timeline détection -> décision -> action -> vérification, MTTD/MTTR, transaction de vérification, actions de remédiation, état des services, signaux dominants, playbooks, preuves Prometheus/Loki, liens Grafana. Onglet **Assistant** : UI de l'assistant RAG (lecture seule, profil compose `ai`) embarquée en iframe same-origin via `/assistant/`. Quoi et pourquoi : [`CAHIER-DES-CHARGES.md`](CAHIER-DES-CHARGES.md). Contrats : [`docs/contracts.md`](../docs/contracts.md).
 ## Lancement
 
 ```bash
@@ -19,7 +18,7 @@ Déclencher un incident de démonstration : boutons **Répétition · déclenche
 
 | Commande | Effet |
 |---|---|
-| `npm run dev` | Dev server (port 5174, strict) ; `/remediation/*` proxifié vers `REMEDIATION_PROXY_TARGET` |
+| `npm run dev` | Dev server (port 5174, strict) ; `/remediation/*` proxifié vers `REMEDIATION_PROXY_TARGET`, `/assistant/*` vers `ASSISTANT_PROXY_TARGET` |
 | `npm run build` | `tsc --noEmit` puis build Vite dans `dist/` |
 | `npm run preview` | Sert `dist/` sur 5174 |
 | `npm run lint` / `typecheck` | ESLint / typage |
@@ -35,8 +34,11 @@ Déclencher un incident de démonstration : boutons **Répétition · déclenche
 | `VITE_GRAFANA_BASE` | `http://localhost:3000` | build : liens Grafana et Explore |
 | `VITE_STREAM_SOURCE` | `live` | build : `live` \| `auto` (bascule en simulation si flux injoignable) \| `simulation` |
 | `VITE_LIVE_TRIGGERS` | _vide_ | build : `true` = déclencheurs en flux réel hors dev (mock uniquement) |
+| `VITE_ASSISTANT_URL` | `/assistant/` | build : URL de l'UI de l'assistant (iframe, slash final requis) |
 | `REMEDIATION_PROXY_TARGET` | `http://localhost:8005` | dev : cible du proxy Vite |
+| `ASSISTANT_PROXY_TARGET` | `http://localhost:8006` | dev : cible du proxy Vite pour `/assistant` |
 | `REMEDIATION_UPSTREAM` | `remediation:8005` | conteneur : upstream du proxy nginx |
+| `ASSISTANT_UPSTREAM` | `assistant:8006` | conteneur : upstream nginx de l'assistant (relaie uniquement `GET /assistant/`, `GET /assistant/static/*`, `POST /assistant/api/v1/ask`) |
 | `REMEDIATION_AUTH_HEADER` | _vide_ | conteneur : header `Authorization` injecté (ex. `Bearer ...`) |
 | `DNS_RESOLVER` | `127.0.0.11` | conteneur : résolveur DNS |
 
