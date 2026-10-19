@@ -41,6 +41,27 @@ DEFAULT_TARGET = os.environ.get("RESILIENCE_TARGET", "https://192.168.137.1")
 LAUNCHABLE = {"service_flood", "auth_abuse", "web_attack"}
 DRY = os.environ.get("RESILIENCE_CONSOLE_DRY") == "1"
 
+# Techniques avancées (hors scénarios-contrat) : chacune éprouve une facette de la défense.
+# duration/rate = défauts raisonnables (re-plafonnés par run.sh).
+TECHNIQUES = [
+    {"name": "rotation", "label": "Rotation de source",
+     "tests": "La remédiation par blocage d'IP tient-elle quand la source change ?",
+     "duration": 25, "rate": 60},
+    {"name": "pulse", "label": "Rafales pulsées",
+     "tests": "Les seuils SOC en rate[1m] captent-ils des pics intermittents ?",
+     "duration": 40, "rate": 70},
+    {"name": "recon", "label": "Reconnaissance",
+     "tests": "Le SOC voit-il l'énumération d'endpoints (angle mort recon → unknown) ?",
+     "duration": 20, "rate": 10},
+    {"name": "replay", "label": "Rejeu de transaction",
+     "tests": "L'API déduplique-t-elle une transaction rejouée (intégrité) ?",
+     "duration": 15, "rate": 20},
+    {"name": "slow", "label": "Connexions lentes (Slowloris borné)",
+     "tests": "Les timeouts / le pool de connexions résistent-ils à la lenteur ?",
+     "duration": 30, "rate": 40},
+]
+TECHNIQUE_NAMES = {t["name"] for t in TECHNIQUES}
+
 # --- Liaison Bleu (optionnelle) : API interne du moteur de remédiation. ----------
 # NON joignable depuis le PC Attaquant (réseau interne) : ne renseigner ces variables
 # QUE là où le moteur est accessible (PC Hôte, ou conteneur sur le réseau `app`).
@@ -131,6 +152,19 @@ class Runner:
         if not DRY:
             self.proc = subprocess.Popen(argv, cwd=str(ROOT))
 
+    def launch_technique(self, name: str, target: str, duration: int, rate: int) -> None:
+        if name not in TECHNIQUE_NAMES:
+            raise HTTPException(422, f"Technique inconnue : {name}")
+        if self.running:
+            raise HTTPException(409, f"Un scénario tourne déjà : {self.scenario}")
+        argv = ["bash", str(RUN_SH), name,
+                "--target", target, "--duration", str(duration), "--rate", str(rate)]
+        self.last_argv = argv
+        self.scenario, self.target, self.duration = name, target, duration
+        self.started_at = time.time()
+        if not DRY:
+            self.proc = subprocess.Popen(argv, cwd=str(ROOT))
+
     def launch_campaign(self, target: str) -> None:
         if self.running:
             raise HTTPException(409, f"Un scénario tourne déjà : {self.scenario}")
@@ -185,6 +219,21 @@ def create_app() -> FastAPI:
         target = validate_target(req.target)
         duration, rate = clamp_params(req.duration, req.rate)
         runner.launch(req.scenario, target, duration, rate)
+        return {**runner.status(), "launched": req.scenario, "target": target,
+                "duration": duration, "rate": rate}
+
+    @app.get("/api/techniques")
+    def techniques() -> dict[str, Any]:
+        return {"techniques": TECHNIQUES}
+
+    @app.post("/api/technique")
+    def technique(req: RunRequest) -> dict[str, Any]:
+        target = validate_target(req.target)
+        meta = next((t for t in TECHNIQUES if t["name"] == req.scenario), None)
+        if meta is None:
+            raise HTTPException(422, f"Technique inconnue : {req.scenario}")
+        duration, rate = clamp_params(meta["duration"], meta["rate"])
+        runner.launch_technique(req.scenario, target, duration, rate)
         return {**runner.status(), "launched": req.scenario, "target": target,
                 "duration": duration, "rate": rate}
 

@@ -26,6 +26,10 @@ PC Attaquant (autre PC du groupe)            PC Hôte (192.168.137.1)
 >
 > **Console de pilotage locale : [`console/README.md`](console/README.md)** — UI web (local-only, PC Attaquant) pour lancer les scénarios, suivre la chaîne de reprise et le journal, kill-switch/reset. Garde-fous côté serveur.
 >
+> **Catalogue complet et pédagogique : [`ATTACKS.md`](ATTACKS.md)** — ce que fait chaque attaque et quelle facette de défense elle éprouve (scénarios-contrat, campagne, techniques avancées).
+>
+> **Techniques avancées** (`run.sh rotation|pulse|recon|replay|slow`, ou panneau console) — chacune vise un angle mort : robustesse de la remédiation (source qui tourne), seuils temporels (rafales pulsées), largeur de détection (recon), intégrité (rejeu), lenteur (Slowloris borné). Détail dans `ATTACKS.md`.
+>
 > **Campagne multi-étapes `campaign.sh` (Opération Triade)** — enchaîne 3 vagues décalées (`auth_abuse` → `web_attack` → `service_flood`) pour éprouver la corrélation SOC et la remédiation d'incidents successifs. Chaque vague délègue à `run.sh` (plafonds appliqués), réversible, kill-switch `campaign.sh --stop`.
 >
 > ```bash

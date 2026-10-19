@@ -78,6 +78,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | Scénarios d'attaque v1 (depuis PC Attaquant) | `attacks/` | R10 | Louis | ✅ | 4 scénarios ; validateur + runbook PC Attaquant ; déclencheur `data_corruption` (pg_backup + db_corrupt_fake réversible) — 10 tests contrat verts |
 | Console Red Team (UI de pilotage locale) | `attacks/console/` | R10 | Louis | ✅ | FastAPI + UI (lancement, chaîne de reprise, journal SSE, kill-switch, liaison Bleu optionnelle MTTD/MTTR) ; garde-fous côté serveur ; 11 tests dry-run verts |
 | Campagne multi-étapes (Opération Triade) | `attacks/campaign.sh` | R10 | Louis | ✅ | 3 vagues corrélées auth→web→flood (bornées, réversibles, kill-switch) + bouton console ; teste la corrélation SOC |
+| Techniques avancées (rotation, pulse, recon, replay, slow) | `attacks/run.sh`, `attacks/ATTACKS.md` | R10 | Louis | ✅ | 5 techniques éprouvant des facettes ciblées (robustesse remédiation, seuils temporels, largeur détection, intégrité, lenteur) + panneau console + doc pédagogique ; 28 tests attacks verts |
 | RAG : indexation docs + journal, UI onglet | `assistant/` | R9 | — | ✅ | 97 tests verts |
 
 ## J4 — Jeudi : recette, chaos, clip, gel du code (17h)
