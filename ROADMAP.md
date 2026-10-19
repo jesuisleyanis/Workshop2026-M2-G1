@@ -23,7 +23,7 @@
 Phase 0  Socle            [#########.]  90%   squelette, contrats, .claude, compose, SOPS
 Phase 1  Plateforme       [########..]  85%   auth+payment+front livrés et testés
 Phase 2  Infra & observ.  [########..]  85%   configs Prom/Loki/Grafana/Alert/Ansible OK
-Phase 3  Détection ML     [#########.]  90%   outillage données réelles OK (75 tests) ; capture réelle à jouer
+Phase 3  Détection ML     [#########.]  90%   outillage données réelles codé (77 tests, 3.11) ; build + capture réelle à jouer
 Phase 4  Remédiation      [######....]  60%   code + CDC + README ; câblage à réconcilier
 Phase 5  Dashboard        [########..]  85%   dashboard + front livrés (src+tests)
 Phase 6  Cyber & attaques [########..]  85%   WAF, SOPS, durcissement, 4 scénarios OK
@@ -84,7 +84,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 |---|---|---|---|---|---|
 | Tests e2e rejouant chaque scénario | `tests/e2e` | R10 | — | 🟨 | squelette prêt (skip si stack down) |
 | Chaos engineering (pannes non-attaque) | `attacks/`, `tests/e2e` | — | — | ⬜ | — |
-| ML sur vraies séries Prometheus : outillage (capture, train `--data`, calibration seuil + MTTD, trafic légitime, train au build) | `ml/*`, `scripts/gen_normal_traffic.py` | R8 | — | ✅ | ml 75 tests + scripts 7 tests verts ; `ml/training/README.md` §6 |
+| ML sur vraies séries Prometheus : outillage (capture, train `--data`, calibration seuil + MTTD, trafic légitime, train au build) | `ml/*`, `scripts/gen_normal_traffic.py` | R8 | — | 🟨 | ml 77 + scripts 15 tests verts **en Python 3.11** ; review PR #2 traitée. ✅ après `make test-ml` (3.12) + `docker compose build detector` verts |
 | ML sur vraies séries : capture baseline + 4 scénarios, calibration, rebuild detector | `ml/training/data/` | R8 | — | ⬜ | à jouer stack levée (`make capture-baseline` … §6) |
 | `scripts/demo.sh` (5 temps enchaînés) | `scripts/` | R20 | — | ✅ | scripts/demo.sh |
 | PCA/PRA (RTO/RPO, risques résiduels) | `docs/pca-pra.md` | R17 | — | ✅ | docs/pca-pra.md |
@@ -116,7 +116,7 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | I3 | Noms de playbooks | `block_ip.yml`→`waf_deny_ip.yml`, `restore_pg_dump.yml`→`pg_restore.yml` | `infra/ansible/playbooks/` |
 | I4 | Auth moteur | **Bearer statique interne** acté (service non exposé) | `contracts.md §API`, ADR 0002 |
 | I6 | Detector -> remédiation | compose : `REMEDIATION_URL` sans `/events` (chaque événement en 404) -> URL complète | `ml/detector/tests/test_compose_wiring.py` |
-| I7 | Build image detector | le Dockerfile copiait des artefacts non versionnés (build impossible) -> modèle entraîné au build | `ml/detector/Dockerfile` (étape `trainer`) |
+| I7 | 🟨 Build image detector | le Dockerfile copiait des artefacts non versionnés (build impossible) -> modèle entraîné au build ; seuil calibré périmé = build en échec | `ml/detector/Dockerfile` (étape `trainer`) — **build pas encore exécuté** |
 | I8 | 🔴 `verify_tx` vs payment-api | `verify_tx` envoie `dst_account` = IBAN (chaîne) sans `src_account` ; l'API attend des **ids entiers** (`StrictInt`) -> 422 : la vérification de reprise échoue toujours (même défaut dans `attacks/run.sh` service_flood). `seed.py` envoie `iban_fake`/`balance_cents`, ignorés par `register` (IBAN aléatoire, solde par défaut) | **à corriger** |
 | I5 | Métriques HTTP lib | `instrument()` réécrit (middleware) → `resilience_http_requests_total{service,method,path,status}` ; `xfail` retirés ; conftests nettoyés | auth 35/35, payment-api 54/54 |
 
