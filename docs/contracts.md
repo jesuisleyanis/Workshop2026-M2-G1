@@ -117,7 +117,7 @@ Le `collector` interroge l'API Prometheus et construit ce vecteur ordonné (voir
 
 ## 3. Schéma d'événement d'anomalie
 
-Le `detector` émet cet objet JSON vers le moteur de remédiation (HTTP `POST /events`, authentifié — voir §API). Alertmanager peut émettre un événement au même format.
+Le `detector` émet cet objet JSON vers le moteur de remédiation (HTTP `POST /events`, authentifié — voir §API). **Chemin SOC (secondaire)** : Alertmanager poste son webhook natif (`{alerts:[…]}`) sur `POST /events/alertmanager` (même Bearer) ; l'adaptateur du moteur (`remediation/alertmanager.py`) le traduit en événement de ce schéma (`source: "alertmanager"`, `incident_type` = label de l'alerte, `anomaly_score`/`threshold` = 1.0, `event_id` stable par occurrence d'alerte). Les règles SOC Prometheus (`infra/prometheus/rules/soc.yml`) sont le miroir des règles Grafana.
 
 ```json
 {
@@ -239,7 +239,7 @@ payment-api / auth ──logs JSON──► Promtail ──► Loki ──┐
 cAdvisor / pg-exporter ─métriques► Prometheus ────────┘                              │
                                                                           événement d'anomalie (§3)
                                                                                      │
-Alertmanager ──alerte (schéma §3)──────────────────────────────────────────────────►│
+Prometheus rules SOC ─► Alertmanager ──webhook──► POST /events/alertmanager (adaptateur → §3) ─►│
                                                                                      ▼
                                                                           Moteur de remédiation
                                                                        (table de décision §4)

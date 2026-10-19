@@ -24,6 +24,12 @@ networks:
     internal: true
   obs:
 
+# Secret Compose alimenté depuis .env (SOPS) : monté en fichier dans Alertmanager (credentials_file),
+# jamais écrit dans alertmanager.yml (fichier versionné).
+secrets:
+  remediation_token:
+    environment: REMEDIATION_TOKEN
+
 volumes:
   pgdata:
   waf-deny:        # deny-list Nginx partagée WAF (lecture) <-> remediation (écriture via playbook)
@@ -256,6 +262,7 @@ services:
     networks: [app, obs]
     volumes:
       - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/rules:/etc/prometheus/rules:ro        # règles SOC (I6) -> alertmanager
     mem_limit: 384m
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=2h"]
 
@@ -292,12 +299,16 @@ services:
 
   # ---- observabilité complète (profil full) ----
   alertmanager:
+    # Chemin SOC -> remédiation (I6, #13) : reçoit les alertes des règles Prometheus et poste
+    # POST /events/alertmanager (Bearer interne via le secret `remediation_token`). Réseau `app`
+    # requis pour joindre le moteur ; aucun port publié.
     <<: *hardening
     image: prom/alertmanager:latest
     profiles: [full]
     networks: [obs, app]
     volumes:
       - ../alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    secrets: [remediation_token]
     mem_limit: 128m
 
   cadvisor:

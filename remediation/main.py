@@ -21,6 +21,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from resilience_common import get_logger
 
 from actions.docker_proxy import DockerProxy
+from alertmanager import AlertmanagerPayload, to_events
 from actions.runner import AnsibleRunnerAdapter
 from config import Settings
 from decision import DecisionTable, DecisionTableError, load_decision_table
@@ -162,6 +163,20 @@ def create_app(
         sub = await engine.handle_event(event)
         return {"incident_id": sub.incident_id, "decision": sub.decision,
                 "dry_run": sub.dry_run, "detail": sub.detail}
+
+    @app.post("/events/alertmanager", status_code=202, dependencies=[auth])
+    async def post_alertmanager(payload: AlertmanagerPayload) -> dict[str, Any]:
+        """Webhook Alertmanager (chemin SOC, secondaire) : chaque alerte firing avec un label
+        `incident_type` est traduite en AnomalyEvent (§3) puis soumise au moteur comme /events."""
+        accepted, skipped = to_events(payload)
+        results = []
+        for alert, event in accepted:
+            sub = await engine.handle_event(event)
+            results.append({"alertname": alert.name, "incident_id": sub.incident_id, "decision": sub.decision,
+                            "dry_run": sub.dry_run, "detail": sub.detail})
+        for sk in skipped:
+            log.info(f"Alerte SOC ignorée : {sk.alertname} ({sk.reason})")
+        return {"accepted": results, "skipped": [sk.model_dump() for sk in skipped]}
 
     @app.get("/incidents", dependencies=[auth])
     async def list_incidents(limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:

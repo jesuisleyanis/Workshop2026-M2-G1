@@ -26,29 +26,40 @@ correspondante (vérifié par `infra/tests/test_soc_rules.py`). Chaque règle po
   de seuil refuse une série temporelle non réduite.
 - Champs d'alerting unifié complétés : `for`, `noDataState`, `execErrState`, `relativeTimeRange`.
 
-## ⚠️ Routage vers la remédiation — POINT D'INTÉGRATION OUVERT
+## Routage vers la remédiation — I6 **fermé** (ticket #13)
 
-À ce jour, une alerte SOC **s'affiche dans Grafana mais n'atteint PAS le moteur de
-remédiation**. Deux maillons manquent, hors du périmètre « règles SOC » :
+Choix acté : **voie Prometheus + Alertmanager** (pas de contact point Grafana). Grafana reste
+l'affichage SOC ; le routage est porté par la chaîne standard Prometheus → Alertmanager → webhook.
 
-1. **Côté remédiation (leur contrat) :** `infra/alertmanager/alertmanager.yml` poste vers
-   `http://remediation:8005/events/alertmanager`, mais **cet endpoint n'existe pas** dans le
-   moteur (seul `POST /events` au format AnomalyEvent est exposé). Il faut un adaptateur
-   Alertmanager→AnomalyEvent côté `remediation/`.
-2. **Côté infra (leur fichier) :** au choix —
-   - *voie Prometheus+Alertmanager* : `prometheus.yml` n'a ni `rule_files` ni bloc
-     `alerting.alertmanagers` → Alertmanager ne reçoit rien. (Les règles SOC devraient alors
-     exister aussi en format Prometheus, ou Grafana doit pousser vers l'Alertmanager externe.)
-   - *voie Grafana native* : provisionner un **contact point** + une **notification policy**
-     (filtrés sur le label `incident_type`) vers le moteur.
+```
+infra/prometheus/rules/soc.yml  ──(rule_files, miroir des règles Grafana)──►  Prometheus
+   ──(alerting.alertmanagers)──►  Alertmanager (profil `full`, réseaux obs+app)
+   ──POST /events/alertmanager, Authorization: Bearer <secret remediation_token>──►  moteur de remédiation
+   ──remediation/alertmanager.py (webhook → AnomalyEvent §3)──►  engine.handle_event (mêmes garde-fous que /events)
+```
 
-Le détecteur ML reste le chemin principal de déclenchement de la remédiation (contrat §3) ;
-le SOC est le chemin complémentaire. Ces deux maillons sont suivis dans la ROADMAP
-(points d'intégration) et à trancher avec les référents **remédiation** et **infra**.
+| Maillon | Fichier | Détail |
+|---|---|---|
+| Règles Prometheus | `infra/prometheus/rules/soc.yml` | 4 alertes (`SocAuthAbuse`, `SocServiceFlood`, `SocWafBlocks`, `SocDataCorruption`), **mêmes expressions/seuils/`for`** que `soc-rules.yml` ; labels `incident_type` + `service`, annotations `expr`/`value`/`feature` (reprises dans `evidence` / `features_top`). Cohérence Grafana ⇔ Prometheus vérifiée par `infra/tests/test_soc_rules.py`. |
+| Prometheus | `infra/prometheus/prometheus.yml` | `rule_files: /etc/prometheus/rules/*.yml` (monté par Compose) + `alerting.alertmanagers → alertmanager:9093`. |
+| Alertmanager | `infra/alertmanager/alertmanager.yml` | Route unique → webhook `http://remediation:8005/events/alertmanager`, `send_resolved: false`, **`authorization: Bearer` via `credentials_file: /run/secrets/remediation_token`** (secret Compose alimenté par `REMEDIATION_TOKEN` du `.env` SOPS — jamais en clair dans le YAML versionné). `group_by: [incident_type, service]`, `repeat_interval: 5m`. |
+| Moteur | `remediation/alertmanager.py`, `POST /events/alertmanager` | Alerte `firing` + `incident_type` de l'énumération → `AnomalyEvent` (`source: alertmanager`, score/seuil 1.0, `event_id` = uuid5(fingerprint, startsAt) ⇒ les ré-émissions sont **rejouées idempotemment**). Alertes résolues / sans `incident_type` / inconnues : ignorées (`skipped`), jamais mappées sur `unknown`. Aucune route d'injection non authentifiée (401 sans Bearer). |
+
+Conséquences :
+
+- **Le détecteur ML reste le chemin principal** ; le SOC est complémentaire. Si les deux déclenchent
+  sur le même `incident_type:service`, le moteur dédoublonne (incident actif → `duplicate`, puis `cooldown`).
+- Alertmanager est dans le profil `full` (`make up-full`). En profil `demo`, Prometheus évalue les règles
+  (visibles dans son UI) mais ne peut pas joindre Alertmanager : erreurs de résolution DNS journalisées,
+  sans effet sur la démo.
+- Les règles SOC sont des agrégats : pas de label `source_ip`. Les actions `waf_block_ip` échouent
+  proprement (« aucune IP source ») et la règle enchaîne sur l'action suivante (restart, rate-limit, restore).
 
 ## Validation
 
 - Hors stack : `python -m pytest infra/tests/test_soc_rules.py -q` (contrat statique).
-- En live : lever la stack, déclencher un scénario (`attacks/run.sh ...`), vérifier que
-  l'alerte passe en `Firing` dans Grafana (Alerting → rules) et que le label `incident_type`
-  est correct.
+- En live (`make up-full`) : déclencher un scénario (`attacks/run.sh ...`), vérifier que l'alerte
+  passe en `Firing` (Grafana → Alerting, Prometheus → Alerts), qu'Alertmanager la notifie (UI :9093,
+  réseau `obs`) et que le moteur journalise un incident `source: alertmanager`
+  (`GET /incidents`, ou `docker compose logs remediation | grep alertmanager`).
+- Hors stack, le webhook lui-même : `cd remediation && pytest tests/test_alertmanager.py -q` (13 tests).
