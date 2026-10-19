@@ -10,11 +10,14 @@ function asObj(v: unknown, what: string): Obj {
   return v as Obj
 }
 
-function str(o: Obj, key: string, what: string): string {
-  const v = o[key]
+function toStr(v: unknown, key: string, what: string): string {
   if (typeof v === 'string' && v !== '') return v
   if (typeof v === 'number') return String(v)
   throw new ApiError(0, 'invalid_response', `Champ « ${key} » manquant (${what}).`)
+}
+
+function str(o: Obj, key: string, what: string): string {
+  return toStr(o[key], key, what)
 }
 
 function optStr(o: Obj, key: string): string | null {
@@ -54,11 +57,15 @@ export function parseLogin(v: unknown): LoginResponse {
 
 export function parseAccount(v: unknown): Account {
   const o = asObj(v, 'compte')
+  // Contrat payment-api (AccountOut) : { id, iban_fake, balance_cents, currency }.
+  // Les montants transitent en centimes entiers ; l'UI raisonne en euros.
+  const balance = 'balance_cents' in o ? num(o, 'balance_cents', 'compte') / 100 : num(o, 'balance', 'compte')
   return {
     id: str(o, 'id', 'compte'),
     owner: optStr(o, 'owner'),
-    label: optStr(o, 'label') ?? optStr(o, 'name'),
-    balance: num(o, 'balance', 'compte'),
+    label: optStr(o, 'label') ?? optStr(o, 'name') ?? optStr(o, 'iban_fake'),
+    iban: optStr(o, 'iban_fake') ?? optStr(o, 'iban'),
+    balance,
     currency: optStr(o, 'currency') ?? 'EUR',
   }
 }
@@ -73,15 +80,18 @@ function parseStatus(v: unknown): TransactionStatus {
 
 export function parseTransaction(v: unknown): Transaction {
   const o = asObj(v, 'transaction')
+  // Contrat payment-api (TransactionOut) : { id, src_account, dst_account, amount_cents, status }.
+  // src_/dst_account et amount_cents (centimes) ; pas d'horodatage côté API pour l'instant.
+  const amount = 'amount_cents' in o ? num(o, 'amount_cents', 'transaction') / 100 : num(o, 'amount', 'transaction')
   return {
     id: str(o, 'id', 'transaction'),
-    fromAccount: str(o, 'from_account', 'transaction'),
-    toAccount: str(o, 'to_account', 'transaction'),
-    amount: num(o, 'amount', 'transaction'),
+    fromAccount: toStr(o.src_account ?? o.from_account, 'src_account', 'transaction'),
+    toAccount: toStr(o.dst_account ?? o.to_account, 'dst_account', 'transaction'),
+    amount,
     currency: optStr(o, 'currency') ?? 'EUR',
     status: parseStatus(o.status),
     label: optStr(o, 'label'),
-    createdAt: str(o, 'created_at', 'transaction'),
+    createdAt: optStr(o, 'created_at') ?? '',
   }
 }
 

@@ -56,10 +56,10 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 |---|---|---|---|---|---|
 | auth : login/register, JWT, bcrypt, rate-limit | `services/auth` | R1 | — | ✅ | 35 tests verts (métriques contrat §2) |
 | payment-api : comptes, transactions, health/ready, métriques | `services/payment-api` | R1,R2 | — | ✅ | 54 tests verts (+1 skip Postgres) |
-| front : login, solde, virement, historique | `services/front` | R1 | — | ✅ | CDC+README+src+tests |
+| front : login, solde, comptes, virement, historique | `services/front` | R1 | — | ✅ | CDC+README+src+tests ; contrat payment-api réaligné (centimes/ids) ; design « Banque Résilience » intégré (44 tests Vitest verts, lint+build OK, vérifié contre auth/payment-api locaux) |
 | seed + verify_tx | `scripts/` | R2 | — | ✅ | scripts/verify_tx, scripts/seed.py |
 | Observabilité provisionnée (Prom/Loki/Grafana/Alert) | `infra/*` | R7 | — | ✅ | configs + provisioning |
-| WAF Nginx+ModSec+CRS devant le front | `security/waf` | R11 | — | ✅ | nginx.conf + waf_exporter (5 tests) |
+| WAF Nginx+ModSec+CRS devant le front | `security/waf` | R11 | — | ⚠️ | nginx.conf + waf_exporter (5 tests) ; **bloquant : pas de `Dockerfile` → `make up` échoue** ; upstream `front:80` alors que le conteneur front écoute `:8080` |
 | Durcissement conteneurs (non-root, cap_drop, read_only) | `security/hardening` | R14 | — | ✅ | hardening.md + audit.sh (OK) |
 | collector (features) + training (IsolationForest) | `ml/collector`, `ml/training` | R8 | — | ✅ | 50 tests ML verts |
 | EBIOS v2 + début NIS2/DORA | `docs/` | R16,R18 | — | ✅ | ebios-rm.md, nis2-dora.md |

@@ -28,16 +28,28 @@ export const tokenStore = {
   },
 }
 
-/** Lit le claim `exp` (secondes epoch) d'un JWT sans le vérifier (la vérification est côté serveur). */
-export function decodeJwtExp(token: string): number | null {
+interface JwtClaims {
+  sub: string | null
+  exp: number | null
+}
+
+/** Lit les claims `sub` (username) et `exp` (secondes epoch) d'un JWT sans le vérifier (la vérification est côté serveur). */
+export function decodeJwtClaims(token: string): JwtClaims {
   const part = token.split('.')[1]
-  if (!part) return null
+  if (!part) return { sub: null, exp: null }
   try {
     const b64 = part.replace(/-/g, '+').replace(/_/g, '/')
     const json = atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '='))
-    const payload = JSON.parse(json) as { exp?: unknown }
-    return typeof payload.exp === 'number' ? payload.exp : null
+    const payload = JSON.parse(json) as { sub?: unknown; exp?: unknown }
+    return {
+      sub: typeof payload.sub === 'string' ? payload.sub : null,
+      exp: typeof payload.exp === 'number' ? payload.exp : null,
+    }
   } catch {
-    return null
+    return { sub: null, exp: null }
   }
+}
+
+export function decodeJwtExp(token: string): number | null {
+  return decodeJwtClaims(token).exp
 }

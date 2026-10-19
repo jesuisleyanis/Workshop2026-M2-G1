@@ -1,6 +1,6 @@
 # services/front - Front de paiement (React + Vite + TypeScript + Tailwind)
 
-Interface utilisateur de la plateforme de paiement **fictive** : connexion, solde, virement, historique. Quoi et pourquoi : [`CAHIER-DES-CHARGES.md`](CAHIER-DES-CHARGES.md). Contrats : [`docs/contracts.md`](../../docs/contracts.md).
+Interface utilisateur de la plateforme de paiement **fictive** « Banque Résilience » : connexion, accueil (solde), comptes, virement, historique. Quoi et pourquoi : [`CAHIER-DES-CHARGES.md`](CAHIER-DES-CHARGES.md). Contrats : [`docs/contracts.md`](../../docs/contracts.md).
 
 ## Lancement
 
@@ -11,7 +11,13 @@ cp .env.example .env      # optionnel
 npm run dev               # http://localhost:5173
 ```
 
-Le serveur de dev proxifie `/api/*` vers `DEV_API_TARGET` (défaut `http://localhost`, c'est-à-dire le WAF local de `make up`). Pour viser directement un service : `DEV_API_TARGET=http://localhost:8001 npm run dev`.
+Le serveur de dev proxifie `/api/*` vers `DEV_API_TARGET` (défaut `http://localhost`, c'est-à-dire le WAF local de `make up`). Sans WAF, viser directement les services :
+
+```bash
+DEV_API_TARGET=http://localhost:8001 DEV_AUTH_TARGET=http://localhost:8002 npm run dev
+```
+
+Comptes de démo (seed) : `demo01`, `demo02` — mots de passe dans `scripts/seed.py`, jamais dans le front.
 
 ## Scripts
 
@@ -36,25 +42,31 @@ Le serveur de dev proxifie `/api/*` vers `DEV_API_TARGET` (défaut `http://local
 
 ```
 src/
-  main.tsx, App.tsx          point d'entrée, routes (react-router)
+  main.tsx, App.tsx          point d'entrée, routes (react-router) : /login, /, /accounts, /transfer, /history
+  index.css                  jetons du design (@theme Tailwind v4), polices auto-hébergées, utilitaires
   config.ts                  API_BASE (VITE_API_BASE)
   types/api.ts               Account, Transaction, LoginResponse, TransferRequest, ApiErrorBody
   api/
     client.ts                client HTTP centralisé : Bearer, JSON, timeout, erreurs normalisées
     errors.ts                ApiError + conversion du corps {error:{code,message,request_id}}
-    parsers.ts               validation/normalisation des réponses (schémas métier)
-    tokenStore.ts            JWT en sessionStorage + lecture du claim exp
+    parsers.ts               validation/normalisation des réponses (centimes -> euros, iban_fake)
+    tokenStore.ts            JWT en sessionStorage + lecture des claims sub/exp
     index.ts                 endpoints /api/v1 (login, accounts, transactions) + instance
-  hooks/                     useAuth (+ contexte), useResource, useAccounts, useTransactions
-  components/                AuthProvider, ProtectedRoute, Layout, BalanceCard, TransferForm,
-                             TransactionTable, Field, Spinner, ErrorBanner
-  pages/                     LoginPage, DashboardPage, TransferPage, HistoryPage
-  lib/                       format (EUR/dates fr-FR), validation du virement, messages d'erreur
+  hooks/                     useAuth (+ contexte), useResource, useAccounts, useTransactions (tri),
+                             useBankData (+ contexte)
+  components/
+    AuthProvider.tsx         session (JWT, username = claim sub, expiration, message de déconnexion)
+    ProtectedRoute.tsx       garde -> /login (mémorise la page demandée)
+    Layout.tsx               cadre : barre latérale, carte de session (compte à rebours), en-tête de page
+    BankDataProvider.tsx     comptes + transactions chargés une fois pour l'espace client, libellés locaux
+    ui.tsx                   ErrorBlock, Empty, Skeleton/Loading, StatusPill, Brand, txView (sens/signe)
+  pages/                     LoginPage, DashboardPage, AccountsPage, TransferPage, HistoryPage
+  lib/                       format (EUR, dates, IBAN), validation du virement, messages d'erreur, labels
   test/                      setup Vitest, helpers (stub fetch, faux JWT)
 docker/                      nginx.conf (non-root, :8080), security-headers.conf
 ```
 
-Flux d'authentification : `LoginPage` -> `AuthProvider.login` -> `POST /api/v1/login` -> JWT en `sessionStorage` -> `client.ts` ajoute `Authorization: Bearer`. Un `401` sur une route authentifiée, ou l'expiration du claim `exp`, vide le jeton et renvoie vers `/login`.
+Flux d'authentification : `LoginPage` -> `AuthProvider.login` -> `POST /api/v1/login` -> JWT en `sessionStorage` -> `client.ts` ajoute `Authorization: Bearer`. Un `401` sur une route authentifiée, ou l'expiration du claim `exp`, vide le jeton et renvoie vers `/login` avec le message « Votre session a expiré ». Le libellé de virement n'existe pas dans l'API : il est gardé en `localStorage` (`resilience.labels`) et réaffiché dans l'historique.
 
 ## Tests
 
@@ -63,9 +75,10 @@ npm run test
 ```
 
 - `src/api/client.test.ts` : Bearer, URL de base, erreur du contrat, repli non conforme (HTML du WAF), 401, réseau, timeout, 204.
-- `src/api/endpoints.test.ts` : routes `/api/v1/*`, corps envoyés, parsing (décimaux en chaîne, listes enveloppées), `decodeJwtExp`.
-- `src/lib/validation.test.ts` : règles du formulaire de virement.
-- `src/App.test.tsx` : redirection, login OK/KO, chargement/erreur/réessai, déconnexion sur 401, virement (validation + envoi + refus serveur), historique.
+- `src/api/endpoints.test.ts` : routes `/api/v1/*`, corps envoyés (centimes, ids entiers), parsing, claims JWT (`sub`, `exp`).
+- `src/lib/validation.test.ts` : règles du formulaire de virement (id bénéficiaire entier, décimales, solde).
+- `src/lib/format.test.ts`, `src/lib/labels.test.ts` : formatage EUR/IBAN/dates, libellés locaux.
+- `src/App.test.tsx` : redirection + message de garde, login OK/KO/champs vides, déconnexion manuelle et sur 401, chargement/erreur/réessai, comptes → virement pré-rempli, virement (validation, envoi, refus 409, erreur serveur), historique trié et filtré.
 
 ## Docker (prod)
 
