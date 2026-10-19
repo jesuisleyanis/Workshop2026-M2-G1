@@ -36,6 +36,17 @@ attacks/run.sh service_flood --target https://192.168.137.1 --duration 20 --rate
 #    verify_tx repasse OK automatiquement, MTTR affiché.
 ```
 
+### `service_flood` : un flood qui atteint la base
+
+Le flood est **authentifié** : `run.sh` se connecte avec un compte fictif seedé, lit les ids de compte (`GET /api/v1/accounts`) et envoie des virements d'1 centime aux **ids entiers** exigés par payment-api (`{src_account, dst_account, amount_cents}`). Sans jeton ni ids valides, chaque requête serait rejetée en 401/422 avant Postgres et le ML apprendrait une fausse signature. Sans session valide (stack non seedée), le scénario s'arrête en code 1 sans rien envoyer.
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `FLOOD_USER` / `FLOOD_PASSWORD` | `demo01` / `demo-pass-01` | Compte source |
+| `FLOOD_DST_ID` | — | Id du compte destinataire (sinon lu via `FLOOD_DST_USER`) |
+| `FLOOD_DST_USER` / `FLOOD_DST_PASSWORD` | `demo02` / `demo-pass-02` | Compte destinataire |
+| `RUNLOG` / `PIDFILE` | `attacks/.runlog` / `attacks/.run.pid` | Journal et PID (surchargés par les tests) |
+
 ## KILL-SWITCH
 
 ```bash

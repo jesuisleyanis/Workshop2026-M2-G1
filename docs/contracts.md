@@ -228,6 +228,7 @@ rules:
 - **Health :** chaque service expose `GET /health` (liveness, 200 si process up) et `GET /ready` (readiness, 200 si dépendances OK — DB joignable, etc.).
 - **Erreurs :** corps JSON `{ "error": { "code": "string", "message": "string", "request_id": "..." } }`.
 - **Codes retour scripts :** `verify_tx` et les scripts de démo renvoient `0` (succès) / `1` (échec) — contrat réutilisé par la boucle de remédiation et la CI future.
+- **`verify_tx` :** login `VERIFY_USER` → `GET /api/v1/accounts` (id source) → `POST /api/v1/transactions` `{src_account, dst_account, amount_cents}`, **ids entiers** (`TransactionIn`, `StrictInt`) → la transaction créée (`status: "created"`) figure dans `GET /api/v1/transactions`. Compte destinataire : `VERIFY_DST_ID`, sinon contrepartie d'une transaction déjà dans l'historique, sinon compte de `VERIFY_DST_USER` (second login). Cible : `BASE_URL` (WAF, défaut `https://localhost`).
 - **Versionnement :** préfixe `/api/v1` sur les routes métier.
 
 ---

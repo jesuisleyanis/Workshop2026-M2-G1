@@ -138,6 +138,7 @@ Lues par `config.py` (`Settings.from_env`). **Aucun secret n'a de valeur par dé
 | `VERIFY_TIMEOUT_S` | `30` | Timeout d'une exécution de `verify_tx`. |
 | `VERIFY_RETRIES` | `5` | Essais de `verify_tx` après une action (min. 1). |
 | `VERIFY_INTERVAL_S` | `3` | Pause entre deux essais. |
+| `BASE_URL`, `VERIFY_USER`, `VERIFY_PASSWORD`, `VERIFY_DST_ID`, `VERIFY_DST_USER`, `VERIFY_DST_PASSWORD` | `https://localhost`, `demo01`… | Lues par `verify_tx` (environnement hérité du moteur). Dans le conteneur, `BASE_URL` doit viser le WAF (`localhost` n'y est pas la plateforme). Voir `docs/contracts.md` (Conventions d'API). |
 | `ACTION_TIMEOUT_S` | `300` | Timeout d'une action. |
 | `ANSIBLE_PRIVATE_DATA_DIR` | `/opt/ansible` | Répertoire ansible-runner (playbooks sous `project/`). |
 | `REMEDIATION_DRY_RUN` | `false` | Force le dry-run (ne peut jamais le désactiver s'il est actif dans la table). Valeurs vraies : `1`, `true`, `yes`, `on`. |

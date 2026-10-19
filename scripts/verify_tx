@@ -5,8 +5,15 @@ Contrat (docs/contracts.md) : exit 0 = service utilisable, exit 1 = KO.
 Réutilisé par la démo ET par la boucle de vérification du moteur de remédiation :
 un conteneur qui redémarre ne prouve rien ; cette transaction prouve la reprise.
 
-Étapes : login (auth) -> virement fictif (payment-api) -> lecture de l'historique.
+Étapes : login (auth) -> compte source (GET /accounts) -> compte destinataire ->
+virement fictif (payment-api) -> la transaction créée figure dans l'historique.
 Tout passe par le WAF (BASE_URL) comme un vrai client.
+
+payment-api attend des ids de compte ENTIERS (`TransactionIn`, StrictInt). Le compte
+destinataire est, dans l'ordre : `VERIFY_DST_ID` ; sinon la contrepartie d'une transaction
+déjà présente dans l'historique ; sinon le compte de `VERIFY_DST_USER` (second login).
+L'historique évite un second login à chaque exécution : la boucle de remédiation rejoue
+verify_tx jusqu'à 5 fois, sous une limite de logins resserrée après un `auth_abuse`.
 """
 from __future__ import annotations
 
@@ -20,8 +27,13 @@ import urllib.request
 BASE_URL = os.environ.get("BASE_URL", "https://localhost")
 USER = os.environ.get("VERIFY_USER", "demo01")
 PASSWORD = os.environ.get("VERIFY_PASSWORD", "demo-pass-01")
-DST = os.environ.get("VERIFY_DST", "FR-FAKE-0002")
+DST_ID = os.environ.get("VERIFY_DST_ID", "")
+DST_USER = os.environ.get("VERIFY_DST_USER", "demo02")
+DST_PASSWORD = os.environ.get("VERIFY_DST_PASSWORD", "demo-pass-02")
+AMOUNT_CENTS = 100
 TIMEOUT = float(os.environ.get("VERIFY_TIMEOUT", "5"))
+#: Statut d'une transaction acceptée (`TransactionStatus.CREATED` de resilience_db).
+CREATED = "created"
 
 # Certificat auto-signé du WAF : contexte non vérifié (environnement de labo fermé).
 _CTX = ssl.create_default_context()
@@ -29,7 +41,11 @@ _CTX.check_hostname = False
 _CTX.verify_mode = ssl.CERT_NONE
 
 
-def _post(path: str, payload: dict, token: str | None = None) -> dict:
+class VerifyError(Exception):
+    """Étape de vérification en échec (message destiné à stderr)."""
+
+
+def _post(path: str, payload: dict, token: str | None = None) -> dict | list:
     data = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json"}
     if token:
@@ -39,7 +55,7 @@ def _post(path: str, payload: dict, token: str | None = None) -> dict:
         return json.loads(resp.read() or b"{}")
 
 
-def _get(path: str, token: str) -> dict:
+def _get(path: str, token: str) -> dict | list:
     req = urllib.request.Request(
         BASE_URL + path, headers={"Authorization": f"Bearer {token}"}, method="GET"
     )
@@ -47,27 +63,62 @@ def _get(path: str, token: str) -> dict:
         return json.loads(resp.read() or b"{}")
 
 
+def _items(body: dict | list) -> list:
+    return body if isinstance(body, list) else body.get("items", [])
+
+
+def login(username: str, password: str) -> str:
+    body = _post("/api/v1/login", {"username": username, "password": password})
+    token = isinstance(body, dict) and (body.get("access_token") or body.get("token"))
+    if not token:
+        raise VerifyError(f"échec login {username} (pas de token)")
+    return token
+
+
+def account_ids(token: str) -> list[int]:
+    ids = [int(a["id"]) for a in _items(_get("/api/v1/accounts", token))]
+    if not ids:
+        raise VerifyError("aucun compte pour l'utilisateur (make seed ?)")
+    return ids
+
+
+def destination_id(token: str, own: list[int]) -> int:
+    if DST_ID:
+        return int(DST_ID)
+    for tx in _items(_get("/api/v1/transactions", token)):
+        for acc in (tx.get("src_account"), tx.get("dst_account")):
+            if isinstance(acc, int) and acc not in own:
+                return acc
+    return account_ids(login(DST_USER, DST_PASSWORD))[0]
+
+
 def main() -> int:
     try:
-        login = _post("/api/v1/login", {"username": USER, "password": PASSWORD})
-        token = login.get("access_token") or login.get("token")
-        if not token:
-            print("verify_tx: échec login (pas de token)", file=sys.stderr)
-            return 1
+        token = login(USER, PASSWORD)
+        own = account_ids(token)
+        payload = {"src_account": own[0], "dst_account": destination_id(token, own),
+                   "amount_cents": AMOUNT_CENTS}
 
-        tx = _post("/api/v1/transactions", {"dst_account": DST, "amount_cents": 100}, token)
-        if tx.get("status") not in ("created", "accepted", "ok"):
-            print(f"verify_tx: transaction refusée: {tx}", file=sys.stderr)
-            return 1
+        tx = _post("/api/v1/transactions", payload, token)
+        if not isinstance(tx, dict) or tx.get("status") != CREATED:
+            raise VerifyError(f"transaction refusée: {tx}")
 
-        history = _get("/api/v1/transactions", token)
-        items = history if isinstance(history, list) else history.get("items", [])
-        if not items:
-            print("verify_tx: historique vide après transaction", file=sys.stderr)
-            return 1
+        history = _items(_get("/api/v1/transactions", token))
+        if tx.get("id") not in {item.get("id") for item in history}:
+            raise VerifyError(f"transaction {tx.get('id')} absente de l'historique")
 
-        print("verify_tx: OK — transaction fictive réussie")
+        print(f"verify_tx: OK — transaction fictive {tx.get('id')} réussie")
         return 0
+    except VerifyError as exc:
+        print(f"verify_tx: {exc}", file=sys.stderr)
+        return 1
+    except urllib.error.HTTPError as exc:  # avant URLError, dont elle hérite
+        try:
+            detail = exc.read()[:200].decode(errors="replace")
+        except OSError:
+            detail = ""
+        print(f"verify_tx: HTTP {exc.code} sur {exc.url}: {detail}", file=sys.stderr)
+        return 1
     except (urllib.error.URLError, TimeoutError, ssl.SSLError) as exc:
         print(f"verify_tx: service injoignable: {exc}", file=sys.stderr)
         return 1

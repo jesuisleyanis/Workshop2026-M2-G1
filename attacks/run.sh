@@ -6,8 +6,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCENARIO_DIR="${ROOT}/attacks/scenarios"
-RUNLOG="${ROOT}/attacks/.runlog"
-PIDFILE="${ROOT}/attacks/.run.pid"
+RUNLOG="${RUNLOG:-${ROOT}/attacks/.runlog}"
+PIDFILE="${PIDFILE:-${ROOT}/attacks/.run.pid}"
 
 usage() {
   echo "Usage : run.sh <scenario> [--target URL] [--duration S] [--rate N]"
@@ -53,12 +53,15 @@ echo "$(date -Iseconds) START ${SCENARIO} target=${TARGET} duration=${DURATION}s
 
 bounded_loop() {
   # Boucle bornée : envoie des requêtes jusqu'à la fin de la fenêtre, puis s'arrête seule.
-  local path="$1" method="${2:-GET}" body="${3:-}"
+  local path="$1" method="${2:-GET}" body="${3:-}" token="${4:-}"
   local end=$(( $(date +%s) + DURATION ))
   local interval; interval=$(awk "BEGIN{print 1/${RATE}}")
+  local auth=()
+  [[ -n "${token}" ]] && auth=(-H "Authorization: Bearer ${token}")
   while (( $(date +%s) < end )); do
     if [[ "${method}" == "POST" ]]; then
-      curl -k -s -o /dev/null -X POST -H 'Content-Type: application/json' -d "${body}" "${TARGET}${path}" || true
+      curl -k -s -o /dev/null -X POST -H 'Content-Type: application/json' ${auth[@]+"${auth[@]}"} \
+        -d "${body}" "${TARGET}${path}" || true
     else
       curl -k -s -o /dev/null "${TARGET}${path}" || true
     fi
@@ -66,9 +69,32 @@ bounded_loop() {
   done
 }
 
+# Session d'un client fictif (comptes de scripts/seed.py) : jeton puis id du 1er compte.
+# Pas de jq sur le PC Attaquant : extraction par motif, suffisante pour ces réponses plates.
+login_token() {
+  curl -k -s -X POST -H 'Content-Type: application/json' \
+    -d "{\"username\":\"$1\",\"password\":\"$2\"}" "${TARGET}/api/v1/login" \
+    | sed -n 's/.*"access_token" *: *"\([^"]*\)".*/\1/p' || true
+}
+first_account_id() {
+  curl -k -s -H "Authorization: Bearer $1" "${TARGET}/api/v1/accounts" \
+    | grep -o '"id" *: *[0-9]*' | head -n 1 | grep -o '[0-9]*$' || true
+}
+
 case "${SCENARIO}" in
   service_flood)
-    bounded_loop "/api/v1/transactions" POST '{"dst_account":"FR-FAKE-0002","amount_cents":100}' &
+    # Le flood doit atteindre la DB : jeton valide et ids de compte ENTIERS (contrat
+    # payment-api, StrictInt). Sans eux il ne produit que des 401/422 rejetés avant
+    # Postgres, une signature fausse pour le ML. 1 centime : le solde tient tout le flood.
+    TOKEN="$(login_token "${FLOOD_USER:-demo01}" "${FLOOD_PASSWORD:-demo-pass-01}")"
+    SRC_ID="$( [[ -n "${TOKEN}" ]] && first_account_id "${TOKEN}" || true)"
+    DST_ID="${FLOOD_DST_ID:-$(first_account_id "$(login_token "${FLOOD_DST_USER:-demo02}" "${FLOOD_DST_PASSWORD:-demo-pass-02}")")}"
+    if [[ -z "${SRC_ID}" || -z "${DST_ID}" ]]; then
+      echo "service_flood : login ou lecture des comptes impossible sur ${TARGET} (make seed ?)" | tee -a "${RUNLOG}"
+      rm -f "${PIDFILE}"; exit 1
+    fi
+    bounded_loop "/api/v1/transactions" POST \
+      "{\"src_account\":${SRC_ID},\"dst_account\":${DST_ID},\"amount_cents\":1}" "${TOKEN}" &
     echo $! >> "${PIDFILE}" ;;
   auth_abuse)
     bounded_loop "/api/v1/login" POST '{"username":"demo01","password":"wrong-password"}' &
