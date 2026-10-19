@@ -25,6 +25,13 @@ PC Attaquant (autre PC du groupe)            PC Hôte (192.168.137.1)
 > **Pannes NON-attaque (chaos engineering) : [`chaos/README.md`](chaos/README.md)** — crash/gel bornés et réversibles pour prouver la résilience intrinsèque (restart policy, healthchecks), distincte de la chaîne Red Team.
 >
 > **Console de pilotage locale : [`console/README.md`](console/README.md)** — UI web (local-only, PC Attaquant) pour lancer les scénarios, suivre la chaîne de reprise et le journal, kill-switch/reset. Garde-fous côté serveur.
+>
+> **Campagne multi-étapes `campaign.sh` (Opération Triade)** — enchaîne 3 vagues décalées (`auth_abuse` → `web_attack` → `service_flood`) pour éprouver la corrélation SOC et la remédiation d'incidents successifs. Chaque vague délègue à `run.sh` (plafonds appliqués), réversible, kill-switch `campaign.sh --stop`.
+>
+> ```bash
+> attacks/campaign.sh --target https://192.168.137.1   # ou bouton "Opération Triade" dans la console
+> attacks/campaign.sh --stop                           # kill-switch
+> ```
 
 ## Mise en place
 
