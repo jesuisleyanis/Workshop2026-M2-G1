@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 import joblib
 import numpy as np
 import sklearn
+from resilience_common import get_logger
 
 from ml.shared.features import FEATURE_NAMES, validate_vector
 
-log = logging.getLogger(__name__)
+# Logger JSON du contrat (même logger "detector" que app.py) : le warning de dérive doit être
+# indexable par Promtail/Loki, pas un message texte brut sur stderr.
+log = get_logger("detector")
 
 
 class ModelLoadError(RuntimeError):
@@ -76,6 +78,7 @@ def load_model(model_dir: str | Path) -> LoadedModel:
             "différents, ré-entraîner ou aligner les versions (ml/*/requirements.txt)",
             sklearn.__version__,
             trained_with,
+            extra={"event": "model_version_drift"},
         )
 
     payload = joblib.load(model_path)

@@ -31,6 +31,7 @@ RESERVED_EVENTS: frozenset[str] = frozenset(
         "waf_blocked",
         # detector
         "anomaly_detected",
+        "model_version_drift",
         # remediation
         "remediation_started",
         "remediation_action",

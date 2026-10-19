@@ -51,7 +51,9 @@ que l'artefact n'a pas été produit. Stratégie retenue (étape documentée et 
 
 - **`make up` / `make up-full` dépendent de la cible `make model`** qui lance `python -m ml.training.train`
   si l'artefact est absent (sinon no-op). Le modèle est donc toujours présent avant le build du detector.
-  Pour (ré)entraîner à la demande : `make model` (ou `python -m ml.training.train`).
+  Pour (ré)entraîner à la demande : `make model` (ou `python -m ml.training.train`). `make model` ne teste
+  que la présence des fichiers : après un changement de `FEATURE_NAMES` ou de version épinglée, supprimer
+  `ml/training/artifacts/` pour forcer un ré-entraînement (sinon le detector refuse l'artefact périmé au chargement).
 - **Versions épinglées** : `scikit-learn==1.9.1`, `numpy`, `joblib` sont figés **à l'identique** côté
   entraînement (`ml/training/requirements.txt`) et detector (`ml/detector/requirements.txt`). Une dérive fausserait silencieusement les scores.
 - **Vérifications au chargement** (`ml/detector/model.py`) : `feature_names` == `ml.shared.features`,
