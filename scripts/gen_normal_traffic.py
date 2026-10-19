@@ -12,8 +12,12 @@ de saisie (mauvais mot de passe, virement vers un compte inexistant). Le débit 
 cycle lent (± AMPLITUDE autour de --rps) pour que la baseline couvre plusieurs niveaux
 de charge. Les logins restent rares : sous la limite de l'auth (10/min/IP par défaut),
 sinon on fabriquerait des 429 qui n'existent pas dans le vrai normal.
+Deux garde-fous le garantissent même quand l'auth tombe (redémarrage par la remédiation,
+429, 5xx) : un budget de logins PARTAGÉ (8/min, fenêtre glissante) et une pause exponentielle
+par client après un login en échec (5 s -> 60 s, Retry-After respecté). Sans eux, un client
+sans jeton relancerait un login à chaque tour : une avalanche qui ressemble à une attaque.
 
-    python3 scripts/gen_normal_traffic.py --duration 30m [--rps 5] [--base-url https://localhost]
+    python3 scripts/gen_normal_traffic.py --duration 60m [--rps 5] [--base-url https://localhost]
 
 Stdlib uniquement (lancé depuis le poste hôte, comme verify_tx). Ctrl-C = arrêt propre.
 """
@@ -31,7 +35,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -58,6 +62,15 @@ ACTIONS = (
 AMPLITUDE = 0.3          # ± 30 % autour du débit moyen
 CYCLE_S = 600.0          # période du cycle de charge
 SESSION_TTL_S = 300.0    # re-login toutes les ~5 min par client
+#: Pause après un login en échec (auth redémarrée, 429, 5xx) : 5 s, 10 s, 20 s... plafonnée.
+#: Sans elle, un client sans jeton relancerait un login à CHAQUE tour (~100/min à 5 req/s) :
+#: une avalanche de 429 qui ressemble à une attaque par force brute.
+BACKOFF_BASE_S = 5.0
+BACKOFF_MAX_S = 60.0
+BACKOFF_JITTER = 0.2     # ± 20 % pour désynchroniser les clients
+#: Budget de logins PARTAGÉ par tous les clients : la limite de l'auth (10/min) est par IP,
+#: et tout le générateur sort de la même IP. 8 laisse de la marge (verify_tx, humain).
+LOGIN_BUDGET_PER_MIN = 8
 
 log = logging.getLogger("gen_normal_traffic")
 
@@ -100,9 +113,34 @@ def http(method: str, path: str, payload: dict | None = None, token: str | None 
         with urllib.request.urlopen(req, timeout=TIMEOUT, context=_CTX) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as exc:
-        return exc.code, {}
+        # Retry-After (429/503) remonté dans le corps : seul en-tête utile au client.
+        retry_after = (exc.headers or {}).get("Retry-After")
+        return exc.code, ({"retry_after": retry_after} if retry_after else {})
     except (urllib.error.URLError, TimeoutError, ssl.SSLError, OSError, ValueError):
         return 0, {}
+
+
+class LoginBudget:
+    """Fenêtre glissante de 60 s sur les logins (réussis, ratés ou fautes de frappe)."""
+
+    def __init__(self, per_min: int = LOGIN_BUDGET_PER_MIN) -> None:
+        self.per_min = per_min
+        self.times: deque[float] = deque()
+
+    def _trim(self, now: float) -> None:
+        while self.times and now - self.times[0] >= 60.0:
+            self.times.popleft()
+
+    def allow(self, now: float) -> bool:
+        self._trim(now)
+        return len(self.times) < self.per_min
+
+    def record(self, now: float) -> None:
+        self.times.append(now)
+
+    def next_slot(self, now: float) -> float:
+        """Premier instant où un login sera de nouveau autorisé."""
+        return now if self.allow(now) else self.times[0] + 60.0
 
 
 @dataclass
@@ -116,14 +154,53 @@ class Client:
     token: str | None = None
     logged_at: float = -math.inf
     account_id: int | None = None
+    retry_at: float = -math.inf   # pas de login avant cet instant (pause après échec)
+    login_failures: int = 0
+    budget: LoginBudget | None = field(default=None, repr=False)  # partagé entre clients
 
-    def login(self, now: float, password: str | None = None) -> int:
+    def login(self, now: float, password: str | None = None,
+              rng: random.Random | None = None) -> int:
+        """Login. Avec `password` (faute de frappe volontaire), aucun effet sur la session."""
+        if self.budget is not None:
+            self.budget.record(now)
         status, body = self.send("POST", "/api/v1/login",
                                  {"username": self.username, "password": password or self.password})
-        if status == 200 and password is None and isinstance(body, dict):
+        if password is not None:
+            return status
+        if status == 200 and isinstance(body, dict):
             self.token = body.get("access_token") or body.get("token")
             self.logged_at = now
+            self.login_failures = 0
+        else:
+            self._back_off(now, status, body, rng or random.Random())
         return status
+
+    def _back_off(self, now: float, status: int, body: dict | list, rng: random.Random) -> None:
+        self.login_failures += 1
+        delay = min(BACKOFF_MAX_S, BACKOFF_BASE_S * 2 ** (self.login_failures - 1))
+        delay *= rng.uniform(1 - BACKOFF_JITTER, 1 + BACKOFF_JITTER)
+        try:
+            retry_after = float(body.get("retry_after", 0)) if isinstance(body, dict) else 0.0
+        except (TypeError, ValueError):
+            retry_after = 0.0
+        self.retry_at = now + max(delay, retry_after)
+        log.warning("%s : login en échec (HTTP %s), pause %.0f s", self.username, status,
+                    self.retry_at - now)
+
+    def needs_login(self, now: float) -> bool:
+        return self.token is None or now - self.logged_at > SESSION_TTL_S
+
+    def ready(self, now: float) -> bool:
+        """Peut agir maintenant : pas en pause, et budget de logins dispo s'il doit se connecter."""
+        if now < self.retry_at:
+            return False
+        return not (self.needs_login(now) and self.budget and not self.budget.allow(now))
+
+    def wake_at(self, now: float) -> float:
+        wake = self.retry_at
+        if self.needs_login(now) and self.budget is not None:
+            wake = max(wake, self.budget.next_slot(now))
+        return wake
 
     def list_accounts(self) -> int:
         status, body = self.send("GET", "/api/v1/accounts", token=self.token)
@@ -138,10 +215,15 @@ class Client:
         return status
 
     def step(self, rng: random.Random, now: float) -> tuple[str, int]:
-        """Joue une action ; (re)connecte d'abord si la session a expiré."""
-        if self.token is None or now - self.logged_at > SESSION_TTL_S:
-            return "login", self.login(now)
+        """Joue une action ; (re)connecte d'abord si la session a expiré.
+
+        À n'appeler que si `ready(now)` : pendant une pause après échec, le client se tait.
+        """
+        if self.needs_login(now):
+            return "login", self.login(now, rng=rng)
         action = pick_action(rng)
+        if action == "bad_login" and self.budget is not None and not self.budget.allow(now):
+            action = "history"  # pas de faute de frappe si le budget de logins est épuisé
         peers = [p.account_id for p in self.peers if p.account_id not in (None, self.account_id)]
         if action in ("transfer", "bad_transfer") and (self.account_id is None or not peers):
             action = "accounts"  # compte (ou contrepartie) pas encore connu : on le consulte
@@ -165,21 +247,27 @@ def run(duration_s: float, rps: float, send: Callable[..., tuple[int, dict]], se
         sleep: Callable[[float], None] = time.sleep) -> Counter:
     """Boucle principale (mono-thread, arrivées de Poisson) ; renvoie les compteurs."""
     rng = random.Random(seed)
-    clients = [Client(u, p, send=send) for u, p in USERS]
+    budget = LoginBudget()
+    clients = [Client(u, p, send=send, budget=budget) for u, p in USERS]
     for c in clients:
         c.peers = clients
     stats: Counter = Counter()
     start = clock()
     next_report = start + 30
     while (now := clock()) - start < duration_s:
-        client = rng.choice(clients)
+        ready = [c for c in clients if c.ready(now)]
+        if not ready:  # tous en pause (auth indisponible) : on attend le premier réveil
+            stats["wait"] += 1
+            sleep(max(0.1, min(c.wake_at(now) for c in clients) - now))
+            continue
+        client = rng.choice(ready)
         action, status = client.step(rng, now)
         stats[f"{action}:{status}"] += 1
         stats["total"] += 1
         if now >= next_report:
             log.info("t=%ds cible=%.1f req/s total=%d codes=%s", int(now - start),
                      target_rate(now - start, rps), stats["total"],
-                     dict(sorted((k, v) for k, v in stats.items() if k != "total")))
+                     dict(sorted((k, v) for k, v in stats.items() if k not in ("total", "wait"))))
             next_report = now + 30
         sleep(rng.expovariate(target_rate(now - start, rps)))
     return stats
@@ -189,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s",
                         stream=sys.stderr)
     p = argparse.ArgumentParser(description="Trafic légitime réaliste (baseline / démo)")
-    p.add_argument("--duration", default="30m", help="durée (ex. 30m, 2h)")
+    p.add_argument("--duration", default="60m", help="durée (ex. 60m, 2h)")
     p.add_argument("--rps", type=float, default=5.0, help="débit moyen (req/s)")
     p.add_argument("--base-url", default=BASE_URL)
     p.add_argument("--seed", type=int, default=0)
