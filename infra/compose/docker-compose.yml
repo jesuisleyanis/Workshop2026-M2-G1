@@ -198,10 +198,24 @@ services:
   dashboard:
     <<: *hardening
     build: { context: ../../dashboard }
+    # Le navigateur ne parle qu'au nginx du dashboard (same-origin, CSP connect-src 'self') :
+    # /remediation/stream -> remediation:8005/stream (Bearer injecté côté serveur),
+    # /prometheus/api/v1/query -> prometheus:9090 (score ML + santé, GET lecture seule).
+    # VITE_* sont des build-args Vite, pas des variables runtime : la base /remediation est le défaut du build.
     networks: [app]
     environment:
-      VITE_REMEDIATION_BASE: http://remediation:8005
+      REMEDIATION_UPSTREAM: remediation:8005
+      REMEDIATION_AUTH_HEADER: "Bearer ${REMEDIATION_TOKEN}"
+      PROMETHEUS_UPSTREAM: prometheus:9090
+    depends_on: [remediation, prometheus]
+    read_only: true
+    tmpfs: ["/tmp"]
     mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
 
   # ---------------------------------------------------------------- observabilité
   prometheus:
