@@ -54,7 +54,7 @@
 | collector | Python | app | non | Construit le vecteur de features (15 s) |
 | detector | FastAPI + scikit-learn | app | non | Score ML, émet l'AnomalyEvent |
 | remediation | FastAPI + ansible-runner | app | non | Décision + actions + vérification |
-| docker-socket-proxy | Tecnativa | app | non | Médie l'accès Docker (verbes limités) |
+| docker-socket-proxy | HAProxy (liste blanche stricte) | app | non | Médie l'accès Docker (verbes limités) |
 | dashboard | React/Vite/TS/Tailwind | app/obs | via WAF/interne | Supervision, timeline, MTTD/MTTR |
 | assistant | FastAPI + LangChain + Ollama | ai | non | RAG opérateur (lecture seule) |
 
