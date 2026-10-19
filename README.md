@@ -168,6 +168,12 @@ Dossier de rendu : `Workshop2026-M2-G1`
 | `Workshop2026-M2-G1-VidChrono.mp4` | Clip Chrono — 60 s max, sans coupe |
 | `Workshop2026-M2-G1-Code.zip` | Archive du dépôt Git (sources, IaC, scripts, tests, doc, README) |
 
+Génération de l'archive : `make package` (ou `scripts/package_deliverables.sh`). Le script lance d'abord
+`security/hardening/audit.sh`, exclut `.git`, dépendances (`node_modules`, venv), artefacts de build
+(`dist`, caches, `*.egg-info`), journaux locaux, dumps et **tout secret déchiffré** (`.env`, `keys.txt`,
+`*.age`), puis re-scanne l'archive (noms **et** contenu : clé age / clé privée) et l'efface en cas de doute.
+La clé age de démo est remise **hors archive**. Les fichiers `Workshop2026-M2-G1-*` sont ignorés par git.
+
 ## Équipe
 
 | Membre | Formation | Domaine(s) |

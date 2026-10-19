@@ -6,7 +6,7 @@
 | `seed.py` | applique le jeu de données fictif | `make seed` |
 | `verify_tx` | **transaction de contrôle** (preuve de reprise), exit `0` = OK / `1` = KO | `make verify` |
 | `demo.sh` | les 5 temps de la démo enchaînés | `make demo SC=<scenario>` |
-| `package_deliverables.sh` | `Code.zip` sans secrets | `make package` |
+| `package_deliverables.sh` | `Workshop2026-M2-G1-Code.zip` sans secrets : audit → zip (exclusions : `.git`, deps, `dist`/caches/`egg-info`, dumps, journaux, `.env`/clés, autres livrables) → re-scan noms + contenu (clé age / clé privée ⇒ abandon). Testé sur un faux dépôt (`tests/test_package_deliverables.py`) | `make package` |
 
 Les cibles `make seed`, `make verify` et `make demo` chargent `.env` (produit par `make decrypt`)
 pour disposer de `SEED_PASSWORD`.
