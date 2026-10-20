@@ -23,7 +23,7 @@
 Phase 0  Socle            [#########.]  90%   squelette, contrats, .claude, compose, SOPS
 Phase 1  Plateforme       [########..]  85%   auth+payment+front livrés et testés
 Phase 2  Infra & observ.  [########..]  85%   configs Prom/Loki/Grafana/Alert/Ansible OK
-Phase 3  Détection ML     [#########.]  90%   collector/training/detector OK (51 tests)
+Phase 3  Détection ML     [#########.]  90%   collector/training/detector OK + outillage données réelles (capture/calibration)
 Phase 4  Remédiation      [#########.]  90%   moteur + plan d'exécution câblés (106 tests) ; validation live à faire
 Phase 5  Dashboard        [#########.]  90%   dashboard branché sur le moteur réel + Prometheus ; validation live à faire
 Phase 6  Cyber & attaques [########..]  85%   WAF, SOPS, durcissement, 4 scénarios OK
@@ -89,6 +89,8 @@ Phase 9  Consigne add. 1  [#####.....]  50%   L0+L1+L2 faits + L3 login (49+15+1
 |---|---|---|---|---|---|
 | Tests e2e rejouant chaque scénario | `tests/e2e` | R10 | Louis | 🟨 | 4 scénarios couverts (dont data_corruption KO→OK) + preuve incident clos optionnelle ; 5 tests collectés/skip OK hors stack, à valider live |
 | Chaos engineering (pannes non-attaque) | `attacks/chaos`, `tests/e2e` | — | Louis | ✅ | `chaos.sh` (crash/freeze, bornés+réversibles, kill-switch) + README ; 5 tests contrat + e2e `test_chaos_flow.py` (skip hors stack) |
+| ML sur vraies séries Prometheus : outillage (capture, train `--data`, calibration seuil + MTTD, trafic légitime, train au build) | `ml/*`, `scripts/gen_normal_traffic.py` | R8 | — | ✅ | outillage capture/calibration + tests verts ; `ml/training/README.md` §6 |
+| ML sur vraies séries : capture baseline + scénarios, calibration, rebuild detector | `ml/training/data/` | R8 | — | ✅ | baseline réelle 60 min (241 fenêtres) + `service_flood`, `auth_abuse`, `web_attack` ; seuil calibré 0,7173 (normal max 0,692, 0 % faux positifs), MTTD modèle 15 s par scénario ; chaque fenêtre en alerte routée vers le bon type. Corrigé en route : débit réel de `run.sh` sous Git Bash, cible des captures, flood authentifié (I8), `auth_failed_per_s` (+ refus du rate-limit), cpu/mem limités à la plateforme. Capturé et vérifié (detector reconstruit, e2e `web_attack` déclenché par le modèle) sur la stack de `feat/waf-block-chain` : **à rejouer sur cette base** (`make test-ml`, build du detector, e2e). **Non capturé** : `data_corruption` (déclenché côté opérateur, hors `run.sh`) |
 | `scripts/demo.sh` (5 temps enchaînés) | `scripts/` | R20 | — | ✅ | scripts/demo.sh |
 | PCA/PRA (RTO/RPO, risques résiduels) | `docs/pca-pra.md` | R17 | — | ✅ | docs/pca-pra.md |
 | NIS2/DORA finalisé | `docs/nis2-dora.md` | R18 | — | ✅ | docs/nis2-dora.md |
@@ -147,6 +149,9 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | I2 | Variable verify_tx | compose aligné sur `VERIFY_TX_PATH` | `docker-compose.yml` |
 | I3 | Noms de playbooks | `block_ip.yml`→`waf_deny_ip.yml`, `restore_pg_dump.yml`→`pg_restore.yml` ; déplacés dans `playbooks/remediation/` (exécution in-container, #8) | `infra/ansible/playbooks/remediation/` |
 | I4 | Auth moteur | **Bearer statique interne** acté (service non exposé) | `contracts.md §API`, ADR 0002 |
+| I6 | Detector -> remédiation | compose : `REMEDIATION_URL` sans `/events` (chaque événement en 404) -> URL complète | `ml/detector/tests/test_compose_wiring.py` |
+| I7 | Build image detector | le Dockerfile copiait des artefacts non versionnés (build impossible) -> modèle entraîné au build | `ml/detector/Dockerfile` (étape `trainer`) |
+| I8 | 🔴 `verify_tx` vs payment-api | `verify_tx` envoie `dst_account` = IBAN (chaîne) sans `src_account` ; l'API attend des **ids entiers** (`StrictInt`) -> 422 : la vérification de reprise échoue toujours (même défaut dans `attacks/run.sh` service_flood). `seed.py` envoie `iban_fake`/`balance_cents`, ignorés par `register` (IBAN aléatoire, solde par défaut) | **à corriger** |
 | I5 | Métriques HTTP lib | `instrument()` réécrit (middleware) → `resilience_http_requests_total{service,method,path,status}` ; `xfail` retirés ; conftests nettoyés | auth 35/35, payment-api 54/54 |
 
 ### Revue P2 — tickets #20 à #24

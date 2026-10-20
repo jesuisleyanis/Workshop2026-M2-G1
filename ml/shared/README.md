@@ -22,4 +22,9 @@ Entrée : z-scores par feature. Seuls les écarts vers le haut comptent. Le grou
 
 La clause sur les erreurs DB évite de prendre une corruption (5xx + latence en cascade) pour un problème de disponibilité.
 
+## Format CSV d'échange (`csvio.py`)
+
+`ts, <9 features>, label, missing` — écrit par `ml.collector.capture` (stdlib seule : tourne dans l'image collector), lu par
+`ml.training.dataset.load_csv`. `label` = `normal` ou un type de scénario ; `missing` = features absentes de Prometheus (`;`).
+
 Tests : `cd ml && python -m pytest shared`.
