@@ -36,6 +36,7 @@ class FakeMqttClient:
         self.loop_stopped = False
         self.disconnected = False
         self.on_connect = None
+        self.on_disconnect = None
         self.on_message = None
 
     def username_pw_set(self, username, password=None):
@@ -69,8 +70,11 @@ class FakeMqttClient:
         return SimpleNamespace(rc=self.publish_rc)
 
     # -- helpers de test : simulent les callbacks de la boucle réseau paho
-    def fire_connect(self):
-        self.on_connect(self, None, {}, 0, None)
+    def fire_connect(self, reason_code=0):
+        self.on_connect(self, None, {}, reason_code, None)
+
+    def fire_disconnect(self, reason_code=0):
+        self.on_disconnect(self, None, {}, reason_code, None)
 
     def fire_message(self, payload, topic: str = LED_STATUS_TOPIC):
         data = payload if isinstance(payload, bytes) else payload.encode()
@@ -215,6 +219,54 @@ def test_invalid_status_is_ignored(notifier, fake, payload):
     assert notifier.online is True
 
 
+def test_disconnect_resets_online_to_unknown(notifier, fake):
+    notifier.start()
+    fake.fire_connect()
+    fake.fire_message('{"online": true}')
+    assert notifier.online is True
+    fake.fire_disconnect(7)  # coupure réseau : le `true` retenu n'est plus courant
+    assert notifier.online is None
+
+
+def _paho_reason(identifier: int):
+    from paho.mqtt.packettypes import PacketTypes
+    from paho.mqtt.reasoncodes import ReasonCode
+
+    return ReasonCode(PacketTypes.CONNACK, identifier=identifier)
+
+
+@pytest.mark.parametrize("reason", [5, "paho-135"], ids=["int", "paho-ReasonCode"])
+def test_refused_connection_is_logged_without_secret_and_not_subscribed(
+    notifier, fake, log_lines, reason
+):
+    reason = _paho_reason(135) if reason == "paho-135" else reason  # 135 = Not authorized
+    notifier.start()
+    fake.fire_message('{"online": true}')
+    fake.fire_connect(reason)
+    assert fake.subscriptions == []
+    assert notifier.online is None
+    rows = log_lines("led_publish_failed")
+    assert len(rows) == 1 and rows[0]["level"] == "WARNING"
+    assert "mqtt-host:1883" in rows[0]["message"]
+    assert all("s3cret" not in json.dumps(r) for r in log_lines())
+
+
+def test_successful_paho_reason_code_subscribes(notifier, fake, log_lines):
+    notifier.start()
+    fake.fire_connect(_paho_reason(0))
+    assert fake.subscriptions == [(LED_STATUS_TOPIC, 1)]
+    assert log_lines("led_publish_failed") == []
+
+
+def test_stop_failure_is_logged_with_reserved_event(notifier, fake, log_lines):
+    def broken():
+        raise OSError("socket")
+
+    fake.disconnect = broken
+    notifier.stop()  # ne lève pas
+    assert len(log_lines("led_publish_failed")) == 1
+
+
 def test_status_on_other_topic_ignored(notifier, fake):
     notifier.start()
     fake.fire_message('{"online": true}', topic="other/topic")
@@ -271,6 +323,22 @@ def test_lifespan_starts_and_stops_notifier():
     with TestClient(_app(led)):
         assert led.started == 1
         assert led.stopped == 0
+    assert led.stopped == 1
+
+
+class _BrokenStartLed(_OnlineLed):
+    def start(self):
+        raise OSError("broker unreachable")
+
+
+def test_led_start_failure_does_not_prevent_boot(log_lines):
+    led = _BrokenStartLed(None)
+    with TestClient(_app(led)) as client:
+        assert client.get("/health").status_code == 200
+        assert client.get("/api/v1/auth/device").json() == {"led_online": None}
+    rows = log_lines("led_publish_failed")
+    assert len(rows) == 1 and rows[0]["level"] == "WARNING"
+    assert "OSError" in rows[0]["message"]
     assert led.stopped == 1
 
 

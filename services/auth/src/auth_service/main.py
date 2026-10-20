@@ -116,9 +116,19 @@ def create_app(
         if settings.run_migrations:
             _migrate_with_retry(engine, log)
         # connect_async + loop_start : non bloquant, la reconnexion au broker est automatique.
+        # Fail-open : une panne au démarrage du notifieur LED ne doit jamais empêcher auth (et
+        # donc le WAF qui en dépend) de démarrer — la LED n'est qu'un témoin.
         start = getattr(led_notifier, "start", None)
         if callable(start):
-            start()
+            try:
+                start()
+            except Exception as exc:  # noqa: BLE001
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "led_publish_failed",
+                    f"LED notifier start failed ({type(exc).__name__}): LED disabled, auth continues",
+                )
         try:
             yield
         finally:

@@ -8,6 +8,11 @@ pour exposer l'état du module à `GET /api/v1/auth/device`.
 **Fail-open** : `publish` ne bloque jamais la requête (le QoS 1 est mis en file par la boucle
 réseau de paho, qui tourne dans son propre thread) et ne propage jamais d'exception : la LED
 est un témoin, pas un facteur d'authentification.
+
+État du module : `online` repasse à `None` (inconnu) dès que la connexion au broker est perdue
+ou refusée — un `true` retenu d'avant la coupure ne doit pas être affiché comme courant. Un refus
+du broker (`on_connect` en échec : identifiants, ACL...) est journalisé `led_publish_failed`
+avec le seul code de raison, jamais d'identifiant secret.
 """
 
 from __future__ import annotations
@@ -28,6 +33,14 @@ LED_STATUS_TOPIC = "resilience/led/status"
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _is_failure(reason_code) -> bool:
+    """paho 2.x passe un `ReasonCode` (attribut `is_failure`) ; les doubles de test, un int."""
+    failure = getattr(reason_code, "is_failure", None)
+    if isinstance(failure, bool):
+        return failure
+    return reason_code != 0
 
 
 def _default_client_factory() -> mqtt.Client:
@@ -67,6 +80,7 @@ class MqttLedNotifier:
             client.username_pw_set(self._username, self._password)
         client.reconnect_delay_set(1, 30)
         client.on_connect = self._on_connect
+        client.on_disconnect = self._on_disconnect
         client.on_message = self._on_message
         client.connect_async(self._host, self._port)
         client.loop_start()
@@ -76,12 +90,34 @@ class MqttLedNotifier:
             self._client.disconnect()
             self._client.loop_stop()
         except Exception as exc:  # noqa: BLE001 - l'arrêt ne doit jamais échouer
-            self._log.warning("LED MQTT stop failed: %s", type(exc).__name__)
+            log_event(
+                self._log,
+                logging.WARNING,
+                "led_publish_failed",
+                f"LED MQTT stop failed: {type(exc).__name__}",
+            )
 
     # ------------------------------------------------------------------ callbacks paho
-    def _on_connect(self, client, _userdata, _flags, _reason_code, _properties=None) -> None:
+    def _on_connect(self, client, _userdata, _flags, reason_code, _properties=None) -> None:
+        if _is_failure(reason_code):
+            # Broker joint mais connexion refusée (mot de passe, ACL...) : paho réessaiera.
+            self._online = None
+            log_event(
+                self._log,
+                logging.WARNING,
+                "led_publish_failed",
+                f"MQTT connection to {self._host}:{self._port} refused (reason: {reason_code})",
+            )
+            return
         # Abonnement à chaque (re)connexion : la session n'est pas garantie persistante.
         client.subscribe(LED_STATUS_TOPIC, qos=1)
+
+    def _on_disconnect(
+        self, _client, _userdata, _flags=None, _reason_code=None, _properties=None
+    ) -> None:
+        # Plus de lien avec le broker : l'état du module redevient inconnu jusqu'au prochain
+        # message retenu (reçu à la réabonnement après reconnexion).
+        self._online = None
 
     def _on_message(self, _client, _userdata, message) -> None:
         if message.topic != LED_STATUS_TOPIC:

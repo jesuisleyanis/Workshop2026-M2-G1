@@ -6,8 +6,11 @@ l'accès immédiatement, sans attendre l'expiration de son jeton (15 min).
 
 Règle `last_admin` : une opération qui retirerait le dernier administrateur **enrôlé** (rôle
 rétrogradé ou gabarit révoqué) est refusée, sinon plus personne ne pourrait franchir l'étape
-visage du back-office. « Enrôlé » se lit auprès de face-id : s'il est injoignable, les routes
-qui en dépendent répondent 503 `face_service_unavailable` (jamais une réponse par défaut).
+visage du back-office. « Enrôlé » se lit auprès de face-id et ne compte que les enrôlements
+**utilisables** (`usable: true` : vérifiables par le modèle chargé) ; une ligne périmée (autre
+modèle, ligne v1) ne permet pas de se connecter, elle ne compte donc pas. Si face-id est
+injoignable, les routes qui en dépendent répondent 503 `face_service_unavailable` (jamais une
+réponse par défaut).
 
 Bootstrap : tant qu'aucun administrateur enrôlé n'existe ET qu'un `BACKOFFICE_BOOTSTRAP_TOKEN`
 est configuré, ce token permet de créer le premier administrateur (compte + visage). L'opération
@@ -73,8 +76,12 @@ def add_admin_api(
         except FaceUnavailable as exc:
             raise ApiError(503, "face_service_unavailable", "Face service unavailable") from exc
 
+    def _usable(rows: list[dict]) -> set[str]:
+        """Usernames dont l'enrôlement est vérifiable par le modèle chargé (`usable` strict)."""
+        return {row["username"] for row in rows if row.get("usable") is True}
+
     def _enrolled_admins(session) -> set[str]:
-        enrolled = {row["username"] for row in _face(face_client.enrollments)}
+        enrolled = _usable(_face(face_client.enrollments))
         admins = set(session.scalars(select(User.username).where(User.role == "admin")))
         return admins & enrolled
 
@@ -121,11 +128,15 @@ def add_admin_api(
         rows = []
         for username, role in users:
             info = enrolled.get(username)
+            usable = info is not None and info.get("usable") is True
             rows.append(
                 AdminUserRow(
                     username=username,
                     role=role,
-                    enrolled=info is not None,
+                    enrolled=usable,
+                    # Ligne présente mais inutilisable (changement de modèle, ligne v1) :
+                    # le back-office affiche « Réenrôlement requis ».
+                    stale=info is not None and not usable,
                     enrolled_at=info.get("enrolled_at") if info else None,
                     enrolled_by=info.get("enrolled_by") if info else None,
                 )
@@ -240,13 +251,18 @@ def add_admin_api(
     # ---------------------------------------------------------------- bootstrap
 
     def _bootstrap_state() -> tuple[bool, set[str]]:
-        """(bootstrap requis ?, usernames actuellement enrôlés chez face-id)."""
+        """(bootstrap requis ?, usernames ayant une ligne d'enrôlement chez face-id).
+
+        Requis tant qu'aucun admin n'a d'enrôlement **utilisable** : des lignes périmées ne
+        permettent à personne de franchir l'étape visage. Le second ensemble (toutes lignes,
+        même périmées) sert au rollback : on ne révoque jamais un enrôlement préexistant.
+        """
         if not settings.backoffice_bootstrap_token:
             return False, set()  # jamais requis : bootstrap désactivé
-        enrolled = {row["username"] for row in _face(face_client.enrollments)}
+        rows = _face(face_client.enrollments)
         with session_factory() as session:
             admins = set(session.scalars(select(User.username).where(User.role == "admin")))
-        return not (admins & enrolled), enrolled
+        return not (admins & _usable(rows)), {row["username"] for row in rows}
 
     def _bootstrap_required() -> bool:
         return _bootstrap_state()[0]

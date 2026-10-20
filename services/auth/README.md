@@ -59,12 +59,12 @@ Le schéma DB, le hash bcrypt et le seed viennent de [`libs/python/resilience_db
 | `FACE_ID_URL` | non | `http://face-id:8006` | URL du service face-id (réseau `app`) |
 | `FACE_INTERNAL_TOKEN` (ou `_FILE`) | non* | — | Token `X-Internal-Token` envoyé à face-id (**même secret SOPS que face-id**). *Sans lui, l'étape visage et l'administration répondent 503 (warning au démarrage) |
 | `BACKOFFICE_FACE_REQUIRED` | non | `true` | `false` = mode dégradé (mot de passe seul, répétitions de démo — **jamais** en démo notée) |
-| `BACKOFFICE_FACE_TIMEOUT` | non | `2.0` | Délai (s) de l'appel `verify` à face-id |
+| `BACKOFFICE_FACE_TIMEOUT` | non | `2.0` | Délai (s) des appels `verify` / `enrollments` / `revoke` à face-id. **`8` dans le Compose** : dlib (backend `team`) analyse 3 images 640 px par vérification, plusieurs secondes sur le CPU de l'hôte ; si la latence approche encore ce délai en recette, levier côté face-id : `FACE_DETECT_UPSAMPLE=0` |
 | `BACKOFFICE_REJECT_COOLDOWN` | non | `30` | Refroidissement (s) après un visage refusé |
 | `BACKOFFICE_FAIL_COOLDOWN` | non | `3` | Refroidissement (s) après un mot de passe refusé |
 | `BACKOFFICE_MAX_ATTEMPTS` | non | `2` | Échecs tolérés avant verrouillage (« 1 reprise ») |
 | `BACKOFFICE_LOCKOUT_SECONDS` | non | `300` | Durée du verrouillage `(identifiant, IP)` |
-| `BACKOFFICE_CHALLENGE_TTL` | non | `60` | Durée de vie (s) d'un challenge |
+| `BACKOFFICE_CHALLENGE_TTL` | non | `60` | Durée de vie (s) d'un challenge. **`120` dans le Compose** (chargement à froid de MediaPipe + 3 maintiens de pose) |
 | `BACKOFFICE_FAILURE_WINDOW` | non | `900` | Fenêtre (s) au-delà de laquelle un échec est oublié |
 | `BACKOFFICE_RATE_LIMIT` | non | `30/minute` | Limite de débit des routes `auth/*` (à étapes) et `admin/*` |
 | `BACKOFFICE_BOOTSTRAP_TOKEN` (ou `_FILE`) | non | vide | Secret du bootstrap du premier administrateur. **Vide = bootstrap désactivé** (toujours refusé) |
@@ -96,7 +96,7 @@ curl -s -XPOST localhost:8002/api/v1/auth/password -H 'content-type: application
 - **Refroidissements** (par IP ; `429 cooldown` + `Retry-After` sur `identify`) : **30 s** après un visage refusé (`BACKOFFICE_REJECT_COOLDOWN`), **3 s** après un mot de passe refusé (`BACKOFFICE_FAIL_COOLDOWN`).
 - **Verrouillage** : 2 échecs (`BACKOFFICE_MAX_ATTEMPTS`) pour un `(identifiant, IP)` ⇒ `429 locked_out` pendant **300 s**, contrôlé à chaque étape.
 - Face-id injoignable ⇒ `503 face_service_unavailable` : le back-office est inaccessible par conception, jamais ouvert par défaut.
-- **LED** : chaque étape publie un état sémantique sur MQTT (`idle`, `recognized`, `auth_ok`, `auth_fail`, `not_recognized`) via `MqttLedNotifier` (**fail-open** : un broker en panne n'empêche jamais la connexion). `GET /api/v1/auth/device` → `{"led_online": true|false|null}` (dernier statut/LWT reçu ; `null` si inconnu ou LED simulée).
+- **LED** : chaque étape publie un état sémantique sur MQTT (`idle`, `recognized`, `auth_ok`, `auth_fail`, `not_recognized`) via `MqttLedNotifier` (**fail-open** : un broker en panne n'empêche jamais la connexion, et une panne au démarrage du notifieur n'empêche pas `auth` de démarrer — `led_publish_failed`, WARNING ; un refus du broker à la connexion est journalisé de même, avec le seul code de raison ; dans le Compose, `mosquitto` est une dépendance `required: false`). `GET /api/v1/auth/device` → `{"led_online": true|false|null}` (dernier statut/LWT reçu ; `null` si inconnu, LED simulée ou lien broker perdu).
 
 ### Administration des habilitations
 
@@ -104,20 +104,20 @@ curl -s -XPOST localhost:8002/api/v1/auth/password -H 'content-type: application
 
 | Route | Réponses |
 |---|---|
-| `GET /api/v1/admin/users` | `200 [{username, role, enrolled, enrolled_at, enrolled_by}]` |
+| `GET /api/v1/admin/users` | `200 [{username, role, enrolled, stale, enrolled_at, enrolled_by}]` — `enrolled` = enrôlement **utilisable** (`usable` de face-id), `stale` = ligne périmée (réenrôlement requis) |
 | `POST /api/v1/admin/users` `{username, password, role}` | `201 {username, role}` ; `409 username_taken` ; `422` (aucun compte bancaire créé) |
 | `PATCH /api/v1/admin/users/{u}` `{role}` | `200 {username, role}` ; `404 unknown_user` ; `409 last_admin` |
 | `PUT /api/v1/admin/users/{u}/face` `{poses:{face,gauche,droite}}` | `200 {enrolled:true, model_version}` ; `422 enrollment_rejected` (+ `details:[{pose,reason}]`) ; `404 unknown_user` ; `503 face_service_unavailable` |
 | `DELETE /api/v1/admin/users/{u}/face` | `204` ; `404 not_enrolled` ; `409 last_admin` |
 | `GET /api/v1/admin/users/{u}/face/photos` | `200 {photos:{face,gauche,droite}}` (consultation journalisée par face-id) ; `404 not_enrolled` |
 
-`last_admin` : l'opération (rétrogradation ou révocation du visage) retirerait le **dernier administrateur enrôlé** ; « enrôlé » se lit auprès de face-id.
+`last_admin` : l'opération (rétrogradation ou révocation du visage) retirerait le **dernier administrateur enrôlé** ; « enrôlé » se lit auprès de face-id et ne compte que les enrôlements `usable` (une ligne d'un autre modèle ou v1 ne permet pas de se connecter).
 
 ### Bootstrap du premier administrateur
 
 Sans administrateur enrôlé, personne ne passe l'étape visage. Si `BACKOFFICE_BOOTSTRAP_TOKEN` est défini :
 
-- `GET /api/v1/auth/bootstrap` → `{"required": true}` ⇔ aucun admin enrôlé **et** token configuré (`503` si face-id est injoignable).
+- `GET /api/v1/auth/bootstrap` → `{"required": true}` ⇔ aucun admin à l'enrôlement **utilisable** **et** token configuré (`503` si face-id est injoignable).
 - `POST /api/v1/auth/bootstrap` `{token, username, password, poses}` → `201 {username, role:"admin"}` ; `403 bootstrap_denied` (token faux, bootstrap non requis ou désactivé) ; `422 enrollment_rejected`. Limité à `5/minute`, token comparé en temps constant. Un compte existant n'est repris que s'il est `operator` ou `admin` (mot de passe et rôle `admin` mis à jour) ; un compte `customer` existant est refusé (`403 bootstrap_denied`, rien n'est modifié). **Si l'enrôlement échoue, la création est annulée** : le gabarit éventuellement déjà stocké par face-id est d'abord révoqué (sauf s'il préexistait), puis le compte est supprimé ou son état précédent restauré ; une panne de ce rollback est journalisée (`backoffice_bootstrap`, ERROR) et l'erreur d'origine (422/503) reste celle renvoyée.
 
 Événements : `admin_user_created`, `admin_role_changed`, `admin_face_enrolled`, `admin_face_revoked`, `backoffice_bootstrap` (champ `user` = compte ciblé, le message nomme l'acteur ; jamais de mot de passe, token ni image).

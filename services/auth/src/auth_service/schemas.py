@@ -122,7 +122,8 @@ class AdminUserOut(BaseModel):
 
 
 class AdminUserRow(AdminUserOut):
-    enrolled: bool
+    enrolled: bool  # enrôlement UTILISABLE (vérifiable par le modèle chargé de face-id)
+    stale: bool = False  # ligne d'enrôlement présente mais périmée : réenrôlement requis
     enrolled_at: str | None = None
     enrolled_by: str | None = None
 

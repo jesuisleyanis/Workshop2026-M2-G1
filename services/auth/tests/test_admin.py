@@ -42,13 +42,15 @@ class FakeFaceClient:
         if self.unavailable:
             raise FaceUnavailable("fake down")
 
-    def seed(self, username: str, by: str = "seed") -> None:
+    def seed(self, username: str, by: str = "seed", usable: bool = True) -> None:
+        """Ligne d'enrôlement ; `usable=False` = ligne périmée (autre modèle, ligne v1)."""
         self.rows[username] = {
             "username": username,
             "enrolled_at": "2026-10-20T10:00:00+00:00",
             "enrolled_by": by,
-            "model_version": "fake-1",
+            "model_version": "fake-1" if usable else "old-model",
             "poses": ["face", "gauche", "droite"],
+            "usable": usable,
         }
 
     def verify(self, username, frames) -> bool:  # pragma: no cover - non utilisé ici
@@ -213,11 +215,28 @@ def test_list_users_includes_enrollment_state(client, face):
         "username": "admin01",
         "role": "admin",
         "enrolled": True,
+        "stale": False,
         "enrolled_at": "2026-10-20T10:00:00+00:00",
         "enrolled_by": "seed",
     }
-    assert rows["op01"]["enrolled"] is False
+    assert rows["op01"]["enrolled"] is False and rows["op01"]["stale"] is False
     assert rows["op01"]["enrolled_at"] is None and rows["op01"]["enrolled_by"] is None
+
+
+def test_list_users_marks_stale_enrollment_as_not_enrolled(client, face):
+    # Ligne présente chez face-id mais inutilisable (changement de modèle / ligne v1).
+    face.seed("op01", by="admin01", usable=False)
+    rows = {u["username"]: u for u in client.get("/api/v1/admin/users", headers=bearer()).json()}
+    assert rows["op01"]["enrolled"] is False
+    assert rows["op01"]["stale"] is True
+    assert rows["op01"]["enrolled_by"] == "admin01"  # métadonnées conservées pour l'affichage
+
+
+def test_enrollment_row_without_usable_flag_is_not_counted(client, face):
+    # Contrat strict : seule `usable: true` compte (fail-closed face à une réponse incomplète).
+    face.rows["admin01"].pop("usable")
+    rows = {u["username"]: u for u in client.get("/api/v1/admin/users", headers=bearer()).json()}
+    assert rows["admin01"]["enrolled"] is False and rows["admin01"]["stale"] is True
 
 
 def test_list_users_face_unavailable_is_503(client, face):
@@ -304,6 +323,21 @@ def test_enrolled_admin_can_be_demoted_when_another_enrolled_admin_exists(client
     )
     assert r.status_code == 200
     assert user_row(engine, "admin01").role == "operator"
+
+
+def test_stale_enrollment_does_not_count_for_the_last_admin_guard(client, face, engine):
+    # admin02 a une ligne périmée : il ne peut pas se connecter, admin01 reste le dernier admin.
+    face.seed("admin02", usable=False)
+    r = client.patch("/api/v1/admin/users/admin01", json={"role": "operator"}, headers=bearer())
+    assert r.status_code == 409 and r.json()["error"]["code"] == "last_admin"
+    r = client.delete("/api/v1/admin/users/admin01/face", headers=bearer())
+    assert r.status_code == 409 and r.json()["error"]["code"] == "last_admin"
+    # L'admin périmé, lui, se rétrograde / se désenrôle librement.
+    assert client.delete("/api/v1/admin/users/admin02/face", headers=bearer()).status_code == 204
+    face.seed("admin02", usable=False)
+    r = client.patch("/api/v1/admin/users/admin02", json={"role": "operator"}, headers=bearer())
+    assert r.status_code == 200
+    assert user_row(engine, "admin02").role == "operator"
 
 
 def test_unenrolled_admin_can_be_demoted_freely(client, engine):
@@ -479,6 +513,18 @@ def test_bootstrap_status_not_required_with_enrolled_admin(client):
 def test_bootstrap_status_still_required_if_admins_exist_but_none_enrolled(client, face):
     face.rows.clear()  # admin01/admin02 existent mais personne n'est enrôlé
     assert client.get("/api/v1/auth/bootstrap").json() == {"required": True}
+
+
+def test_bootstrap_required_when_admins_only_have_stale_enrollments(client, face, engine):
+    # Après un changement de modèle, plus aucun admin ne peut franchir l'étape visage.
+    face.seed("admin01", usable=False)
+    face.seed("admin02", usable=False)
+    assert client.get("/api/v1/auth/bootstrap").json() == {"required": True}
+    r = client.post("/api/v1/auth/bootstrap", json=boot_body(username="admin01"))
+    assert r.status_code == 201
+    assert face.rows["admin01"]["usable"] is True  # réenrôlé avec le modèle courant
+    assert verify_password(NEW_PASSWORD, user_row(engine, "admin01").password_hash)
+    assert client.get("/api/v1/auth/bootstrap").json() == {"required": False}
 
 
 def test_bootstrap_status_not_required_without_configured_token(settings, empty_engine, boot_face):
@@ -708,13 +754,16 @@ def test_bootstrap_failure_after_face_id_stored_restores_existing_user(settings,
     assert enrollment_count(empty_engine) == 0  # le gabarit du détenteur du token est supprimé
 
 
-def test_bootstrap_failure_keeps_template_of_already_enrolled_account(settings, empty_engine):
-    # Un opérateur déjà enrôlé (enrôlement légitime antérieur) ne perd pas son gabarit.
+@pytest.mark.parametrize("usable", [True, False], ids=["utilisable", "perime"])
+def test_bootstrap_failure_keeps_template_of_already_enrolled_account(
+    settings, empty_engine, usable
+):
+    # Un opérateur déjà enrôlé (enrôlement légitime antérieur, même périmé) ne perd pas sa ligne.
     with make_session_factory(empty_engine)() as s:
         s.add(User(username="root01", password_hash=hash_password(PASSWORD), role="operator"))
         s.commit()
     face = DbRecordingFaceClient(empty_engine, FaceUnavailable("timeout"))
-    face.seed("root01", by="earlier-admin")
+    face.seed("root01", by="earlier-admin", usable=usable)
     boot = TestClient(create_app(settings, empty_engine, face_client=face))
     r = boot.post("/api/v1/auth/bootstrap", json=boot_body())
     assert r.status_code == 503

@@ -149,7 +149,7 @@ def test_revoke_server_error_is_unavailable():
 
 
 def test_enrollments_lists_rows():
-    rows = [{"username": "op01", "enrolled_at": "t", "enrolled_by": "a", "model_version": "v1", "poses": ["face"]}]
+    rows = [{"username": "op01", "enrolled_at": "t", "enrolled_by": "a", "model_version": "v1", "poses": ["face"], "usable": True}]
     client, seen = make_client(lambda r: httpx.Response(200, json=rows))
     assert client.enrollments() == rows
     assert str(seen[0].url) == "http://face-id:8006/api/v1/enrollments"
