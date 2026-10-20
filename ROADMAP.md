@@ -109,8 +109,8 @@ Phase 9  Consigne add. 1  [#####.....]  50%   L0+L1+L2 faits + L3 login (49+15+1
 | L1 | Service `face-id` (IA légère, reconnaissance 1:1, enrôlement) | `services/face-id` | ✅ | service + **10 tests verts** ; smoke modèle réel en recette |
 | L2 | Auth à étapes (identifiant→visage→mdp) + verrouillage 1 reprise/5 min **[critique]** | `services/auth` | ✅ | 13 tests (49 auth au total) ; LED fail-open + rôle dans le JWT |
 | L3 | Back-office React + capture webcam (`getUserMedia`, caméra PC Hôte) **[critique]** | `services/backoffice` | 🟨 | login à étapes + webcam + miroir LED livrés (14 tests) ; reste habilitations (L6) |
-| L4 | Firmware ESP8266 LED bicolore (CLion/PlatformIO, machine à états) | `iot/esp8266-led` | 🟨 | machine à états + tests native + firmware posés ; recette matérielle |
-| L5 | Transport MQTT (broker Mosquitto durci + client auth fail-open) | `infra/compose`, `services/auth` | 🟨 | config broker durcie + ACL ; service Compose + client auth à câbler |
+| L4 | Firmware ESP8266 LED bicolore (CLion/PlatformIO, machine à états) | `iot/esp8266-led` | 🟨 | modules LED/Wi-Fi/HTTP/MQTT séparés, 3 routes HTTP ; build ESP8266 + 6 tests native verts ; recette matérielle |
+| L5 | Transport MQTT (broker Mosquitto durci + client auth fail-open) | `infra/compose`, `services/auth` | 🟨 | service Compose profil `iot` + ACL + mots de passe tmpfs, smoke broker/auth→led réussi ; client MQTT de `auth` à câbler |
 | L6 | Habilitations (rôles + enrôlement/révocation visage) | `services/{auth,face-id,backoffice}` | ⬜ | backlog L6 |
 | L7 | Infra & observabilité (compose, Prometheus, SOPS, durcissement) | `infra/*`, `security/sops` | ⬜ | backlog L7 |
 | L8 | Sécurité & RGPD (biométrie, surface MQTT/caméra, pas de bypass) | `security/*`, `services/face-id` | ⬜ | backlog L8 |
