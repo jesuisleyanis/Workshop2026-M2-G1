@@ -163,7 +163,7 @@ Le facteur visage + LED s'applique **au back-office** (accès privilégié), **e
 - **Caméra :** active **uniquement** pendant l'étape identification, éteinte ensuite (consigne + vie privée).
 - **Broker MQTT = nouvelle surface.** Durci comme le WAF : `allow_anonymous false`, creds SOPS, **ACL par topic**, bind **sur l'interface hotspot seulement**, TLS (`8883`) optionnel documenté, conteneur durci (non-root, `cap_drop`, `read_only`, healthcheck). L'ESP valide la LWT.
 - **Anti-DoS d'accès légitime :** verrouillage **par `(username, ip)`** pour qu'un attaquant ne verrouille pas globalement un admin ; `/login` de service hors de ce chemin (D4).
-- **Secrets :** `MQTT_USERNAME/PASSWORD`, `FACE_INTERNAL_TOKEN`, éventuelle clé de chiffrement embedding → **SOPS**, jamais commités ; `gitleaks` couvre. Firmware : `secrets.h` depuis template, **gitignored** (SSID/PSK du PA, creds MQTT).
+- **Secrets :** `MQTT_USERNAME/PASSWORD`, `FACE_INTERNAL_TOKEN`, éventuelle clé de chiffrement embedding → **SOPS**, jamais commités ; `gitleaks` couvre. Firmware : `secrets.h` depuis template, **gitignored** (SSID/PSK du PA, creds MQTT). **`FACE_INTERNAL_TOKEN` doit être identique sur `auth` ET `face-id`** (auth l'envoie à `/verify`, face-id l'exige) — sinon l'étape visage renvoie 503 ; `auth` émet un WARNING au démarrage s'il manque alors que le visage est requis.
 - **Signal de détection (option) :** une rafale de `auth_face_rejected` / `face_verify_nomatch` est un indice d'attaque — brancher sur la fonction SOC (règle Loki) ou une feature ML (hors vecteur figé : à discuter). Porté en opportunité, pas en exigence.
 
 ---

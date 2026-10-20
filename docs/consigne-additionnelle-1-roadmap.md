@@ -102,7 +102,7 @@ L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + c
 |---|---|---|---|---|---|---|
 | L7-1 | Compose : `face-id`, `backoffice`, `mosquitto` (réseaux, profils, dépendances, durcissement, healthchecks) ; **WAF route `/api/v1/auth/*` → auth + vhost back-office (M-f)** ; réseau `app` interne (m9) | `infra/compose`, `security/waf` | L1-5, L3-5, L5-1 | M | ⬜ | `test_compose_hardening` étendu ; images épinglées (R5) ; route WAF testée |
 | L7-2 | Prometheus scrape `face-id` ; vérifier que Promtail capte les logs des nouveaux services | `infra/prometheus`, `infra/promtail` | L7-1 | S | ⬜ | cible scrappée + logs dans Loki (recette) |
-| L7-3 | SOPS : `MQTT_*`, `FACE_INTERNAL_TOKEN`, (option) clé chiffrement embedding ; `secrets.example.env` + README | `security/sops` | L5-1 | S | ⬜ | exemples factices ; audit « aucun secret en clair » |
+| L7-3 | SOPS : `MQTT_*`, **`FACE_INTERNAL_TOKEN` (même valeur sur `auth` et `face-id`)**, (option) clé chiffrement embedding ; `secrets.example.env` + README | `security/sops` | L5-1 | S | ⬜ | exemples factices ; audit « aucun secret en clair » ; token partagé vérifié (sinon 503 à l'étape visage) |
 | L7-4 | Makefile/aliases : build modèle face-id, lancement broker ; `make test` agrège les nouveaux composants | `Makefile`, `README.md` | L7-1 | S | ⬜ | `make test` intègre face-id + backoffice ; doc |
 
 ## L8 — Sécurité & RGPD
