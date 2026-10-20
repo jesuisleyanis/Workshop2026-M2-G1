@@ -23,6 +23,7 @@ Hors périmètre : rotation automatique en production, HSM, Vault en haute dispo
 | `POSTGRES_PASSWORD` | mot de passe DB | postgres, services |
 | `REMEDIATION_TOKEN` | auth de `POST /events` | detector → remediation |
 | `INTERNAL_TOKEN` | auth de `/internal/*` | remediation → auth |
+| `SEED_PASSWORD` | mot de passe des comptes fictifs du seed | `make seed`, `scripts/verify_tx`, remediation (verify) |
 
 ## Contraintes de sécurité
 

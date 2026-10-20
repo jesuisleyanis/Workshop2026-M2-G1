@@ -8,7 +8,7 @@ import { PhaseBanner } from './components/PhaseBanner'
 import { ScoreChart } from './components/ScoreChart'
 import { ServicesGrid } from './components/ServicesGrid'
 import { Sidebar } from './components/Sidebar'
-import { ASSISTANT_URL, GRAFANA_BASE, LIVE_TRIGGERS, STREAM_SOURCE, STREAM_URL, TRIGGER_URL, type StreamSource } from './config'
+import { ASSISTANT_URL, GRAFANA_BASE, LIVE_TRIGGERS, METRICS_POLL_MS, PROMETHEUS_BASE, STREAM_SOURCE, STREAM_URL, TRIGGER_URL, type StreamSource } from './config'
 import { useDashboard } from './hooks/useDashboard'
 import { useNow } from './hooks/useNow'
 import { defaultFactory, type EventSourceFactory } from './hooks/useRemediationStream'
@@ -29,10 +29,12 @@ interface Props {
   source?: StreamSource
   liveTriggers?: boolean
   grafanaBase?: string
+  /** Base du proxy Prometheus (score + santé) ; null = pas de polling (tests). */
+  metricsBase?: string | null
 }
 
 /** Choisit la source (flux réel / simulation) ; la console est remontée à chaque bascule. */
-export function App({ streamUrl = STREAM_URL, assistantUrl = ASSISTANT_URL, eventSourceFactory, source = STREAM_SOURCE, liveTriggers = LIVE_TRIGGERS, grafanaBase = GRAFANA_BASE }: Props) {
+export function App({ streamUrl = STREAM_URL, assistantUrl = ASSISTANT_URL, eventSourceFactory, source = STREAM_SOURCE, liveTriggers = LIVE_TRIGGERS, grafanaBase = GRAFANA_BASE, metricsBase = PROMETHEUS_BASE }: Props) {
   const [simulated, setSimulated] = useState(source === 'simulation')
   const [fallback, setFallback] = useState(false)
 
@@ -54,6 +56,7 @@ export function App({ streamUrl = STREAM_URL, assistantUrl = ASSISTANT_URL, even
       liveTriggers={liveTriggers}
       grafanaBase={grafanaBase}
       assistantUrl={assistantUrl}
+      metricsBase={metricsBase}
     />
   )
 }
@@ -68,9 +71,10 @@ interface ConsoleProps {
   onToggleSource: () => void
   liveTriggers: boolean
   grafanaBase: string
+  metricsBase: string | null
 }
 
-function Console({ streamUrl, assistantUrl, eventSourceFactory, simulated, fallback, onNeverOpened, onToggleSource, liveTriggers, grafanaBase }: ConsoleProps) {
+function Console({ streamUrl, assistantUrl, eventSourceFactory, simulated, fallback, onNeverOpened, onToggleSource, liveTriggers, grafanaBase, metricsBase }: ConsoleProps) {
   const [tab, setTab] = useState<Tab>('supervision')
   // L'iframe n'est montée qu'au premier affichage de l'onglet, puis conservée.
   const [assistantMounted, setAssistantMounted] = useState(false)
@@ -83,7 +87,8 @@ function Console({ streamUrl, assistantUrl, eventSourceFactory, simulated, fallb
     () => (simulated ? () => (simRef.current = new SimulatedEventSource()) : (eventSourceFactory ?? defaultFactory)),
     [simulated, eventSourceFactory],
   )
-  const { state, phase, reset } = useDashboard(simulated ? 'simulation://local' : streamUrl, factory)
+  // En simulation, score et santé viennent du simulateur ; en réel, de Prometheus (polling).
+  const { state, phase, reset } = useDashboard(simulated ? 'simulation://local' : streamUrl, factory, simulated ? null : metricsBase, METRICS_POLL_MS)
   const now = useNow(250)
   const incident = latestIncident(state)
 

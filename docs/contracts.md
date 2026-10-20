@@ -56,6 +56,7 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `db_error` | payment-api | Erreur base de données |
 | `waf_blocked` | waf (via log Nginx/ModSec) | Requête bloquée par le CRS |
 | `anomaly_detected` | detector | Le score dépasse le seuil |
+| `model_version_drift` | detector | Version scikit-learn chargée ≠ version d'entraînement du modèle |
 | `remediation_started` | remediation | Début d'une action corrective |
 | `remediation_action` | remediation | Action unitaire exécutée |
 | `remediation_verified` | remediation | `verify_tx` repassé OK après action |
@@ -103,7 +104,7 @@ Chaque service Python expose `/metrics` via `prometheus-fastapi-instrumentator`.
 | `resilience_waf_blocked_total` | counter | `rule` | waf-exporter | blocages WAF |
 | `resilience_anomaly_score` | gauge | `service` | detector | **score ML temps réel** |
 | `resilience_remediation_actions_total` | counter | `action`, `result` | remediation | — |
-| `resilience_mttd_seconds` | gauge | `incident_id` | remediation | MTTD |
+| `resilience_mttd_seconds` | gauge | `incident_id` | remediation | MTTD (détection → première action) |
 | `resilience_mttr_seconds` | gauge | `incident_id` | remediation | MTTR |
 
 Infrastructure complémentaire scrappée par Prometheus : **cAdvisor** (CPU/RAM par conteneur) et **postgres-exporter** (santé DB).
@@ -124,7 +125,7 @@ Le `collector` interroge l'API Prometheus et construit ce vecteur ordonné (voir
 
 ## 3. Schéma d'événement d'anomalie
 
-Le `detector` émet cet objet JSON vers le moteur de remédiation (HTTP `POST /events`, authentifié — voir §API). Alertmanager peut émettre un événement au même format.
+Le `detector` émet cet objet JSON vers le moteur de remédiation (HTTP `POST /events`, authentifié — voir §API). **Chemin SOC (secondaire)** : Alertmanager poste son webhook natif (`{alerts:[…]}`) sur `POST /events/alertmanager` (même Bearer) ; l'adaptateur du moteur (`remediation/alertmanager.py`) le traduit en événement de ce schéma (`source: "alertmanager"`, `incident_type` = label de l'alerte, `anomaly_score`/`threshold` = 1.0, `event_id` stable par occurrence d'alerte). Les règles SOC Prometheus (`infra/prometheus/rules/soc.yml`) sont le miroir des règles Grafana.
 
 ```json
 {
@@ -142,7 +143,7 @@ Le `detector` émet cet objet JSON vers le moteur de remédiation (HTTP `POST /e
   ],
   "evidence": {
     "prometheus_query": "rate(resilience_http_requests_total[1m])",
-    "loki_query": "{service=\"payment-api\"} |= \"db_error\""
+    "loki_query": "{service=\"payment-api\"} |= \"http_status\""
   }
 }
 ```
@@ -153,7 +154,7 @@ Ces valeurs font le **pont entre la détection et la table de décision**. Class
 
 | `incident_type` | Signal dominant | Action attendue (voir §4) |
 |---|---|---|
-| `service_flood` | `req_per_s`, `ratio_5xx`, `p95_latency` ↑ | rate-limit + redémarrage + blocage IP source |
+| `service_flood` | `req_per_s`, `ratio_5xx`, `p95_latency` ↑ | blocage IP source + redémarrage du service |
 | `auth_abuse` | `auth_failed_per_s` ↑ | blocage IP + durcissement rate-limit |
 | `web_attack` | `waf_blocked_per_s` ↑ | confirmation blocage + blacklist source |
 | `data_corruption` | `db_errors_per_s` ↑ + `verify_tx` KO | restauration dernier dump Postgres |
@@ -246,7 +247,7 @@ payment-api / auth ──logs JSON──► Promtail ──► Loki ──┐
 cAdvisor / pg-exporter ─métriques► Prometheus ────────┘                              │
                                                                           événement d'anomalie (§3)
                                                                                      │
-Alertmanager ──alerte (schéma §3)──────────────────────────────────────────────────►│
+Prometheus rules SOC ─► Alertmanager ──webhook──► POST /events/alertmanager (adaptateur → §3) ─►│
                                                                                      ▼
                                                                           Moteur de remédiation
                                                                        (table de décision §4)

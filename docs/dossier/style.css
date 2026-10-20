@@ -1,0 +1,33 @@
+/* Feuille de style du dossier (impression A4 via Chrome headless). Sobre, lisible, dense sans être serré. */
+@page { size: A4; margin: 18mm 17mm 18mm 17mm; }
+:root { --ink: #1c2430; --muted: #566270; --accent: #184a7e; --rule: #cfd6de; --soft: #f3f6f9; }
+html { font-size: 10.6pt; }
+body { font-family: "Liberation Sans", "DejaVu Sans", Arial, Helvetica, sans-serif; color: var(--ink); line-height: 1.38; margin: 0; }
+h1 { font-size: 2.05em; color: var(--accent); margin: 0 0 .25em; letter-spacing: -.01em; }
+h2 { font-size: 1.32em; color: var(--accent); border-bottom: 1.5px solid var(--rule); padding-bottom: .15em; margin: 1.35em 0 .55em; break-after: avoid; page-break-after: avoid; }
+h3 { font-size: 1.08em; margin: 1.05em 0 .4em; color: var(--ink); break-after: avoid; page-break-after: avoid; }
+p { margin: .45em 0 .6em; text-align: justify; hyphens: auto; }
+ul, ol { margin: .3em 0 .7em; padding-left: 1.35em; }
+li { margin: .18em 0; }
+blockquote { margin: .7em 0; padding: .55em .9em; border-left: 4px solid var(--accent); background: var(--soft); font-size: .98em; }
+blockquote p { margin: 0; }
+code { font-family: "Liberation Mono", "DejaVu Sans Mono", Consolas, monospace; font-size: .88em; background: var(--soft); padding: 0 .22em; border-radius: 3px; }
+pre { font-family: "Liberation Mono", "DejaVu Sans Mono", Consolas, monospace; font-size: .70em; line-height: 1.25; background: var(--soft); border: 1px solid var(--rule); padding: .6em .8em; overflow: hidden; white-space: pre; break-inside: avoid; page-break-inside: avoid; }
+pre code { background: none; padding: 0; font-size: 1em; }
+table { border-collapse: collapse; width: 100%; margin: .5em 0 .9em; font-size: .86em; line-height: 1.28; }
+th, td { border: 1px solid var(--rule); padding: .28em .45em; vertical-align: top; text-align: left; }
+th { background: var(--soft); font-weight: 600; }
+tr { break-inside: avoid; page-break-inside: avoid; }
+strong { font-weight: 650; }
+hr { border: 0; border-top: 1px solid var(--rule); margin: 1em 0; }
+.pagebreak { break-before: page; page-break-before: always; }
+
+/* Page de garde */
+.cover { min-height: 240mm; display: flex; flex-direction: column; justify-content: center; }
+.cover h1 { font-size: 2.6em; margin-top: .2em; }
+.cover h2 { border: 0; font-size: 1.35em; color: var(--ink); font-weight: 500; margin: .2em 0 1.2em; }
+.cover .kicker { color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-size: .85em; margin: 0; }
+.cover .subtitle { font-size: 1.15em; margin: 0 0 1.4em; }
+.cover table.meta { width: 100%; font-size: .95em; }
+.cover table.meta th { width: 18%; }
+.cover .note { color: var(--muted); font-size: .92em; margin-top: 1.6em; }

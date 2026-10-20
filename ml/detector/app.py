@@ -26,7 +26,6 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-
 from resilience_common import get_logger
 from resilience_common.metrics import instrument
 

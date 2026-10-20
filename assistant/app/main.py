@@ -21,15 +21,16 @@ from fastapi.staticfiles import StaticFiles
 from langchain_chroma import Chroma
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel, Field
+from resilience_common import get_logger
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import incident_text as it, rag, store as store_mod
+from app import incident_text as it
+from app import rag
+from app import store as store_mod
 from app.config import SERVICE_NAME, Settings
 from app.embeddings import backend_id
 from app.indexer import build_index
 from app.llm import build_llm, ollama_reachable
-
-from resilience_common import get_logger
 
 STATIC_DIR = Path(__file__).parent / "static"
 log = get_logger(SERVICE_NAME)

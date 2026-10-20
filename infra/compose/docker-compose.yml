@@ -3,6 +3,8 @@
 # Secrets injectés depuis ../../.env (produit par scripts/decrypt-secrets.sh à partir de SOPS).
 # Durcissement : non-root (Dockerfiles), cap_drop ALL, no-new-privileges, limites ressources,
 # seul le WAF publie des ports. Voir ../../security/hardening/hardening.md.
+# Reproductibilité (R5) : toutes les images tierces sont épinglées à une version précise (aucun
+# `:latest`) — un rebuild ultérieur ne doit pas tirer un major différent (Grafana/Loki/Prometheus…).
 
 name: resilience-g1
 
@@ -19,13 +21,25 @@ x-pylimits: &pylimits
 
 networks:
   edge:
-  app:
+  app:   # non `internal` : seul réseau avec sortie (pull d'images, modèles Ollama). Aucun `ports:`.
   data:
     internal: true
   obs:
+    internal: true   # observabilité : aucun besoin de sortie Internet (P4S-02)
+
+# Secret Compose alimenté depuis .env (SOPS) : monté en fichier dans Alertmanager (credentials_file),
+# jamais écrit dans alertmanager.yml (fichier versionné).
+# Requiert Docker Compose >= 2.23.1 (source `environment:` des secrets) ; sinon, remplacer par
+# `file: ../../.remediation_token` (fichier à extraire manuellement de .env, hors git ; voir README-SOC.md).
+secrets:
+  remediation_token:
+    environment: REMEDIATION_TOKEN
 
 volumes:
   pgdata:
+  remediation-journal:  # journal d'incidents SQLite du moteur (/var/lib/remediation), persistant
+  waf-deny:        # deny-list Nginx partagée WAF (lecture) <-> remediation (écriture via playbook)
+  waf-logs:        # audit log ModSecurity (JSON) : WAF (écriture) -> waf-exporter (lecture)
   grafana-data:
   loki-data:
   chroma-data:
@@ -39,18 +53,46 @@ services:
     <<: *hardening
     build: { context: ../../security/waf }
     networks: [edge, app]
+    # Image non-root (nginx unprivileged) : écoute 8080/8443 ; seuls 80/443 sont publiés côté hôte.
     ports:
-      - "80:80"
-      - "443:443"
+      - "80:8080"
+      - "443:8443"
+    environment:
+      # Audit ModSecurity (blocages 4xx/5xx, JSON Serial) écrit dans le volume partagé lu par waf-exporter (#12).
+      MODSEC_AUDIT_ENGINE: RelevantOnly
+      MODSEC_AUDIT_LOG_FORMAT: JSON
+      MODSEC_AUDIT_LOG_TYPE: Serial
+      MODSEC_AUDIT_LOG: /var/log/modsec/audit.json
     volumes:
-      - ../../security/waf/blocked_ips.conf:/etc/nginx/blocked_ips.conf:rw
+      - waf-deny:/etc/nginx/deny:rw
+      - waf-logs:/var/log/modsec:rw
     depends_on: [front, payment-api, auth]
     mem_limit: 256m
     healthcheck:
-      test: ["CMD", "curl", "-fsk", "https://localhost/ || exit 1"]
+      # /healthz est servi par le WAF lui-même (sans upstream) ; cert auto-signé -> -k.
+      test: ["CMD-SHELL", "curl -fsk https://127.0.0.1:8443/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
+
+  waf-exporter:
+    # Blocages ModSecurity -> resilience_waf_blocked_total{rule} (contrat §2) + log waf_blocked (§1).
+    # Signal dominant de l'incident_type web_attack (feature ML waf_blocked_per_s, règle SOC soc-waf-blocks).
+    # Suit le journal d'audit du WAF via le volume `waf-logs` (lecture seule) ; /metrics :9188 sur `obs` uniquement.
+    <<: *hardening
+    build: { context: ../.., dockerfile: security/waf/Dockerfile.exporter }
+    networks: [obs]
+    volumes:
+      - waf-logs:/var/log/modsec:ro
+    group_add: ["101"]         # groupe nginx : lecture garantie même si l'audit log est créé en 0640
+    depends_on: [waf]
+    read_only: true
+    mem_limit: 64m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9188/metrics').status==200 else 1)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
 
   # ---------------------------------------------------------------- app (métier)
   front:
@@ -59,6 +101,10 @@ services:
     networks: [app]
     environment:
       VITE_API_BASE: "/api/v1"
+    # nginx non-root n'écrit que dans /tmp (pid + temp paths, voir services/front/docker/nginx.conf) :
+    # racine en lecture seule possible, comme le dashboard.
+    read_only: true
+    tmpfs: ["/tmp"]
     mem_limit: 128m
 
   payment-api:
@@ -104,6 +150,11 @@ services:
   postgres:
     <<: *hardening
     image: postgres:16-alpine
+    # Démarre DIRECTEMENT en `postgres` (uid/gid 70 dans l'image alpine) : l'entrypoint officiel
+    # saute alors les chown/gosu qui exigent CHOWN/SETUID/SETGID/DAC_OVERRIDE/FOWNER — compatible
+    # avec `cap_drop: ALL` sans aucun `cap_add` (ticket #11). Le volume nommé `pgdata` hérite de
+    # l'appartenance 70:70 du répertoire de l'image à sa création. Voir security/hardening/hardening.md.
+    user: "70:70"
     networks: [data]
     environment:
       POSTGRES_DB: resilience
@@ -148,30 +199,52 @@ services:
   # ---------------------------------------------------------------- remédiation
   docker-socket-proxy:
     # Proxy strict basé sur la config haproxy de la remédiation (ADR 0002) :
-    # n'autorise QUE 4 couples (méthode, chemin), dont POST /containers/{id}/restart.
+    # n'autorise QUE 5 couples (méthode, chemin) : ping/list/inspect, POST .../restart et
+    # POST .../kill?signal=HUP (reload à chaud du WAF) — jamais exec/create/kill arbitraire.
     # Plus restrictif que tecnativa (CONTAINERS=1+POST=1 ouvrirait /containers/create).
     <<: *hardening
     image: haproxy:2.9-alpine
     networks: [app]
     volumes:
       - ../../remediation/proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro   # socket monté UNIQUEMENT ici, en lecture seule
+      # `:ro` n'empêche AUCUN appel d'API sur un socket Unix : la restriction effective vient
+      # de la liste blanche haproxy (5 couples). Ce montage sert cette médiation ; le moteur
+      # de remédiation, lui, ne monte jamais le socket et parle HTTP au proxy.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     mem_limit: 64m
 
   remediation:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: remediation/Dockerfile }
-    networks: [app]            # jamais sur edge
+    # app : API + proxy Docker + WAF (verify_tx) ; data : pg_restore (correction de corruption).
+    # Jamais sur edge, aucun `ports:`.
+    networks: [app, data]
     environment:
       DOCKER_PROXY_URL: http://docker-socket-proxy:2375
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       AUTH_URL: http://auth:8002
-      VERIFY_TX_PATH: /app/verify_tx
-    depends_on: [docker-socket-proxy]
+      # verify_tx : rejoué à travers le WAF (réseau app, cert auto-signé) avec le jeu fictif seedé
+      BASE_URL: https://waf
+      VERIFY_PASSWORD: ${SEED_PASSWORD}
+      # restore_pg_dump : playbook pg_restore.yml dans ce conteneur (client PG 16, réseau data)
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: resilience
+      POSTGRES_USER: resilience
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # waf_block_ip : deny-list partagée + SIGHUP du service `waf` via le proxy
+      WAF_SERVICE: waf
     volumes:
-      - incidents-export:/var/lib/remediation/export              # copie JSON du journal pour l'assistant
-    tmpfs: ["/tmp"]
+      - waf-deny:/etc/resilience/waf-deny:rw                 # écrite par waf_deny_ip.yml
+      - ../../infra/ansible/backups:/opt/backups:ro          # dumps sains (pg_backup.yml côté hôte)
+      - remediation-journal:/var/lib/remediation:rw          # journal d'incidents SQLite (persistant, survit au redémarrage)
+      - incidents-export:/var/lib/remediation/export         # copie JSON du journal pour l'assistant (export_journal.py)
+    group_add: ["101"]         # groupe nginx du WAF : droit d'écrire dans le volume waf-deny
+    depends_on: [docker-socket-proxy, postgres]
+    # Racine en lecture seule (CDC §5.4) : seuls points inscriptibles = volume journal (+ export), volume
+    # waf-deny partagé, et /tmp (tmpfs) pour les artefacts ansible-runner (ANSIBLE_HOME/LOCAL_TEMP/PRIVATE_DATA_DIR).
+    read_only: true
+    tmpfs: ["/tmp"]            # artefacts ansible-runner
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8005/health').status==200 else 1)"]
       interval: 15s
@@ -182,25 +255,40 @@ services:
   dashboard:
     <<: *hardening
     build: { context: ../../dashboard }
+    # Le navigateur ne parle qu'au nginx du dashboard (same-origin, CSP connect-src 'self') :
+    # /remediation/stream -> remediation:8005/stream (Bearer injecté côté serveur),
+    # /prometheus/api/v1/query -> prometheus:9090 (score ML + santé, GET lecture seule).
+    # VITE_* sont des build-args Vite, pas des variables runtime : la base /remediation est le défaut du build.
     networks: [app]
     environment:
-      VITE_REMEDIATION_BASE: http://remediation:8005
-      ASSISTANT_UPSTREAM: assistant:8006
+      REMEDIATION_UPSTREAM: remediation:8005
+      REMEDIATION_AUTH_HEADER: "Bearer ${REMEDIATION_TOKEN}"
+      PROMETHEUS_UPSTREAM: prometheus:9090
+      ASSISTANT_UPSTREAM: assistant:8006   # profil ai ; sans lui, /assistant/* répond 502
+    depends_on: [remediation, prometheus]
+    read_only: true
+    tmpfs: ["/tmp"]
     mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
 
   # ---------------------------------------------------------------- observabilité
   prometheus:
     <<: *hardening
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.54.1
     networks: [app, obs]
     volumes:
       - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/rules:/etc/prometheus/rules:ro        # règles SOC (I6) -> alertmanager
     mem_limit: 384m
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=2h"]
 
   loki:
     <<: *hardening
-    image: grafana/loki:latest
+    image: grafana/loki:3.2.1
     networks: [obs]
     volumes:
       - ../loki/loki-config.yml:/etc/loki/local-config.yaml:ro
@@ -209,20 +297,22 @@ services:
 
   promtail:
     <<: *hardening
-    image: grafana/promtail:latest
+    image: grafana/promtail:3.2.1
     networks: [obs]
     volumes:
       - ../promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      # Accès API complet au démon (découverte des logs de conteneurs) : `:ro` ne le limite pas.
+      # Risque accepté — hors moteur de remédiation, réseau `obs` interne uniquement.
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command: ["-config.file=/etc/promtail/config.yml"]
     mem_limit: 128m
 
   grafana:
     <<: *hardening
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.3.0
     networks: [obs]
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD requis (voir security/sops/secrets.example.env) — jamais de repli silencieux sur "admin"}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - ../grafana/provisioning:/etc/grafana/provisioning:ro
@@ -231,29 +321,36 @@ services:
 
   # ---- observabilité complète (profil full) ----
   alertmanager:
+    # Chemin SOC -> remédiation (I6, #13) : reçoit les alertes des règles Prometheus et poste
+    # POST /events/alertmanager (Bearer interne via le secret `remediation_token`). Réseau `app`
+    # requis pour joindre le moteur ; aucun port publié.
+    # Risque résiduel P4S-01 (docs/ebios-rm.md) : l'API Alertmanager (:9093) n'a pas d'auth propre
+    # et reste joignable depuis `app` ; un conteneur `app` compromis pourrait forger une alerte.
+    # Durcissement cible : réseau `soc` dédié (internal) prometheus<->alertmanager<->remediation.
     <<: *hardening
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.27.0
     profiles: [full]
     networks: [obs, app]
     volumes:
       - ../alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    secrets: [remediation_token]
     mem_limit: 128m
 
   cadvisor:
     <<: *hardening
-    image: gcr.io/cadvisor/cadvisor:latest
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
     profiles: [full]
     networks: [obs]
     volumes:
       - /:/rootfs:ro
-      - /var/run:/var/run:ro
+      - /var/run:/var/run:ro   # expose aussi docker.sock à cadvisor (métriques) ; réseau `obs` interne
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
     mem_limit: 128m
 
   pg-exporter:
     <<: *hardening
-    image: prometheuscommunity/postgres-exporter:latest
+    image: prometheuscommunity/postgres-exporter:v0.15.0
     profiles: [full]
     networks: [data, obs]
     environment:
@@ -263,13 +360,15 @@ services:
 
   # ---------------------------------------------------------------- assistant RAG (profil ai)
   ollama:
-    image: ollama/ollama:latest
+    # Durcissement comme les autres conteneurs (no-new-privileges + cap_drop ALL) : le serveur
+    # Ollama tourne en user space et n'a besoin d'aucune capability.
+    <<: *hardening
+    image: ollama/ollama:0.3.14
     profiles: [ai]
     networks: [app]
     volumes:
       - ollama-models:/root/.ollama
     mem_limit: 8g          # lourd — déporter sur le PC IA si la RAM est serrée
-    restart: unless-stopped
 
   assistant:
     <<: [*hardening, *pylimits]
@@ -297,7 +396,7 @@ services:
 
   # ---------------------------------------------------------------- banc d'essai (profil attack)
   attacker:
-    image: curlimages/curl:latest
+    image: curlimages/curl:8.10.1
     profiles: [attack]
     networks: [edge]       # rejoue depuis le PC Hôte en dev ; en démo : PC Attaquant physique
     entrypoint: ["sleep", "infinity"]

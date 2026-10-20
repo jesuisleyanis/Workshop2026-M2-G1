@@ -18,6 +18,7 @@ Une plateforme de paiement **fictive** et conteneurisée subit une attaque lanc�
 - [Prérequis](#prérequis)
 - [Installation et déploiement](#installation-et-déploiement)
 - [Vérifier le système](#vérifier-le-système)
+- [Tests](#tests)
 - [Scénario de démonstration](#scénario-de-démonstration)
 - [Structure du dépôt](#structure-du-dépôt)
 - [Gestion des secrets](#gestion-des-secrets)
@@ -46,7 +47,7 @@ Une plateforme de paiement **fictive** et conteneurisée subit une attaque lanc�
                           PC IA (facultatif) : Ollama + assistant RAG
 ```
 
-*Schéma détaillé et description des flux : voir [`docs/architecture.md`](docs/architecture.md) (à venir).*
+*Schéma détaillé et description des flux : voir [`docs/architecture.md`](docs/architecture.md).*
 
 ## Les cinq piliers
 
@@ -82,12 +83,44 @@ Seuls les services nécessaires sont exposés ; base de données, secrets et int
 git clone https://github.com/jesuisleyanis/Workshop2026-M2-G1.git
 cd Workshop2026-M2-G1
 
-# Procédure détaillée à compléter au fil du sprint
+# 1. Secrets : chiffrer security/sops/secrets.example.env -> secrets.enc.env (voir security/sops/README.md)
+# 2. Lever la stack (profil démo minimal) puis peupler les données fictives
+make up          # ou `make up-full` pour l'observabilité complète
+make seed        # comptes fictifs demo01..demo05 financés
+
+# Détails des cibles make : `make help` ; procédures scripts : scripts/README.md
 ```
 
 ## Vérifier le système
 
-*À compléter : URLs des services, comptes de test fictifs, commande de transaction de vérification.*
+- **WAF (seul point exposé)** : `https://localhost` (80/443) — front « Banque Résilience » ; les API internes ne sont pas publiées.
+- **Comptes de test fictifs** : `demo01` … `demo05`, mot de passe commun `SEED_PASSWORD` (SOPS, cf. `security/sops/secrets.example.env`).
+- **Transaction de contrôle** : `make verify` (code retour `0` = transaction fictive rejouée OK). Démo complète : `make demo` (5 temps). Détails : [`scripts/README.md`](scripts/README.md).
+
+## Tests
+
+`make test` lance **un process pytest par composant** (`libs`, `services/*`, `ml`, `remediation`,
+`assistant`) puis les répertoires de tests de contrat (`security/waf/tests`, `attacks/tests`,
+`scripts/tests`, `infra/tests`, `tests/e2e`), et enfin Vitest (`services/front`, `dashboard`).
+Un seul process pour tout le dépôt n'est pas possible : chaque service déclare ses métriques
+Prometheus à l'import (`DuplicateTimeseries`).
+
+Les tests Python exigent un interpréteur **3.12** où les dépendances de *tous* les composants sont
+installées, y compris les libs partagées `resilience_common` / `resilience_db` :
+
+```bash
+uv venv --python 3.12 .venv && source .venv/bin/activate     # ou python3.12 -m venv .venv
+uv pip install -e "libs/python/resilience_common[fastapi,test]" -e "libs/python/resilience_db[test]" \
+  -e services/auth -e services/payment-api \
+  -r remediation/requirements-dev.txt -r assistant/requirements-dev.txt
+( cd ml && uv pip install -r requirements-dev.txt )   # chemin relatif ../libs dans le fichier
+make test                                             # ou : make test-py PYTHON=.venv/bin/python
+```
+
+Les tests front exigent leurs dépendances (`npm ci` dans `services/front` et `dashboard`) : sans elles, `make test`
+échoue (c'est voulu : l'agrégat reflète l'état réel). `make test-py` ne lance que la partie Python.
+
+Chaque composant reste testable seul depuis son répertoire (`cd remediation && pytest`), voir son `README.md`.
 
 ## Scénario de démonstration
 
@@ -144,6 +177,12 @@ Dossier de rendu : `Workshop2026-M2-G1`
 | `Workshop2026-M2-G1-Pres.pptx` | Support de présentation |
 | `Workshop2026-M2-G1-VidChrono.mp4` | Clip Chrono — 60 s max, sans coupe |
 | `Workshop2026-M2-G1-Code.zip` | Archive du dépôt Git (sources, IaC, scripts, tests, doc, README) |
+
+Génération de l'archive : `make package` (ou `scripts/package_deliverables.sh`). Le script lance d'abord
+`security/hardening/audit.sh`, exclut `.git`, dépendances (`node_modules`, venv), artefacts de build
+(`dist`, caches, `*.egg-info`), journaux locaux, dumps et **tout secret déchiffré** (`.env`, `keys.txt`,
+`*.age`), puis re-scanne l'archive (noms **et** contenu : clé age / clé privée) et l'efface en cas de doute.
+La clé age de démo est remise **hors archive**. Les fichiers `Workshop2026-M2-G1-*` sont ignorés par git.
 
 ## Équipe
 

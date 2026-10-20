@@ -10,12 +10,11 @@ import re
 from pathlib import Path
 
 import pytest
+from app.main import create_app
+from app.store import open_store
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
-
-from app.main import create_app
-from app.store import open_store
 
 APP_DIR = Path(__file__).parent.parent / "app"
 ROOT = APP_DIR.parent

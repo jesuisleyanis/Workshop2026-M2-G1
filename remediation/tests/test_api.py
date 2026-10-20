@@ -7,9 +7,8 @@ import time
 from datetime import datetime, timezone
 
 import pytest
-from fastapi.testclient import TestClient
-
 from conftest import TOKEN, Env, make_event, make_settings, make_table
+from fastapi.testclient import TestClient
 from main import create_app
 
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -186,3 +185,23 @@ def test_metrics_endpoint_exposes_contract_metrics(env):
     assert f'resilience_mttd_seconds{{incident_id="{inc_id}"}}' in text
     assert 'resilience_http_requests_total{method="POST",path="/events",service="remediation",status="202"}' in text
     assert "resilience_http_request_duration_seconds_bucket" in text
+    # Une seule déclaration dans le registre (régression : DuplicateTimeseries au boot quand
+    # http_metrics redéclarait le compteur déjà enregistré par resilience_common).
+    assert text.count("# HELP resilience_http_requests_total ") == 1
+
+
+# ------------------------------------------------------------------ X-Request-ID (anti log-forging)
+def test_incoming_request_id_must_be_uuid_else_replaced(client):
+    """Parité avec auth/payment-api : un X-Request-ID forgé/non-UUID est remplacé par un UUID
+    généré ; un UUID valide est conservé (P4S-09)."""
+    import uuid as _uuid
+
+    forged = "../../etc/passwd\nInjected: x" + "A" * 4096
+    r = client.get("/health", headers={"X-Request-ID": forged})
+    echoed = r.headers["X-Request-ID"]
+    assert echoed != forged
+    _uuid.UUID(echoed)  # lève si ce n'est pas un UUID
+
+    valid = str(_uuid.uuid4())
+    r2 = client.get("/health", headers={"X-Request-ID": valid})
+    assert r2.headers["X-Request-ID"] == valid

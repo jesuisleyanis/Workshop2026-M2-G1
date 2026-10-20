@@ -102,7 +102,7 @@ pytest services/payment-api
 
 ## Écarts et points d'attention
 
-- `resilience_common.metrics.instrument()` expose `resilience_http_http_requests_total{handler,method,status}` (sous-système « http » en double, label `handler` au lieu de `path`, pas de label `service`) alors que le contrat §2 attend `resilience_http_requests_total{service,method,path,status}`. Le service appelle `instrument(app, "payment-api")` comme demandé ; le correctif appartient à la lib. Le test `xfail(strict)` correspondant passera (et forcera à retirer le marqueur) une fois la lib corrigée.
+- Métriques HTTP conformes : `resilience_common.metrics.instrument(app, "payment-api")` produit désormais exactement `resilience_http_requests_total{service,method,path,status}` et `resilience_http_request_duration_seconds{service,method,path}` (contrat §2). Le test `test_http_metrics_follow_contract_names_and_labels` est **actif et vert** (plus de `xfail`).
 - Le middleware de contexte de requête (`request_id`, `client_ip`, `http_*`) prévu par le contrat n'existe pas dans `resilience_common` : il est dans `observability.py` (copie identique dans `auth`, à remonter dans la lib).
 - L'exemple de log du contrat montre `http_path:"/transactions"` ; le service journalise le chemin réel `/api/v1/transactions`.
 - Un corps mal typé (ex. `amount_cents` flottant) est un `422 validation_error` **sans** event `transaction_rejected` ; les refus de règles métier (montant ≤ 0, solde, comptes) en émettent un.

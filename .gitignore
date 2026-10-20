@@ -1,7 +1,9 @@
 # Secrets déchiffrés et clés — JAMAIS commités
 .env
 *.decrypted.env
+*.env.dec
 secrets.enc.env.dec
+.remediation_token
 **/age.key
 **/keys.txt
 *.age
@@ -32,8 +34,15 @@ assistant/**/chroma/
 # Données locales
 remediation/incidents.db
 *.sqlite3
+infra/ansible/backups/*
+!infra/ansible/backups/.gitkeep
 
 # OS / IDE
 .DS_Store
 .idea/
 .vscode/
+
+# Livrables générés (scripts/package_deliverables.sh) — produits à la demande, jamais commités
+Workshop2026-M2-G1-*
+# venv de travail cyber (local)
+.venv-cyber/

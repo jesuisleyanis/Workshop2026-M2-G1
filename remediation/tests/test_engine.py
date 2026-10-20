@@ -5,10 +5,9 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from prometheus_client import REGISTRY
-
 from broker_helpers import capture_logs
 from conftest import T0, make_event, make_table
+from prometheus_client import REGISTRY
 
 pytestmark = pytest.mark.anyio
 
@@ -93,7 +92,8 @@ async def test_verify_ok_after_first_action_skips_remaining_actions(make_env):
     env = make_env(verify=[True])
     sub = await env.run(make_event("service_flood"))
     assert env.action_types(sub.incident_id) == ["waf_block_ip"]  # pas de redémarrage inutile
-    assert env.net.docker_calls() == []
+    # Seul le rechargement à chaud du WAF (SIGHUP) est passé par le proxy : aucun restart.
+    assert env.net.docker_calls() == [("GET", "/containers/json"), ("POST", "/containers/cid-waf/kill")]
 
 
 async def test_failed_action_does_not_block_next_action(make_env):
@@ -171,9 +171,9 @@ async def test_max_attempts_triggers_escalation(make_env):
     assert len(restores) == 2  # exactement max_attempts tentatives, pas une de plus
     assert inc["actions"][-1]["type"] == "notify_operator"
     assert env.sleeps == [30]  # cooldown respecté entre les deux tentatives
-    assert [l["event"] for l in logs if l["event"] == "remediation_failed"] == ["remediation_failed"]
+    assert [entry["event"] for entry in logs if entry["event"] == "remediation_failed"] == ["remediation_failed"]
     assert inc["mttr_seconds"] is None
-    assert "remediation_verified" not in {l["event"] for l in logs}
+    assert "remediation_verified" not in {entry["event"] for entry in logs}
 
 
 async def test_escalation_when_every_action_fails(make_env):
@@ -225,6 +225,13 @@ async def test_waf_never_blocks_protected_or_missing_ips(make_env):
     sub2 = await env2.run(make_event("service_flood", source_ip=None))
     assert "source_ip" in env2.incident(sub2.incident_id)["actions"][0]["detail"]
 
+    # La forme IPv4-mappée ne doit pas contourner la liste blanche (P4S-05).
+    env3 = make_env(verify=[True])
+    sub3 = await env3.run(make_event("service_flood", source_ip="::ffff:192.168.137.1"))
+    first3 = env3.incident(sub3.incident_id)["actions"][0]
+    assert first3["result"] == "failure" and "protégée" in first3["detail"]
+    assert env3.runner.calls == []
+
 
 async def test_restart_refuses_service_outside_allow_list(make_env):
     from conftest import make_settings
@@ -248,12 +255,12 @@ async def test_contract_log_events_and_metrics(make_env):
     restart_before, block_before = counter("restart_service", "success"), counter("waf_block_ip", "success")
     with capture_logs() as logs:
         sub = await env.run(make_event("service_flood"))
-    events = [l["event"] for l in logs]
+    events = [entry["event"] for entry in logs]
     assert events[0] == "remediation_started"
     assert events.count("remediation_action") == 2
     assert events[-1] == "remediation_verified"
-    assert all(l["incident_id"] == sub.incident_id for l in logs)
-    assert all({"ts", "level", "service", "event", "message", "request_id"} <= l.keys() for l in logs)
+    assert all(entry["incident_id"] == sub.incident_id for entry in logs)
+    assert all({"ts", "level", "service", "event", "message", "request_id"} <= entry.keys() for entry in logs)
     assert counter("restart_service", "success") == restart_before + 1
     assert counter("waf_block_ip", "success") == block_before + 1
 

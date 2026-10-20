@@ -154,7 +154,8 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
 
     # ---------------------------------------------------------------- API métier
     @app.post("/api/v1/register", response_model=UserOut, status_code=201)
-    def register(body: RegisterRequest, session=Depends(get_session)):
+    @limiter.limit(settings.register_rate_limit)
+    def register(request: Request, body: RegisterRequest, session=Depends(get_session)):
         if session.scalar(select(User.id).where(User.username == body.username)) is not None:
             raise ApiError(409, "username_taken", "Username already exists")
         user = User(username=body.username, password_hash=hash_password(body.password))

@@ -75,7 +75,7 @@ JWT : **HS256**, secret `JWT_SECRET`, `exp` = 15 min, claims `sub` (username), `
 | A13 | Migrations Alembic appliquées au démarrage | `test_lifespan_runs_alembic_migrations` |
 | A14 | Config faible/absente refusée au démarrage | `test_settings_*` |
 
-Écart connu signalé (non bloquant, hors périmètre du service) : `test_http_metrics_follow_contract_names_and_labels` est en `xfail(strict)` car `resilience_common.metrics.instrument` ne produit pas exactement les noms/labels HTTP du contrat §2 (voir README, « Écarts »).
+Métriques HTTP conformes au contrat §2 : `resilience_common.metrics.instrument` produit les noms/labels exacts (`resilience_http_requests_total{service,method,path,status}`). Le test `test_http_metrics_follow_contract_names_and_labels` est actif et vert (l'ancien `xfail` est retiré).
 
 ## 6. Hors périmètre / limites assumées
 

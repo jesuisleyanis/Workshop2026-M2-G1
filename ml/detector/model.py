@@ -9,8 +9,14 @@ from pathlib import Path
 
 import joblib
 import numpy as np
+import sklearn
+from resilience_common import get_logger
 
 from ml.shared.features import FEATURE_NAMES, validate_vector
+
+# Logger JSON du contrat (même logger "detector" que app.py) : le warning de dérive doit être
+# indexable par Promtail/Loki, pas un message texte brut sur stderr.
+log = get_logger("detector")
 
 
 class ModelLoadError(RuntimeError):
@@ -57,6 +63,23 @@ def load_model(model_dir: str | Path) -> LoadedModel:
     actual = hashlib.sha256(model_path.read_bytes()).hexdigest()
     if expected != actual:
         raise ModelLoadError("model.joblib ne correspond pas au sha256 de baseline_stats.json")
+
+    # Dérive de version scikit-learn : un modèle entraîné avec une autre version peut, une fois
+    # rechargé, produire des scores silencieusement différents. On n'échoue pas (le sha256 garantit
+    # déjà l'intégrité de l'artefact) mais on journalise un avertissement explicite (#23).
+    # `sklearn_version` est enregistré sous stats["training"] par ml/training/train.py
+    # (fallback au niveau racine par robustesse).
+    trained_with = (stats.get("training") or {}).get("sklearn_version") or stats.get(
+        "sklearn_version"
+    )
+    if trained_with and trained_with != sklearn.__version__:
+        log.warning(
+            "scikit-learn %s installé mais modèle entraîné avec %s : scores potentiellement "
+            "différents, ré-entraîner ou aligner les versions (ml/*/requirements.txt)",
+            sklearn.__version__,
+            trained_with,
+            extra={"event": "model_version_drift"},
+        )
 
     payload = joblib.load(model_path)
     return LoadedModel(model=payload["model"], stats=stats)

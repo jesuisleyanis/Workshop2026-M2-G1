@@ -32,14 +32,18 @@ Déclencher un incident de démonstration : boutons **Répétition · déclenche
 |---|---|---|
 | `VITE_REMEDIATION_BASE` | `/remediation` | build : base du flux (`<base>/stream`) |
 | `VITE_GRAFANA_BASE` | `http://localhost:3000` | build : liens Grafana et Explore |
+| `VITE_PROMETHEUS_BASE` | `/prometheus` | build : base du proxy Prometheus (score ML + santé via `GET <base>/api/v1/query`) ; vide = polling désactivé |
+| `VITE_METRICS_POLL_MS` | `2000` | build : période du polling Prometheus |
 | `VITE_STREAM_SOURCE` | `live` | build : `live` \| `auto` (bascule en simulation si flux injoignable) \| `simulation` |
 | `VITE_LIVE_TRIGGERS` | _vide_ | build : `true` = déclencheurs en flux réel hors dev (mock uniquement) |
 | `VITE_ASSISTANT_URL` | `/assistant/` | build : URL de l'UI de l'assistant (iframe, slash final requis) |
-| `REMEDIATION_PROXY_TARGET` | `http://localhost:8005` | dev : cible du proxy Vite |
+| `REMEDIATION_PROXY_TARGET` | `http://localhost:8005` | dev : cible du proxy Vite `/remediation` |
+| `PROMETHEUS_PROXY_TARGET` | `http://localhost:9090` | dev : cible du proxy Vite `/prometheus` (mettre `http://localhost:8005` pour le mock) |
 | `ASSISTANT_PROXY_TARGET` | `http://localhost:8006` | dev : cible du proxy Vite pour `/assistant` |
 | `REMEDIATION_UPSTREAM` | `remediation:8005` | conteneur : upstream du proxy nginx |
-| `ASSISTANT_UPSTREAM` | `assistant:8006` | conteneur : upstream nginx de l'assistant (relaie uniquement `GET /assistant/`, `GET /assistant/static/*`, `POST /assistant/api/v1/(ask|summarize|postmortem|propose)`) |
 | `REMEDIATION_AUTH_HEADER` | _vide_ | conteneur : header `Authorization` injecté sur `/remediation/stream` et `POST /remediation/manual-actions` (ex. `Bearer ...`) |
+| `PROMETHEUS_UPSTREAM` | `prometheus:9090` | conteneur : upstream du proxy `/prometheus/api/v1/query` |
+| `ASSISTANT_UPSTREAM` | `assistant:8006` | conteneur : upstream nginx de l'assistant (relaie uniquement `GET /assistant/`, `GET /assistant/static/*`, `POST /assistant/api/v1/(ask|summarize|postmortem|propose)`) |
 | `DNS_RESOLVER` | `127.0.0.11` | conteneur : résolveur DNS |
 
 ## Architecture
@@ -102,7 +106,8 @@ Multi-stage `node:22-alpine` -> `nginx:1.27-alpine`, utilisateur `nginx`, port *
 
 ### Câblage compose
 
-- Service `dashboard` sur le réseau `app` (joint `remediation:8005`), `depends_on: remediation`.
+- Service `dashboard` sur le réseau `app` (joint `remediation:8005` et `prometheus:9090`), `depends_on: [remediation, prometheus]`, variables runtime `REMEDIATION_UPSTREAM`, `REMEDIATION_AUTH_HEADER`, `PROMETHEUS_UPSTREAM` (les `VITE_*` sont des build-args, sans effet à l'exécution).
+- Le flux réel est l'enveloppe `event: timeline` du moteur (voir CDC §3) ; score et santé sont lus dans Prometheus par polling, jamais fournis par le moteur.
 - Publier avec précaution (le dashboard donne la vue d'ensemble du SI) : `127.0.0.1:<port>:8080` ou via le WAF **avec authentification**. Ne pas l'exposer librement sur `edge`.
 - Token du moteur (si `/stream` est authentifié) : `REMEDIATION_AUTH_HEADER="Bearer <token>"` depuis SOPS, jamais en clair dans le compose.
 - **Sécurité de la route d'action** : `POST /remediation/manual-actions` part avec le jeton injecté par nginx ; elle n'est protégée que par l'exposition réseau du dashboard + la confirmation dans l'UI + la liste blanche du moteur (IP protégées, `RESTARTABLE_SERVICES`, 422 sinon). D'où l'obligation de ne pas publier le dashboard sans contrôle d'accès.

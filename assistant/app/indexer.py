@@ -10,12 +10,17 @@ import hashlib
 import sys
 from pathlib import Path
 
+from resilience_common import get_logger
+
 from app.config import SERVICE_NAME, Settings
 from app.embeddings import backend_id
-from app.loader import load_decision_table, load_incident_journal, load_markdown_docs, split_documents
+from app.loader import (
+    load_decision_table,
+    load_incident_journal,
+    load_markdown_docs,
+    split_documents,
+)
 from app.store import open_store
-
-from resilience_common import get_logger
 
 log = get_logger(SERVICE_NAME)
 

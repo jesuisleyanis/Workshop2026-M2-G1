@@ -7,9 +7,10 @@
 # B = réduction (last) -> C = seuil. `condition: C`. Sans l'étape de réduction B,
 # l'évaluateur de seuil refuse une série non réduite.
 #
-# ROUTAGE : voir infra/grafana/provisioning/alerting/README-SOC.md — à ce jour les
-# alertes s'affichent dans Grafana ; le relais vers la remédiation reste à finaliser
-# (point d'intégration ouvert, hors périmètre des règles elles-mêmes).
+# ROUTAGE (I6, #13) : ces règles servent à l'AFFICHAGE SOC dans Grafana. Le relais vers la
+# remédiation passe par leur MIROIR Prometheus `infra/prometheus/rules/soc.yml` → Alertmanager →
+# POST /events/alertmanager (voir README-SOC.md). Toute modification ici doit être reportée là-bas
+# (cohérence vérifiée par infra/tests/test_soc_rules.py).
 apiVersion: 1
 groups:
   - orgId: 1

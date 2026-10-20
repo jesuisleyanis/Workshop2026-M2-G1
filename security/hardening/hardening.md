@@ -7,21 +7,44 @@
 | Mesure | Détail | Vérifié par |
 |---|---|---|
 | Image slim | `python:3.12-slim`, `nginx:alpine`, multi-stage pour les fronts | revue Dockerfile |
-| Utilisateur non-root | `USER app` (uid ≥ 1000), pas de process en root | `audit.sh` |
-| Capabilities | `cap_drop: ALL` ; ajout explicite uniquement si indispensable | `audit.sh` compose |
-| `no-new-privileges` | `security_opt: ["no-new-privileges:true"]` | compose |
-| Système de fichiers | `read_only: true` + `tmpfs` pour les écritures nécessaires | compose |
-| Limites ressources | `cpus`, `mem_limit` par service (16 Go partagés) | compose |
+| Utilisateur non-root | `USER app` (uid ≥ 1000), pas de process en root | revue Dockerfile |
+| Capabilities | `cap_drop: ALL` ; ajout explicite uniquement si indispensable (aucun `cap_add` à ce jour, voir ci-dessous) | `audit.sh` (ancre présente), `infra/tests/test_compose_hardening.py` (par service) |
+| `no-new-privileges` | `security_opt: ["no-new-privileges:true"]` | compose, `infra/tests/test_compose_hardening.py` |
+| Système de fichiers | `read_only: true` + `tmpfs` pour les écritures nécessaires, **quand le service le permet** (exceptions documentées : `docker-socket-proxy`, `pg-exporter`, `cadvisor`) | compose |
+| Limites ressources | `mem_limit` par service ; `cpus` sur les services Python (ancre `x-pylimits`) — 16 Go partagés | compose |
 | Healthcheck | `/health` sur chaque service ; `HEALTHCHECK` dans le Dockerfile | Dockerfile |
 | Réseau | services internes sur `app`/`data`/`obs` ; `data` en `internal: true` ; **seul le WAF** publie des ports | `audit.sh` |
-| Secrets | via SOPS uniquement, injectés en env au runtime ; aucun secret en image | gitleaks + `audit.sh` |
+| Secrets | via SOPS uniquement, injectés en env au runtime ; aucun secret applicatif en image. **Exception de labo** : le certificat TLS auto-signé du WAF est généré au build et figé dans une couche (clé privée partagée entre instances) — acceptable pour une démo, à régénérer au démarrage en production | gitleaks + `audit.sh` |
+
+## Cas particulier : Postgres sous `cap_drop: ALL` (ticket #11)
+
+L'image `postgres:16-alpine` démarre en root puis redescend vers `postgres` : son entrypoint fait
+`chown` du répertoire de données et `gosu` — ce qui exige `CHOWN`, `SETUID`, `SETGID` (et souvent
+`DAC_OVERRIDE`, `FOWNER`). Toutes capabilities retirées, l'init d'un volume neuf échoue.
+
+Choix retenu : **démarrer directement non-root** (`user: "70:70"`, l'uid/gid `postgres` de
+l'image alpine) plutôt qu'ajouter des capabilities. L'entrypoint saute alors les étapes
+privilégiées ; le volume nommé `pgdata` hérite de l'appartenance `70:70` du répertoire de l'image
+à sa création ; `/var/run/postgresql` est déjà inscriptible par ce groupe dans l'image. Résultat :
+`cap_drop: ALL` **sans aucun `cap_add`** — c'est le moindre privilège, et c'est plus fort que la
+variante « root + cap_add minimal ».
+
+Conséquences à connaître : un volume `pgdata` créé **avant** ce changement (appartenant à root)
+doit être recréé (`docker compose down -v` puis `make up`) ; les playbooks (`db_corrupt_fake.yml`,
+`pg_backup.yml`) passent par `docker exec … psql -U resilience`, qui s'exécute donc en uid 70 — rien
+à adapter. Validation live (volume vierge → `healthy`) à rejouer sur une machine avec Docker.
 
 ## Moteur de remédiation — modèle de privilèges (critique)
 
 - **Jamais** de montage direct de `/var/run/docker.sock` dans le conteneur de remédiation : ce serait un accès root-équivalent sur l'hôte.
-- Accès Docker **médié par `docker-socket-proxy`** (Tecnativa) configuré pour n'autoriser que les verbes nécessaires : `CONTAINERS=1`, `POST=1` restreint au `restart`, tout le reste à `0`.
+- Accès Docker **médié par `docker-socket-proxy`** (HAProxy, `remediation/proxy/haproxy.cfg`, ADR 0002) : liste blanche stricte de 5 couples méthode/chemin (`GET _ping`, `GET containers/json`, `GET containers/{id}/json`, `POST containers/{id}/restart`, `POST containers/{id}/kill?signal=HUP`), tout le reste → 403. Le socket est monté en lecture seule **uniquement** dans le proxy.
 - API `/events` du moteur **authentifiée** (token `REMEDIATION_TOKEN`), service **non exposé** sur `edge`.
 - Garde-fous applicatifs : `cooldown`, `max_attempts`, `dry_run` (voir `remediation/decision_table.yml`).
+- **Racine en lecture seule** (`read_only: true`, comme payment-api/auth) : les seuls points inscriptibles sont `/tmp` (tmpfs, artefacts ansible-runner) et le **volume nommé `remediation-journal`** monté sur `/var/lib/remediation`. Le journal d'incidents SQLite **survit donc au redémarrage** du conteneur, conformément à la CDC §5.4 (ticket #22).
+
+## Assistant RAG (profil `ai`)
+
+- `ollama` porte désormais l'ancre de durcissement commune (`no-new-privileges:true` + `cap_drop: ALL`) : le serveur tourne en user space et n'a besoin d'aucune capability (ticket #22). Image épinglée (plus de `:latest`, R5).
 
 ## Outils
 
@@ -29,8 +52,8 @@
 # Scan de secrets (pre-commit)
 gitleaks detect --source . --no-banner
 
-# Scan de vulnérabilités d'images (avant jury)
-trivy image resilience/payment-api:latest
+# Scan de vulnérabilités d'images (avant jury) — nom réel produit par compose (préfixe projet)
+trivy image resilience-g1-payment-api        # ou : trivy config infra/compose/docker-compose.yml
 
 # Audit de configuration du repo (local, rapide)
 security/hardening/audit.sh

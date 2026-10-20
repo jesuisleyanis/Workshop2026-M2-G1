@@ -95,7 +95,7 @@ pytest services/auth
 
 ## Écarts et points d'attention
 
-- `resilience_common.metrics.instrument()` expose `resilience_http_http_requests_total{handler,method,status}` (sous-système « http » en double, label `handler` au lieu de `path`, pas de label `service`) alors que le contrat §2 attend `resilience_http_requests_total{service,method,path,status}`. Le service appelle bien `instrument(app, "auth")` comme demandé ; le correctif appartient à la lib. Le test `xfail(strict)` correspondant passera (et forcera à retirer le marqueur) une fois la lib corrigée.
+- Métriques HTTP conformes : `resilience_common.metrics.instrument(app, "auth")` produit désormais exactement `resilience_http_requests_total{service,method,path,status}` et `resilience_http_request_duration_seconds{service,method,path}` (contrat §2). Le test `test_http_metrics_follow_contract_names_and_labels` est **actif et vert** (plus de `xfail`).
 - Le contrat §1 évoque un middleware qui injecte `request_id`/`client_ip`/`http_*` ; `resilience_common` ne le fournit pas, il est donc dans `observability.py` (copie identique dans payment-api, à remonter dans la lib).
 - L'exemple de log du contrat montre `http_path:"/login"` ; le service journalise le chemin réel `/api/v1/login`.
 - En cas de panne DB, auth journalise une erreur avec l'événement générique `log` : `db_error` et `resilience_db_errors_total` sont réservés à payment-api par le contrat.

@@ -5,7 +5,7 @@
 > **Avertissement de méthode** : les références d'articles ci-dessous sont données de bonne foi et **à recouper avec les textes officiels (EUR-Lex) avant remise du dossier** ; le statut de transposition nationale de NIS2 et l'autorité compétente exacte sont **à confirmer par le juridique**.
 
 **Légende de preuve** : **Démontré** = comportement présent dans le dépôt, vérifiable · **Partiel** = présent mais limité, limite dite · **Non démontrable en 4 jours** = hors portée d'un prototype, dit explicitement.
-Statut de livraison : **[R]** réalisé · **[S]** spécifié, pas encore livré (au 2026-10-19 : `infra/*`, `dashboard/`, `scripts/verify_tx` encore absents).
+Statut de livraison : **[R]** réalisé · **[S]** spécifié, pas encore livré · **[M]** à mesurer en recette. Au 2026-10-19, `infra/*`, `dashboard/` et `scripts/verify_tx` sont présents dans le dépôt ; restent à livrer : la clé age réelle et `secrets.enc.env`, la planification périodique du dump et la copie hors hôte des dumps.
 
 ---
 
@@ -27,12 +27,12 @@ Statut de livraison : **[R]** réalisé · **[S]** spécifié, pas encore livré
 | Exigence (DORA / NIS2) | Preuve dans le prototype | Niveau | Limite honnête |
 |---|---|---|---|
 | **Détection d'activités anormales** (DORA art. 10 ; NIS2 art. 21(2)(b)) | Modèle IsolationForest v1.0.0 (seuil 0,6296, 0/2000 faux positifs, détection 95,7-100 % selon scénario ; 100 % avec garde-fou) ; métrique `resilience_anomaly_score` ; événement `anomaly_detected` (`ml/detector/core.py`, `baseline_stats.json`) | **Démontré** | baseline et attaques **synthétiques** ; pas de trafic réel ; type d'incident étiqueté par heuristique |
-| **Journalisation et traçabilité** (DORA art. 9-10 ; NIS2 art. 21) | Logs JSON normalisés (`ts`, `level`, `service`, `event`, `request_id`, `client_ip`, `incident_id`) ; corrélation de bout en bout ; Promtail -> Loki ; journal d'incident SQLite + timeline horodatée de chaque action et vérification (`remediation/journal.py`, `timeline.py`) | **Démontré** (formats [R], chaîne Loki [S]) | pas de rétention ni d'immuabilité définies ; `transaction_created` ne trace pas le montant ; mots de passe jamais journalisés |
+| **Journalisation et traçabilité** (DORA art. 9-10 ; NIS2 art. 21) | Logs JSON normalisés (`ts`, `level`, `service`, `event`, `request_id`, `client_ip`, `incident_id`) ; corrélation de bout en bout ; Promtail -> Loki ; journal d'incident SQLite + timeline horodatée de chaque action et vérification (`remediation/journal.py`, `timeline.py`) | **Démontré** (formats [R], chaîne Loki et règles SOC [R]) | pas de rétention ni d'immuabilité définies ; `transaction_created` ne trace pas le montant ; mots de passe jamais journalisés |
 | **Réponse et reprise** (DORA art. 11 ; NIS2 art. 21(2)(c)) | Remédiation autonome pilotée par `decision_table.yml`, vérifiée par `verify_tx`, avec cooldown (60 s), `max_attempts` (3), `dry_run`, escalade `notify_operator` ; distinction explicite disponibilité / intégrité (`restore_pg_dump`) | **Démontré** sur les 4 scénarios (essai à confirmer en recette [M]) | reprise **autonome** sur incidents bornés ; sinistre majeur = manuel (`docs/pca-pra.md` §3.3) |
-| **Sauvegarde et restauration** (DORA art. 12 ; NIS2 art. 21(2)(c)) | Action `restore_pg_dump` idempotente, paramètre validé, playbook nommé | **Partiel** | **job de dump planifié et playbook `pg_restore.yml` non livrés** [S] ; pas de copie hors hôte ; pas de test de restauration périodique |
-| **Tests de résilience** (DORA art. 24-25 ; NIS2 art. 21(2)(f)) | Banc d'essai `attacks/` : 4 scénarios déclarant signal, `incident_type`, remédiation attendue, critère de réussite ; garde-fous (<= 100 req/s, <= 60 s, kill-switch `run.sh --stop`, `reset.sh`) ; tests `attacks/tests` (4 verts) ; chaos J4 prévu | **Partiel** | c'est un test de **scénarios** ; **pas** un programme annuel documenté, **pas** un test d'intrusion piloté par la menace (TLPT, art. 26) |
+| **Sauvegarde et restauration** (DORA art. 12 ; NIS2 art. 21(2)(c)) | Action `restore_pg_dump` idempotente, paramètre validé, playbook nommé | **Partiel** | playbooks `pg_restore.yml` et `pg_backup.yml` livrés [R] ; **planification périodique du dump non câblée** [S] ; pas de copie hors hôte [S] ; pas de test de restauration périodique |
+| **Tests de résilience** (DORA art. 24-25 ; NIS2 art. 21(2)(f)) | Banc d'essai `attacks/` : 4 scénarios déclarant signal, `incident_type`, remédiation attendue, critère de réussite ; garde-fous (<= 100 req/s, <= 60 s, kill-switch `run.sh --stop`, `reset.sh`) ; tests `attacks/tests/test_scenarios.py` (4 verts) ; chaos J4 prévu | **Partiel** | c'est un test de **scénarios** ; **pas** un programme annuel documenté, **pas** un test d'intrusion piloté par la menace (TLPT, art. 26) |
 | **Gestion des secrets et cryptographie** (DORA art. 9 ; NIS2 art. 21(2)(h)) | SOPS + age (clé privée hors git), `*_FILE` côté moteur, `gitleaks` pre-commit, `audit.sh` avant packaging, bcrypt (12 tours), JWT à `alg` épinglé ; TLS sur le WAF | **Partiel** | clé age réelle et `secrets.enc.env` à créer [S] ; JWT HS256 **symétrique partagé** ; TLS auto-signé ; pas de rotation automatisée |
-| **Contrôle d'accès, moindre privilège, segmentation** (DORA art. 9(4) ; NIS2 art. 21(2)(i)) | Seul le WAF exposé ; réseau `data` interne ; moteur : proxy Docker à verbes limités + liste blanche client + playbooks nommés + token + hors `edge` ; conteneurs non-root, `cap_drop: ALL` (`security/hardening/`) | **Partiel** (code [R], isolation réseau et compose [S]) | **pas de MFA** (NIS2 art. 21(2)(j)) ; pas de verrouillage par compte |
+| **Contrôle d'accès, moindre privilège, segmentation** (DORA art. 9(4) ; NIS2 art. 21(2)(i)) | Seul le WAF exposé ; réseau `data` interne ; moteur : proxy Docker à verbes limités + liste blanche client + playbooks nommés + token + hors `edge` ; conteneurs non-root, `cap_drop: ALL` (`security/hardening/`) | **Partiel** (code [R], isolation réseau et compose [R]) | **pas de MFA** (NIS2 art. 21(2)(j)) ; pas de verrouillage par compte |
 | **Gestion des vulnérabilités** (NIS2 art. 21(2)(e)) | `trivy` et `gitleaks` documentés (`hardening.md`) | **Partiel** | non exécutés en continu (pas de CI, décision d'équipe) |
 | **Alimentation de la classification d'incident** (DORA art. 17-18) | Le journal fournit les données de base (§2.3) | **Partiel** | aucun critère de classification automatisé |
 
@@ -69,7 +69,7 @@ Le prototype ne produit pas le rapport, mais il **capture les données que le ra
 | Dépendance | Rôle | Criticité | Stratégie de sortie / remarque |
 |---|---|---|---|
 | Images `python:3.12-slim`, `nginx:alpine`, `postgres:16` | base de tous les services | Haute | images épinglées par version/digest ; registre local pour le PRA |
-| `tecnativa/docker-socket-proxy` | seul accès du moteur à Docker | **Haute (sécurité)** | alternative : proxy maison ; surveiller les vulnérabilités |
+| `haproxy` (docker-socket-proxy, liste blanche stricte `remediation/proxy/haproxy.cfg`) | seul accès du moteur à Docker | **Haute (sécurité)** | image officielle épinglée ; surveiller les vulnérabilités |
 | ModSecurity + OWASP CRS | WAF | Haute | règles versionnées ; le WAF est le seul point exposé |
 | FastAPI, SQLAlchemy, scikit-learn, joblib, ansible-runner | code applicatif, ML, exécution de playbooks | Haute | `joblib` désérialise du code : **modèle vérifié par `sha256`** avant chargement (`ml/detector/model.py`) |
 | Prometheus, Loki, Promtail, Grafana, Alertmanager, cAdvisor | observabilité, SOC | Moyenne | Elastic écarté pour la charge mémoire |
@@ -105,12 +105,12 @@ Statut : **registre technique partiel** ; les volets contractuels (clauses, audi
 
 | Affirmation | Comment la vérifier | Statut |
 |---|---|---|
-| Les 4 scénarios respectent le contrat Red/Blue | `python -m pytest attacks/tests -q` (4 tests verts au 2026-10-19) | [R] |
-| Le WAF produit les événements et la métrique de blocage | `python -m pytest security/waf/tests -q` (5 tests verts) | [R] |
-| Aucun secret en clair, pas de socket Docker brut, pas de conteneur privilégié, pas de clé age dans le dépôt | `security/hardening/audit.sh` ; `gitleaks detect --source .` | script [R] ; exécution sur `infra/` après livraison [S] |
+| Les 4 scénarios respectent le contrat Red/Blue | `python -m pytest attacks/tests/test_scenarios.py -q` (4 tests verts au 2026-10-19) | [R] |
+| Le WAF produit les événements et la métrique de blocage | `python -m pytest security/waf/tests -q` (25 tests verts) | [R] |
+| Aucun secret en clair, pas de socket Docker brut, pas de conteneur privilégié, pas de clé age dans le dépôt | `security/hardening/audit.sh` ; `gitleaks detect --source .` | script [R] ; `infra/` livré [R], résultat d'exécution sur `infra/` à consigner en recette [M] |
 | Détection : seuil, taux, version | `ml/training/artifacts/v1.0.0/baseline_stats.json` (`threshold`, `evaluation`) ; hash du modèle contrôlé au chargement | [R] |
-| La table de décision sépare disponibilité et intégrité | `remediation/decision.py` (invariants) ; tests unitaires à écrire (`remediation/tests/` vide) | code [R], tests [S] |
+| La table de décision sépare disponibilité et intégrité | `remediation/decision.py` (invariants) ; tests unitaires `remediation/tests/test_decision_table.py` (+ `test_engine.py`, `test_actions.py`…) | code [R], tests [R] |
 | MTTD/MTTR par incident | `resilience_mttd_seconds`, `resilience_mttr_seconds` (20 derniers incidents), journal `incidents.db`, Loki `remediation_verified` | [M] en recette |
-| Reprise de bout en bout (avant / attaque / détection / remédiation / après) | `make demo` (`scripts/demo.sh`), `scripts/verify_tx` code 0 | [S] |
+| Reprise de bout en bout (avant / attaque / détection / remédiation / après) | `make demo` (`scripts/demo.sh`), `scripts/verify_tx` code 0 | scripts [R] ; preuve du rejeu de bout en bout [M] en recette |
 
 **Lecture pour le jury** : ce document ne revendique **aucune conformité** NIS2 ou DORA. Il établit (1) quelles exigences un prototype de 4 jours peut **prouver**, avec la preuve et sa limite ; (2) celles qu'il **ne peut pas** prouver ; (3) les arbitrages recommandés à une direction, chacun appuyé sur un élément du démonstrateur que l'on peut vérifier.

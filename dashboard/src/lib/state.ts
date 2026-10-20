@@ -168,6 +168,8 @@ function applyMessage(state: DashboardState, m: StreamMessage): DashboardState {
       }
     case 'verify_tx':
       return { ...state, lastVerification: m.verify }
+    case 'timeline_note':
+      return state // informatif (action en cours, cooldown, dry-run) : rien à changer
   }
 }
 

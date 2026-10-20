@@ -19,6 +19,7 @@ if [[ ! -f "${SOPS_AGE_KEY_FILE}" ]]; then
   exit 1
 fi
 
-sops --decrypt "${ENC}" > "${OUT}"
+# umask 077 : le fichier déchiffré est créé d'emblée en 0600 (pas de fenêtre lisible par autrui).
+(umask 077; sops --decrypt "${ENC}" > "${OUT}")
 chmod 600 "${OUT}"
 echo "Secrets déchiffrés vers ${OUT} (non commité)."

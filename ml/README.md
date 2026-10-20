@@ -22,7 +22,7 @@ garde-fou documenté ; la classification `incident_type` n'est qu'une heuristiqu
 
 ```bash
 python3 -m venv /tmp/rc-ml && /tmp/rc-ml/bin/pip install -r ml/requirements-dev.txt
-cd ml && /tmp/rc-ml/bin/python -m pytest           # 50 tests, ~2 s
+cd ml && /tmp/rc-ml/bin/python -m pytest           # 51 tests, ~2 s
 ```
 
 ## Entraîner puis construire les images (contexte = racine du dépôt)

@@ -1,7 +1,6 @@
 """La récupération est testée SANS LLM : uniquement embeddings + Chroma."""
 
 import pytest
-
 from app.embeddings import HashEmbeddings, tokenize
 from app.rag import retrieve
 

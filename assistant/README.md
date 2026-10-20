@@ -156,7 +156,7 @@ Onglet « Assistant » intégré au dashboard : iframe sur `/assistant/`, proxif
 
 ## Logs, métriques, sondes
 
-- Logs JSON du contrat (`service: "assistant"`), `request_id` (reprend `X-Request-ID` ou en génère un). Événements émis : `assistant_index_built`, `assistant_index_empty`, `assistant_store_error`, `assistant_http_request`, `assistant_question_answered`, `assistant_incident_summarized`, `assistant_postmortem_generated`, `assistant_action_proposed`, `assistant_llm_unavailable` (contenus libres jamais journalisés, seulement les longueurs ; déclarés dans `docs/contracts.md §1`) ; ils ne sont pas utilisés par les règles d'alerte.
+- Logs JSON du contrat (`service: "assistant"`), `request_id` (reprend `X-Request-ID` ou en génère un). Événements émis : `assistant_index_built`, `assistant_index_empty`, `assistant_store_error`, `assistant_http_request`, `assistant_question_answered`, `assistant_incident_summarized`, `assistant_postmortem_generated`, `assistant_action_proposed`, `assistant_llm_unavailable` (contenus libres jamais journalisés, seulement les longueurs). Ces noms sont **déclarés dans `docs/contracts.md §1`** et dans `resilience_common.RESERVED_EVENTS` ; `test_event_contract.py` échoue si l'assistant en émet un hors contrat. Ils ne sont pas utilisés par les règles d'alerte SOC.
 - `/metrics` : `resilience_http_requests_total`, `resilience_http_request_duration_seconds`.
 - `GET /health` (liveness), `GET /ready` (200 si Chroma chargé et non vide ; Ollama sondé, absence tolérée -> `mode: "degraded"`).
 - Erreurs : `{"error": {"code", "message", "request_id"}}`.

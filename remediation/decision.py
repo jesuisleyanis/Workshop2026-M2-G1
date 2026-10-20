@@ -15,10 +15,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from actions import REGISTRY, ActionParamError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from resilience_common import IncidentType
-
-from actions import REGISTRY, ActionParamError
 
 AVAILABILITY_ACTIONS = frozenset({"restart_service", "recreate_service"})
 RESTORE_ACTIONS = frozenset({"restore_pg_dump"})

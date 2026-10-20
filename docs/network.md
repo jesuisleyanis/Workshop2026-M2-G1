@@ -17,13 +17,14 @@ Point d'accès : partage de connexion Windows **`RESILIENCE-G1`**, sous-réseau 
 | Réseau | `internal` | Services | Ports publiés |
 |---|---|---|---|
 | `edge` | non | waf | **80, 443** (les seuls publiés) |
-| `app` | oui | front, payment-api, auth, collector, detector, remediation, docker-socket-proxy, dashboard, assistant | aucun |
-| `data` | **oui** | postgres, pg-exporter | aucun |
-| `obs` | oui | prometheus, loki, promtail, grafana, alertmanager, cadvisor | aucun (accès via tunnel/port-forward local pour le dev) |
+| `app` | non | front, payment-api, auth, collector, detector, remediation, docker-socket-proxy, dashboard, assistant | aucun |
+| `data` | **oui** | postgres, pg-exporter, remediation (uniquement pour `pg_restore` : correction de corruption) | aucun |
+| `obs` | oui | prometheus, loki, promtail, grafana, alertmanager, cadvisor, waf-exporter | aucun (accès via tunnel/port-forward local pour le dev) |
 
-- `data` est en `internal: true` : Postgres et les secrets ne sont **jamais** joignables depuis le hotspot.
+- `data` et `obs` sont en `internal: true` : Postgres, secrets et observabilité ne sont **jamais** joignables depuis le hotspot ni ne sortent vers Internet.
+- `app` n'est **pas** `internal` : c'est le seul réseau avec sortie (pull d'images, modèles Ollama). Aucun service n'y publie de `ports:`.
 - Aucun service autre que le WAF ne fait de `ports:` dans `docker-compose.yml`. Rien sur `0.0.0.0` hors WAF.
-- Le moteur de remédiation est sur `app` uniquement — **jamais** sur `edge`.
+- Le moteur de remédiation est sur `app` + `data` (restauration Postgres en direct, sans `docker exec`) — **jamais** sur `edge`, aucun `ports:`.
 
 ## Pare-feu Windows (PC Hôte)
 

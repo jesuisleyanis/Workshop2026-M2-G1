@@ -50,7 +50,14 @@ Une vérification en échec ne fait **jamais** passer en APRÈS. Un nouvel incid
 
 ## 3. Interfaces consommées
 
-Principale : le **flux SSE du moteur de remédiation**, `GET http://remediation:8005/stream` (docs/contracts.md : « SSE/WebSocket -> Dashboard »). Le navigateur n'appelle jamais `remediation:8005` directement : il ouvre `<VITE_REMEDIATION_BASE>/stream` (défaut `/remediation/stream`), proxifié par Vite en dev et par nginx en prod.
+Deux, toutes deux **same-origin** derrière le nginx du dashboard (CSP `connect-src 'self'`) :
+
+| Source | Chemin navigateur | Proxifié vers | Alimente |
+|---|---|---|---|
+| **Flux SSE du moteur de remédiation** (docs/contracts.md : « SSE/WebSocket -> Dashboard ») | `<VITE_REMEDIATION_BASE>/stream` (défaut `/remediation/stream`) | `remediation:8005/stream` (Bearer injecté par nginx) | incidents, timeline, actions, vérification, MTTD/MTTR |
+| **Prometheus** (API instantanée, GET, lecture seule) | `<VITE_PROMETHEUS_BASE>/api/v1/query` (défaut `/prometheus/api/v1/query`) | `prometheus:9090/api/v1/query` | courbe de score (`resilience_anomaly_score{service}`), grille des services (`up{job}`) |
+
+Le navigateur n'appelle jamais `remediation:8005` ni `prometheus:9090` directement (Vite proxifie en dev, nginx en prod). Le moteur **n'émet ni `score` ni `health`** : ces deux signaux sont lus dans Prometheus toutes les `VITE_METRICS_POLL_MS` (2 s), via `usePrometheusPolling`, et passent dans le même réducteur que le flux SSE. En simulation locale, c'est le simulateur qui les produit.
 
 À la demande de l'opérateur (D17, D18), via les mêmes proxys :
 
@@ -68,14 +75,38 @@ Erreurs au format `{error:{code,message,request_id}}`, affichées « `code : mes
 - **AnomalyEvent** : schéma figé du contrat §3 (`schema_version`, `event_id`, `ts`, `source`, `service`, `anomaly_score`, `threshold`, `incident_type`, `features_top[{name,value,z}]`, `evidence{prometheus_query,loki_query}`). Validé strictement par `parseAnomalyEvent` : `schema_version` majeure 1, `incident_type` dans l'énumération figée (`service_flood`, `auth_abuse`, `web_attack`, `data_corruption`, `unknown`). Un événement non conforme est rejeté et compté.
 - **Événements normalisés** de §1 repris comme noms d'événements SSE : `anomaly_detected`, `remediation_started`, `remediation_action`, `remediation_verified`, `remediation_failed`.
 
-### Hypothèses d'enveloppe SSE (à aligner avec `remediation/`)
+### Enveloppe SSE réelle du moteur : `event: timeline`
 
-Le contrat fige l'AnomalyEvent et les noms d'événements, **pas** la forme des messages du flux. Le dashboard suppose des trames SSE avec `event: <nom>` et `data: <JSON>` (si `event:` est absent, le type est lu dans `type` ou `event` du JSON) :
+Le moteur émet **une seule forme de trame** (`remediation/timeline.py`) :
+
+```
+id: <id de timeline>
+event: timeline
+data: {"id", "incident_id", "incident_type", "ts", "phase", "status", "message", "data": {...}}
+```
+
+`phase` ∈ `detection | decision | action | verification | closure | escalation`, `status` ∈ `info | running | ok | ko | failed | skipped | dry_run`. `parseTimelineFrame` valide la trame (incident_type de l'énumération figée, `ts` ISO, phase/status connus) puis `adaptTimelineFrame` la traduit en message interne :
+
+| `phase` / `status` | `data` lus | Message interne |
+|---|---|---|
+| `detection` / `info` | `event_id`, `source`, `service`, `anomaly_score`, `threshold`, `features_top` (+ `incident_type` de la trame) | `anomaly_detected` : **AnomalyEvent reconstruit et validé §3** (`schema_version` 1.0, `ts` = celui de la trame) |
+| `decision` / `info` avec `actions` | `actions[{type,params}]`, `dry_run` | `remediation_started` |
+| `action` / `ok` · `failed` · `dry_run` | `action`, `attempt` ; `message` = détail | `remediation_action` (`ok` / `failed` / `skipped`) |
+| `verification` / `ok` · `ko` | — | `remediation_verified` avec `verify_tx.ok` (sans MTTD/MTTR) |
+| `closure` / `ok` | `mttd_seconds`, `mttr_seconds` | `remediation_verified` (MTTD / MTTR affichés) |
+| `escalation` / `failed` | `reason` | `remediation_failed` |
+| tout le reste (`running`, `skipped`, cooldown, doublon, dry-run clos) | — | `timeline_note` : accepté, **sans effet** sur l'état, jamais compté comme rejet |
+
+Une trame invalide est rejetée **et comptée** (D9). La table est totale sur (phase, status) : aucune trame réelle n'est droppée silencieusement (`src/lib/timeline.test.ts` le vérifie avec des trames capturées sur le moteur). Un `verify_tx` OK (`verification/ok`) suffit à passer en APRÈS ; la clôture qui suit apporte MTTD/MTTR.
+
+### Kinds internes (également acceptés comme nom d'événement SSE)
+
+Le mock et le simulateur peuvent aussi émettre directement les kinds internes avec `event: <nom>` et `data: <JSON>` (si `event:` est absent, le type est lu dans `type` ou `event` du JSON ; une trame portant `phase` + `incident_id` est traitée comme `timeline`) :
 
 | `event:` | `data` (JSON) | Effet |
 |---|---|---|
-| `health` | `{ts?, services:[{name, status:"up"\|"degraded"\|"down", detail?}]}` | `ServicesGrid` (fusion par nom) |
-| `score` | `{ts?, service?, anomaly_score, threshold?}` (période ~1 s, gauge `resilience_anomaly_score`) | jauge + historique |
+| `health` | `{ts?, services:[{name, status:"up"\|"degraded"\|"down", detail?}]}` — **en réel : produit depuis `up{job}` Prometheus** (job→service : `waf-exporter`→`waf`, `payment-api`, `auth`, `detector`, `remediation`, `postgres`) | `ServicesGrid` (fusion par nom) |
+| `score` | `{ts?, service?, anomaly_score, threshold?}` — **en réel : produit depuis `resilience_anomaly_score{service}` Prometheus** (seuil : `DEFAULT_THRESHOLD` 0.6, le détecteur n'exporte pas de gauge de seuil) | jauge + historique |
 | `anomaly_detected` | **AnomalyEvent** + `incident_id` (repli : `event_id`) | ouvre l'incident, étape Détection |
 | `remediation_started` | `{ts, incident_id, incident_type?, service?, actions:[{type,params?}], dry_run?}` | étape Décision |
 | `remediation_action` | `{ts, incident_id, action:"<type>", result:"ok"\|"failed"\|"skipped", detail?, attempt?}` | étape Action |
@@ -83,11 +114,11 @@ Le contrat fige l'AnomalyEvent et les noms d'événements, **pas** la forme des 
 | `remediation_failed` | `{ts, incident_id, reason}` | échec / escalade, reste PENDANT |
 | `verify_tx` | `{ts?, ok, tx_id?, duration_ms?}` (transactions de contrôle périodiques, dont l'état AVANT) | carte « dernière vérification » |
 
-Points de vigilance côté moteur :
-- Pour que **MTTD** s'affiche, `mttd_seconds` doit être fourni (le dashboard ne connaît pas l'instant de début de l'attaque). **MTTR** : `mttr_seconds` si fourni, sinon repli détection -> `verify_tx` OK.
+Points de vigilance :
+- **MTTD / MTTR** viennent de la trame `closure` du moteur (`mttd_seconds`, `mttr_seconds`) ; repli MTTR : détection -> `verify_tx` OK.
 - Les noms d'actions suivent le catalogue §4 (`waf_block_ip`, `restart_service`, ...). Un nom inconnu est affiché tel quel.
-- Un seul point d'adaptation en cas d'écart : `src/lib/parse.ts` (couvert par `src/lib/parse.test.ts`).
-- `npm run mock` fournit un faux moteur conforme à ce tableau pour le dev et les répétitions.
+- Un seul point d'adaptation : `src/lib/parse.ts` (`parseTimelineFrame` + `adaptTimelineFrame`), couvert par `src/lib/timeline.test.ts` (trames réelles) et `src/lib/parse.test.ts`.
+- `npm run mock` émet l'enveloppe réelle `timeline` et sert `/api/v1/query` (Prometheus factice) pour le dev et les répétitions.
 
 ## 4. Variables d'environnement
 
@@ -108,7 +139,8 @@ Points de vigilance côté moteur :
 ## 5. Exécution et exposition
 
 - Dev : `npm run dev` sur le port **5174** (strict).
-- Prod : conteneur nginx non-root écoutant **8080**, réseau `app` (doit joindre `remediation:8005`). nginx sert le statique **et** proxifie **uniquement** `GET /remediation/stream` (SSE : `proxy_buffering off`, timeout 1 h), `POST /remediation/manual-actions` (corps ≤ 4 Ko, jeton injecté) et les routes de l'assistant RAG `GET /assistant/`, `GET /assistant/static/*`, `POST /assistant/api/v1/(ask|summarize|postmortem|propose)` (préfixe retiré, timeout 130 s) ; tout autre `/remediation/*` ou `/assistant/*` renvoie 404, et toute autre méthode 403. L'API `/events` du moteur n'est jamais atteignable depuis le navigateur. Healthcheck : `GET /healthz`.
+- Prod : conteneur nginx non-root écoutant **8080**, réseau `app` (doit joindre `remediation:8005`, `prometheus:9090` et `assistant:8006`). nginx sert le statique **et** proxifie **uniquement** `GET /remediation/stream` (SSE : `proxy_buffering off`, timeout 1 h, `Authorization: ${REMEDIATION_AUTH_HEADER}` injecté), `POST /remediation/manual-actions` (corps ≤ 4 Ko, jeton injecté), `GET /prometheus/api/v1/query` (`limit_except GET`, lecture seule) et les routes de l'assistant RAG `GET /assistant/`, `GET /assistant/static/*`, `POST /assistant/api/v1/(ask|summarize|postmortem|propose)` (préfixe retiré, timeout 130 s) ; tout autre `/remediation/*`, `/prometheus/*` ou `/assistant/*` renvoie 404, et toute autre méthode 403. L'API `/events` du moteur et l'administration de Prometheus ne sont jamais atteignables depuis le navigateur. Healthcheck : `GET /healthz`.
+- Compose (`infra/compose/docker-compose.yml`) : `REMEDIATION_UPSTREAM`, `REMEDIATION_AUTH_HEADER="Bearer ${REMEDIATION_TOKEN}"` (SOPS), `PROMETHEUS_UPSTREAM`, `ASSISTANT_UPSTREAM` en variables **runtime** ; les `VITE_*` sont des build-args figés au build (le défaut `/remediation` convient derrière ce nginx). `read_only` + `tmpfs /tmp`, healthcheck `/healthz`.
 - Le build utilise `base: './'` : l'app peut être servie à la racine d'un hôte ou sous un sous-chemin (dans ce cas régler `VITE_REMEDIATION_BASE` au build en conséquence).
 
 ## 6. Sécurité

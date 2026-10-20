@@ -2,7 +2,12 @@ from dataclasses import replace
 from pathlib import Path
 
 from app.indexer import build_index, main
-from app.loader import load_decision_table, load_incident_journal, load_markdown_docs, split_documents
+from app.loader import (
+    load_decision_table,
+    load_incident_journal,
+    load_markdown_docs,
+    split_documents,
+)
 from app.store import count, open_store, stored_backend
 
 from tests.conftest import FIXTURES, make_settings

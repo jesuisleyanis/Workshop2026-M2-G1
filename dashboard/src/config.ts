@@ -18,6 +18,15 @@ export const MANUAL_ACTIONS_URL = `${REMEDIATION_BASE}/manual-actions`
 export const GRAFANA_BASE: string = trim(import.meta.env.VITE_GRAFANA_BASE ?? 'http://localhost:3000')
 
 /**
+ * Score ML et santé des services : le moteur n'émet ni `score` ni `health`. Ils sont lus dans
+ * Prometheus (`resilience_anomaly_score`, `up`) via le proxy nginx en lecture seule
+ * `/prometheus/api/v1/query` (same-origin : la CSP `connect-src 'self'` reste valable).
+ * Chaîne vide = polling désactivé.
+ */
+export const PROMETHEUS_BASE: string = trim(import.meta.env.VITE_PROMETHEUS_BASE ?? '/prometheus')
+export const METRICS_POLL_MS: number = Number(import.meta.env.VITE_METRICS_POLL_MS ?? 2000) || 2000
+
+/**
  * Source des événements :
  *  - live       : flux SSE réel uniquement (défaut, démo jury) ;
  *  - auto       : flux réel, bascule en simulation locale s'il n'a jamais pu s'ouvrir ;

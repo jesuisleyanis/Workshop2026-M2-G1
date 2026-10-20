@@ -23,6 +23,19 @@ PC Attaquant (autre PC du groupe)            PC Hôte (192.168.137.1)
 > **Procédure complète pas-à-pas depuis le PC Attaquant : [`RUNBOOK-PC-ATTAQUANT.md`](RUNBOOK-PC-ATTAQUANT.md)** (pré-vol, lancement, observation, MTTD/MTTR, kill-switch, ordre pour le Clip Chrono).
 >
 > **Pannes NON-attaque (chaos engineering) : [`chaos/README.md`](chaos/README.md)** — crash/gel bornés et réversibles pour prouver la résilience intrinsèque (restart policy, healthchecks), distincte de la chaîne Red Team.
+>
+> **Console de pilotage locale : [`console/README.md`](console/README.md)** — UI web (local-only, PC Attaquant) pour lancer les scénarios, suivre la chaîne de reprise et le journal, kill-switch/reset. Garde-fous côté serveur.
+>
+> **Catalogue complet et pédagogique : [`ATTACKS.md`](ATTACKS.md)** — ce que fait chaque attaque et quelle facette de défense elle éprouve (scénarios-contrat, campagne, techniques avancées).
+>
+> **Techniques avancées** (`run.sh rotation|pulse|recon|replay|slow`, ou panneau console) — chacune vise un angle mort : robustesse de la remédiation (source qui tourne), seuils temporels (rafales pulsées), largeur de détection (recon), intégrité (rejeu), lenteur (Slowloris borné). Détail dans `ATTACKS.md`.
+>
+> **Campagne multi-étapes `campaign.sh` (Opération Triade)** — enchaîne 3 vagues décalées (`auth_abuse` → `web_attack` → `service_flood`) pour éprouver la corrélation SOC et la remédiation d'incidents successifs. Chaque vague délègue à `run.sh` (plafonds appliqués), réversible, kill-switch `campaign.sh --stop`.
+>
+> ```bash
+> attacks/campaign.sh --target https://192.168.137.1   # ou bouton "Opération Triade" dans la console
+> attacks/campaign.sh --stop                           # kill-switch
+> ```
 
 ## Mise en place
 
@@ -44,8 +57,13 @@ attacks/run.sh service_flood --target https://192.168.137.1 --duration 20 --rate
 
 ```bash
 attacks/run.sh --stop        # arrête tout scénario en cours (SIGTERM aux générateurs)
-attacks/reset.sh             # remet la cible à l'état "avant" (re-seed + redéploiement)
+attacks/reset.sh             # remet la cible à l'état "avant" (deny-list vidée, revert data_corruption, re-seed)
 ```
+
+`reset.sh` annule aussi une corruption `data_corruption` en cours (renommage inverse via
+`db_corrupt_fake.yml -e mode=revert`, inventaire `hosts.ini` explicite). Il ne masque pas les erreurs :
+un échec Ansible fait sortir le script en code non nul (`set -e`). Si la base n'est pas démarrée, le
+revert est simplement signalé comme sans objet.
 
 Chaque exécution journalise début/fin horodatés dans `attacks/.runlog` pour corréler avec le MTTD/MTTR mesuré côté Blue Team.
 

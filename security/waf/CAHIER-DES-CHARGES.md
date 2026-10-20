@@ -10,9 +10,10 @@ Pare-feu applicatif en frontal, **seul point exposé** de la plateforme. Couvre 
 
 - Reverse-proxy vers le front (statique) et les API métier (`/api/v1/...`).
 - ModSecurity + jeu de règles OWASP CRS actifs.
-- TLS auto-signé (environnement de labo fermé).
-- **Liste de blocage IP rechargeable à chaud** (`blocked_ips.conf`), pilotée par le moteur de remédiation.
-- `waf_exporter.py` : transforme les blocages ModSecurity en métrique `resilience_waf_blocked_total{rule}` et en log event `waf_blocked` (contrat §1).
+- TLS auto-signé généré au build de l'image (environnement de labo fermé).
+- Image officielle OWASP CRS (nginx *unprivileged*, non-root) : écoute 8080/8443, publiée 80/443 par Compose.
+- **Liste de blocage IP rechargeable à chaud** (`deny/blocked_ips.conf`, volume partagé `waf-deny`), pilotée par le moteur de remédiation (écriture par playbook, reload par SIGHUP via le docker-socket-proxy).
+- **`waf-exporter`** (`waf_exporter.py`, conteneur dédié `Dockerfile.exporter`) : suit l'audit log ModSecurity (JSON, volume partagé `waf-logs`) et transforme chaque blocage en métrique `resilience_waf_blocked_total{rule}` (`/metrics` :9188, réseau `obs`) et en log event `waf_blocked` (contrat §1).
 
 Hors périmètre : terminaison TLS de production, gestion de certificats signés, répartition de charge.
 
@@ -21,9 +22,10 @@ Hors périmètre : terminaison TLS de production, gestion de certificats signés
 | Interface | Direction | Détail |
 |---|---|---|
 | HTTP 80/443 | entrée | Seul point exposé ; transmet `X-Forwarded-For` |
-| `blocked_ips.conf` | entrée (remédiation) | `waf_block_ip`/`waf_blacklist_ip` ajoutent `"<ip> 1;"` puis `nginx -s reload` |
+| `deny/blocked_ips.conf` (volume `waf-deny`) | entrée (remédiation) | `waf_block_ip`/`waf_blacklist_ip` ajoutent `"<ip> 1;"` (playbook in-container) puis SIGHUP au conteneur = `nginx -s reload` |
 | access log JSON `json_waf` | sortie | Récupéré par Promtail → Loki (fonction SOC) |
-| `resilience_waf_blocked_total{rule}` | sortie | Métrique §2, alimente `waf_blocked_per_s` du vecteur ML |
+| audit log ModSecurity (volume `waf-logs`) | sortie (interne) | JSON Serial, blocages 4xx/5xx ; lu en lecture seule par `waf-exporter` |
+| `resilience_waf_blocked_total{rule}` | sortie | Métrique §2 exposée par `waf-exporter` (:9188, `obs`), scrappée par Prometheus ; alimente `waf_blocked_per_s` du vecteur ML et la règle SOC `soc-waf-blocks` |
 
 ## Contraintes de sécurité
 
@@ -35,10 +37,10 @@ Hors périmètre : terminaison TLS de production, gestion de certificats signés
 
 - [ ] Une requête légitime vers le front et `/api/v1/*` est relayée (200).
 - [ ] Une charge typée injection/traversal est bloquée par le CRS (403) et comptée.
-- [ ] Une IP ajoutée à `blocked_ips.conf` + reload reçoit 403.
+- [ ] Une IP ajoutée à `deny/blocked_ips.conf` + reload (SIGHUP) reçoit 403.
 - [ ] Les blocages apparaissent en métrique et en log `waf_blocked`.
 - [ ] Aucun service interne n'est joignable depuis le hotspot (vérifié par `docs/network.md`).
 
 ## Tests
 
-`python -m pytest security/waf/tests/ -q` — parsing des blocages ModSecurity → métrique/event (5 tests). La validation du proxy complet se fait avec la stack levée.
+`python -m pytest security/waf/tests/ -q` — exporteur (parsing des blocages ModSecurity → métrique exposée, suivi du journal d'audit) + contrat de configuration Dockerfile / nginx.conf / compose (upstream `front:8080`, non-root, TLS au build, routes publiques seules, healthcheck) : **25 tests**. La validation du proxy complet se fait avec la stack levée.

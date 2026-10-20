@@ -13,23 +13,23 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
+import http_metrics
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response, StreamingResponse
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel, ConfigDict, Field
-from resilience_common import get_logger
-
 from actions import ActionError, ActionParamError
 from actions.docker_proxy import DockerProxy
 from actions.runner import AnsibleRunnerAdapter
+from alertmanager import AlertmanagerPayload, to_events
 from config import Settings
 from decision import DecisionTable, DecisionTableError, load_decision_table
-import http_metrics
 from engine import RemediationEngine, Services
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from journal import Journal
 from models import IncomingEvent
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from pydantic import BaseModel, ConfigDict, Field
+from resilience_common import get_logger
 from timeline import Broker, sse_stream
 from verify import ScriptVerifier
 
@@ -71,7 +71,7 @@ def create_app(
         services = Services(
             http=http,
             docker=DockerProxy(http, settings.docker_proxy_url, settings.docker_allow_recreate),
-            runner=AnsibleRunnerAdapter(settings.ansible_private_data_dir),
+            runner=AnsibleRunnerAdapter(settings.ansible_private_data_dir, settings.ansible_project_dir),
             verifier=ScriptVerifier(settings.verify_tx_path, settings.verify_timeout_s),
         )
     engine = RemediationEngine(table=table, settings=settings, journal=journal, broker=broker,
@@ -100,7 +100,13 @@ def create_app(
     # --------------------------------------------------------------- middleware
     @app.middleware("http")
     async def request_context(request: Request, call_next):
-        rid = request.headers.get("x-request-id") or str(uuid.uuid4())
+        # On n'accepte un X-Request-ID entrant que s'il s'agit d'un UUID (anti log-forging,
+        # parité avec auth/payment-api) ; toute autre valeur est remplacée.
+        raw_rid = request.headers.get("x-request-id")
+        try:
+            rid = str(uuid.UUID(raw_rid)) if raw_rid else str(uuid.uuid4())
+        except (ValueError, AttributeError, TypeError):
+            rid = str(uuid.uuid4())
         request.state.request_id = rid
         t0 = time.monotonic()
         response = await call_next(request)
@@ -182,6 +188,20 @@ def create_app(
         except (ActionParamError, ActionError) as exc:  # rien n'a été exécuté ni journalisé
             code = "invalid_params" if isinstance(exc, ActionParamError) else "action_refused"
             return _error(422, code, str(exc), request)
+
+    @app.post("/events/alertmanager", status_code=202, dependencies=[auth])
+    async def post_alertmanager(payload: AlertmanagerPayload) -> dict[str, Any]:
+        """Webhook Alertmanager (chemin SOC, secondaire) : chaque alerte firing avec un label
+        `incident_type` est traduite en AnomalyEvent (§3) puis soumise au moteur comme /events."""
+        accepted, skipped = to_events(payload)
+        results = []
+        for alert, event in accepted:
+            sub = await engine.handle_event(event)
+            results.append({"alertname": alert.name, "incident_id": sub.incident_id, "decision": sub.decision,
+                            "dry_run": sub.dry_run, "detail": sub.detail})
+        for sk in skipped:
+            log.info(f"Alerte SOC ignorée : {sk.alertname} ({sk.reason})")
+        return {"accepted": results, "skipped": [sk.model_dump() for sk in skipped]}
 
     @app.get("/incidents", dependencies=[auth])
     async def list_incidents(limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:

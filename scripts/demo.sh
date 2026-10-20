@@ -5,6 +5,8 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Identifiants du jeu fictif (SEED_PASSWORD) : .env produit par `make decrypt`.
+if [[ -f "${ROOT}/.env" ]]; then set -a; . "${ROOT}/.env"; set +a; fi
 SCENARIO="${1:-service_flood}"
 TARGET="${TARGET:-https://192.168.137.1}"
 

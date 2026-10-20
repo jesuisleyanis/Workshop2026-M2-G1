@@ -1,8 +1,10 @@
 ---
-# Sauvegarde : crée un dump Postgres SAIN dans backups/ (filet de sécurité du PRA).
-# Prérequis de l'action de remédiation restore_pg_dump (pg_restore.yml) : sans dump
-# sain préalable, la restauration n'a rien à restaurer. À jouer AVANT le scénario
-# data_corruption (état "avant" nominal), ou périodiquement (backup planifié).
+# Sauvegarde : crée un dump Postgres SAIN dans infra/ansible/backups/ (filet de sécurité du PRA).
+# Prérequis de l'action de remédiation restore_pg_dump (playbooks/remediation/pg_restore.yml,
+# exécuté dans le conteneur remediation qui monte ce dossier en lecture seule sous /opt/backups) :
+# sans dump sain préalable, la restauration n'a rien à restaurer. À jouer AVANT le scénario
+# data_corruption (état "avant" nominal), ou périodiquement (backup planifié). Côté hôte :
+#   ansible-playbook -i inventory/hosts.ini playbooks/pg_backup.yml
 - name: Créer un dump Postgres sain
   hosts: host
   gather_facts: false
@@ -16,7 +18,7 @@
       ansible.builtin.file:
         path: "{{ backup_dir }}"
         state: directory
-        mode: "0750"
+        mode: "0755"   # lisible par l'utilisateur non-root (uid 10001) du conteneur remediation
 
     - name: Horodatage du dump
       ansible.builtin.set_fact:
@@ -27,6 +29,7 @@
         docker exec {{ db_container }} pg_dump --format=custom \
           -U {{ db_user }} -d {{ db_name }} \
           > "{{ backup_dir }}/resilience-{{ dump_stamp }}.dump"
+        chmod 0644 "{{ backup_dir }}/resilience-{{ dump_stamp }}.dump"
       changed_when: true
 
     - name: Confirmer que le dump est non vide
