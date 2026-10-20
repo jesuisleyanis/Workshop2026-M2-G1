@@ -106,13 +106,13 @@ Phase 9  Consigne add. 1  [#######...]  75%   intégration de bout en bout codé
 | Lot | Objet | Composant(s) | Statut | Preuve |
 |---|---|---|---|---|
 | L0 | Delta contrat + ADR 0004/0005/0006/**0007** + modèle données (rôles, `face_enrollments`, photos chiffrées) | `docs/contracts.md`, `docs/adr`, `resilience_db` | ✅ | contrat §5 v2 (§5.1-5.6) + migrations `0002`/`0003` ; `resilience_db` 10 + `resilience_common` 5 tests verts |
-| L1 | Service `face-id` v2 (modèle équipe dlib, 3 poses, photos chiffrées AES-256-GCM) | `services/face-id` | 🟨 | **93 tests verts** ; reste le `docker build` de dlib et le smoke du modèle réel (recette) |
-| L2 | Auth à étapes (identifiant→visage→mdp) : poses aléatoires, refroidissements 30 s / 3 s, verrouillage 5 min **[critique]** | `services/auth` | ✅ | **186 tests auth verts** |
-| L3 | Back-office React : login v2, `FaceScanner`, habilitations, assistant « Nouvel agent », initialisation **[critique]** | `services/backoffice` | 🟨 | **131 tests Vitest** ; reste caméra réelle + calibrage des marges de capture (recette) |
+| L1 | Service `face-id` v2 (modèle équipe dlib, 3 poses, photos chiffrées AES-256-GCM) | `services/face-id` | 🟨 | **94 tests verts** ; reste le `docker build` de dlib et le smoke du modèle réel (recette) |
+| L2 | Auth à étapes (identifiant→visage→mdp) : poses aléatoires, refroidissements 30 s / 3 s, verrouillage 5 min **[critique]** | `services/auth` | ✅ | **197 tests auth verts** |
+| L3 | Back-office React : login v2, `FaceScanner`, habilitations, assistant « Nouvel agent », initialisation **[critique]** | `services/backoffice` | 🟨 | **134 tests Vitest** ; reste caméra réelle + calibrage des marges de capture (recette) |
 | L4 | Firmware ESP8266 LED bicolore (CLion/PlatformIO, machine à états) | `iot/esp8266-led` | 🟨 | machine à états + tests native + firmware posés ; recette matérielle |
 | L5 | Transport MQTT (broker Mosquitto durci + `MqttLedNotifier` fail-open + `GET /auth/device`) | `infra/compose`, `services/auth` | 🟨 | 30 tests MQTT + tests infra ; reste broker live + ESP (recette) |
 | L6 | Habilitations (rôles, API admin, enrôlement/révocation, garde `last_admin`, bootstrap du premier admin) | `services/{auth,face-id,backoffice}` | ✅ | tests auth (`test_admin.py`) + Vitest |
-| L7 | Infra & observabilité (compose, listener hôte WAF 9443, SOPS, scrape `face-id`) | `infra/*`, `security/*` | 🟨 | 54 tests infra + WAF ; reste `compose up`, `nginx -t`, Loki (recette) et L7-4 (`make test` n'inclut pas face-id/back-office) |
+| L7 | Infra & observabilité (compose, listener hôte WAF 9443, SOPS, scrape `face-id`) | `infra/*`, `security/*` | 🟨 | 57 tests infra + WAF ; L7-4 ✅ (`make test` agrège face-id et back-office, `1c57b64`) ; reste `compose up`, `nginx -t`, Loki (recette) |
 | L8 | Sécurité & RGPD (biométrie chiffrée, amendement de « jamais d'image », surface MQTT/caméra) | `security/*`, `services/face-id` | 🟨 | L8-2 ✅ (ADR 0007, chiffrement testé) ; **amendement à valider par l'équipe (Yanis)** ; reste revue sécurité du flux (L8-1), `audit.sh` (L8-3) |
 | L9 | Gouvernance (EBIOS biométrie, PCA/PRA break-glass, NIS2/DORA accès) | `docs/{ebios-rm,pca-pra,nis2-dora}.md` | 🟨 | EBIOS (annexe) + PCA/PRA §5.7 rédigés ; reste NIS2/DORA (L9-3) |
 | L10 | Recette & e2e (flux complet + **ZTR inchangé** + checklist matériel) | `tests/e2e`, `docs/` | ⬜ | backlog L10 : **aucune recette n'a été faite** (caméra, dlib, ESP, broker) |

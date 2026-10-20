@@ -60,7 +60,7 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `led_publish_failed` | auth | Publication LED impossible (broker injoignable — fail-open) |
 | `face_verify_match` | face-id | Vérification 1:1 : le visage correspond à l'identifiant |
 | `face_verify_nomatch` | face-id | Vérification 1:1 : le visage ne correspond pas |
-| `face_verify_error` | face-id | Erreur de vérification (image illisible, aucun visage détecté) |
+| `face_verify_error` | face-id | Traitement impossible : vérification impossible (gabarit d'un autre modèle, gabarit ou photos illisibles), erreur interne du modèle |
 | `face_enrolled` | face-id | Enrôlement d'un visage (gabarits et vignettes stockés **chiffrés**, jamais l'image pleine résolution ni dans un log) |
 | `face_enrollment_revoked` | face-id | Révocation d'un enrôlement (droit à l'effacement) |
 | `auth_cooldown` | auth | Refroidissement actif après un refus (visage 30 s, mot de passe 3 s) |
@@ -73,7 +73,7 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `face_enrollment_rejected` | face-id | Enrôlement refusé (pose manquante ou incorrecte, visages multiples, aucun visage) |
 | `transaction_created` | payment-api | Virement fictif accepté |
 | `transaction_rejected` | payment-api | Virement refusé (solde, validation) |
-| `db_error` | payment-api | Erreur base de données |
+| `db_error` | payment-api, face-id | Erreur base de données (face-id : readiness KO, erreur SQL non gérée) |
 | `waf_blocked` | waf (via log Nginx/ModSec) | Requête bloquée par le CRS |
 | `anomaly_detected` | detector | Le score dépasse le seuil |
 | `model_version_drift` | detector | Version scikit-learn chargée ≠ version d'entraînement du modèle |
@@ -264,7 +264,7 @@ Reconnaissance **1:1** (vérification identifiant ↔ visage) par **séquence de
 | `POST /api/v1/enroll` | `X-Internal-Token` | `{username, enrolled_by, poses:{face, gauche, droite}}` (images base64) → `200 {enrolled, model_version, poses}`. Une pose KO ⇒ **toute la série est refusée** : `422 {error:{code:"enrollment_rejected", details:[{pose, reason}]}}`, `reason ∈ no_face \| multiple_faces \| wrong_pose \| inconsistent \| missing \| invalid_image` ; `404 unknown_user`. |
 | `GET /api/v1/enrollments/{username}/photos?viewer=<admin>` | `X-Internal-Token` | Vignettes JPEG (~240 px) **déchiffrées** `{photos:{pose: b64}}` pour l'administrateur ; journalise `face_photos_viewed` (qui a consulté les photos de qui). `404 not_enrolled`. |
 | `DELETE /api/v1/enroll/{username}` | `X-Internal-Token` | `204`. Droit à l'effacement : suppression **complète** (gabarits + photos). |
-| `GET /api/v1/enrollments` | `X-Internal-Token` | `[{username, enrolled_at, enrolled_by, model_version}]` — **aucune donnée biométrique**. |
+| `GET /api/v1/enrollments` | `X-Internal-Token` | `[{username, enrolled_at, enrolled_by, model_version, poses, usable}]` — **aucune donnée biométrique**. `usable: bool` = la ligne est vérifiable par le modèle chargé (`model_version` égal au `model_version` courant du recognizer **et** vignettes chiffrées présentes, donc format v2). `false` (changement de modèle, ligne v1) ⇒ toute vérification échoue, **réenrôlement requis** ; `auth` ne compte alors **pas** la ligne comme un enrôlement. |
 | `GET /health` · `GET /ready` · `GET /metrics` | — | `/ready` = modèle chargé + DB joignable. Le service **refuse de démarrer** si `FACE_DATA_KEY` est absente ou invalide. |
 
 Les erreurs suivent le format des conventions d'API (`{error:{code, message}}`). Un enrôlement issu d'un autre modèle (`model_version` différent, ou ligne v1 non scellée) n'est pas comparable : la vérification journalise `face_verify_error` et le **réenrôlement** est requis.
@@ -278,10 +278,10 @@ Machine à états : `IDENTIFY → FACE → PASSWORD → OK` (détail, verrouilla
 | `POST /api/v1/auth/identify` | `{username}` → `200 {challenge_id, step:"face", expires_in, camera:true, poses:[3 poses]}`. `poses` est une **permutation aléatoire** (CSPRNG serveur) de `face`/`gauche`/`droite`, tirée à **chaque** `identify` et mémorisée dans le challenge (vivacité). `429` si bloqué (`locked_out`) ou en refroidissement (`cooldown`), toujours avec `Retry-After`. **Toujours 200** hors blocage/refroidissement (anti-énumération). Mode dégradé `BACKOFFICE_FACE_REQUIRED=false` : `step:"password"`, `poses:[]`, `camera:false`. |
 | `POST /api/v1/auth/face` | `{challenge_id, frames:[{pose, image_b64}]×3}` → `200 {recognized, step:"password"\|"identify", attempts_left, cooldown}`. **L'ordre des frames doit être celui du challenge**, sinon échec (face-id n'est alors pas appelé). Plafond 800 000 car. base64 (~600 Ko) par frame. Non reconnu ⇒ `cooldown: 30`. `503 face_service_unavailable` si face-id est injoignable. |
 | `POST /api/v1/auth/password` | `{challenge_id, password}` → `200 {access_token, token_type, expires_in, role}` (rôle privilégié) ; `401 invalid_credentials` + `Retry-After: 3` (refroidissement) ; `403 role_not_authorized` ; `409 wrong_step`. |
-| `GET /api/v1/auth/device` | → `{led_online: bool \| null}` : dernier statut MQTT (LWT/heartbeat) du module LED ; `null` si inconnu ou LED simulée. Sans authentification (booléen seul). |
+| `GET /api/v1/auth/device` | → `{led_online: bool \| null}` : dernier statut MQTT (LWT/heartbeat) du module LED ; `null` si inconnu, LED simulée, ou lien `auth`↔broker perdu/refusé (un `true` d'avant la coupure n'est jamais présenté comme courant). Sans authentification (booléen seul). |
 | `POST /api/v1/login` | **Conservé** : comptes de service (`verify_tx`, `seed`) et front client. Hors facteur visage, **hors listener hôte** (sert sur 80/443). |
 
-Verrouillage (consigne CA4) : quota d'échecs d'accès par `(username, source_ip)` — défaut **2** (« 1 reprise ») puis **5 min** (`BACKOFFICE_MAX_ATTEMPTS`, `BACKOFFICE_LOCKOUT_SECONDS`). Refroidissements **par poste** (`client_ip`), imposés côté serveur : visage refusé **30 s** (`BACKOFFICE_REJECT_COOLDOWN`), mot de passe refusé **3 s** (`BACKOFFICE_FAIL_COOLDOWN`) ; `identify` renvoie `429 cooldown` + `Retry-After` pendant ce délai (événement `auth_cooldown`). `challenge_id` à usage unique, TTL court (`BACKOFFICE_CHALLENGE_TTL`, défaut 60 s).
+Verrouillage (consigne CA4) : quota d'échecs d'accès par `(username, source_ip)` — défaut **2** (« 1 reprise ») puis **5 min** (`BACKOFFICE_MAX_ATTEMPTS`, `BACKOFFICE_LOCKOUT_SECONDS`). Refroidissements **par poste** (`client_ip`), imposés côté serveur : visage refusé **30 s** (`BACKOFFICE_REJECT_COOLDOWN`), mot de passe refusé **3 s** (`BACKOFFICE_FAIL_COOLDOWN`) ; `identify` renvoie `429 cooldown` + `Retry-After` pendant ce délai (événement `auth_cooldown`). `challenge_id` à usage unique, TTL court (`BACKOFFICE_CHALLENGE_TTL`, défaut 60 s ; **120 s** dans le Compose : chargement à froid de MediaPipe + 3 maintiens de pose).
 
 ### 5.3 Protocole LED (MQTT)
 
@@ -316,16 +316,16 @@ Réservée au rôle `admin` (`Authorization: Bearer`, JWT émis par l'étape mot
 
 | Méthode & chemin | Description |
 |---|---|
-| `GET /api/v1/admin/users` | `[{username, role, enrolled, enrolled_at, enrolled_by}]` |
+| `GET /api/v1/admin/users` | `[{username, role, enrolled, stale, enrolled_at, enrolled_by}]` : `enrolled` = enrôlement **utilisable** (`usable` côté face-id) ; `stale` = ligne présente mais inutilisable (« Réenrôlement requis » dans le back-office) ; `enrolled_at`/`enrolled_by` renseignés dès qu'une ligne existe. |
 | `POST /api/v1/admin/users` | `{username, password, role}` → `201 {username, role}` (compte du back-office, **sans compte bancaire**) ; `409 username_taken`. |
 | `PATCH /api/v1/admin/users/{u}` | `{role}` → `200 {username, role}` ; `404 unknown_user` ; `409 last_admin`. |
 | `PUT /api/v1/admin/users/{u}/face` | `{poses:{face, gauche, droite}}` → `200 {enrolled, model_version}` ; relai `enroll` avec `enrolled_by = sub` ; `422 enrollment_rejected` (+ `details` par pose). |
 | `DELETE /api/v1/admin/users/{u}/face` | `204` ; `404 not_enrolled` ; `409 last_admin`. |
 | `GET /api/v1/admin/users/{u}/face/photos` | `{photos:{pose: b64}}` ; consultation journalisée côté face-id (`face_photos_viewed`). |
-| `GET /api/v1/auth/bootstrap` | `{required: bool}` — vrai seulement si `BACKOFFICE_BOOTSTRAP_TOKEN` est configuré **et** qu'aucun admin enrôlé n'existe. |
+| `GET /api/v1/auth/bootstrap` | `{required: bool}` — vrai seulement si `BACKOFFICE_BOOTSTRAP_TOKEN` est configuré **et** qu'aucun admin n'a d'enrôlement **utilisable** (des lignes périmées après un changement de modèle ne comptent pas). |
 | `POST /api/v1/auth/bootstrap` | `{token, username, password, poses}` → `201 {username, role:"admin"}` : crée (ou met à jour un compte `operator`/`admin` existant) et enrôle le **premier administrateur**. Token comparé en temps constant, rate-limité (5/min), `403 bootstrap_denied` si non requis, token invalide, ou compte **client** existant (pas de promotion). Annulation propre si l'enrôlement échoue. |
 
-**Garde-fou `last_admin`** : on ne peut ni rétrograder ni désenrôler le **dernier administrateur enrôlé** (sinon plus personne ne franchit l'étape visage). Événements : `admin_user_created`, `admin_role_changed`, `admin_face_enrolled`, `admin_face_revoked`, `backoffice_bootstrap` (table §1). Si face-id est injoignable, ces routes répondent `503 face_service_unavailable`.
+**Garde-fou `last_admin`** : on ne peut ni rétrograder ni désenrôler le **dernier administrateur enrôlé** (sinon plus personne ne franchit l'étape visage). « Enrôlé » = enrôlement **utilisable** (`usable: true` chez face-id, contrat strict : une ligne sans le champ ne compte pas) ; un admin à l'enrôlement périmé se rétrograde ou se désenrôle librement. Événements : `admin_user_created`, `admin_role_changed`, `admin_face_enrolled`, `admin_face_revoked`, `backoffice_bootstrap` (table §1). Si face-id est injoignable, ces routes répondent `503 face_service_unavailable`.
 
 ### 5.6 Exposition réseau
 

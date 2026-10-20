@@ -8,13 +8,13 @@
 
 ```
 L0  Cadrage & contrats     [##########] 100%  contrat §5 v2 + ADR 0004-0007 + migrations 0002/0003 — tests verts
-L1  Service face-id        [#########.]  90%  v2 (3 poses, chiffrement AES-GCM, photos) — 93 tests verts ; recette : build Docker de dlib + modèle réel
-L2  Auth à étapes          [##########] 100%  poses aléatoires, frames ordonnées, refroidissements 30 s / 3 s, verrouillage — 186 tests auth verts
-L3  Back-office + webcam    [#########.]  90%  login v2 + FaceScanner + habilitations + bootstrap — 131 tests Vitest ; recette : caméra réelle, marges 0,07 / 0,22
+L1  Service face-id        [#########.]  90%  v2 (3 poses, chiffrement AES-GCM, photos, `usable`) — 94 tests verts ; recette : build Docker de dlib + modèle réel
+L2  Auth à étapes          [##########] 100%  poses aléatoires, frames ordonnées, refroidissements 30 s / 3 s, verrouillage, enrôlements `usable` — 197 tests auth verts
+L3  Back-office + webcam    [#########.]  90%  login v2 + FaceScanner + habilitations + bootstrap, badge « Réenrôlement requis » — 134 tests Vitest ; recette : caméra réelle, marges 0,07 / 0,22
 L4  Firmware ESP8266        [######....]  60%  machine à états + tests native + firmware posés ; recette matérielle à faire
 L5  Transport MQTT          [########..]  80%  broker durci (compose, ACL) + MqttLedNotifier fail-open + GET /auth/device — 30 tests ; recette : broker live + ESP
 L6  Habilitations           [##########] 100%  rôles + API admin + enrôlement/révocation + garde last_admin + bootstrap — tests verts
-L7  Infra & observabilité   [######....]  60%  compose + WAF 9443 + SOPS + scrape face-id (54 tests infra/WAF) ; reste Makefile (L7-4) et recette compose/Loki
+L7  Infra & observabilité   [########..]  80%  compose + WAF 9443 (méthodes CRS) + SOPS + scrape face-id (57 tests infra/WAF) + make test (L7-4) ; reste recette compose/Loki
 L8  Sécurité & RGPD         [###.......]  30%  RGPD amendé + chiffrement testé (L8-2) ; reste revue sécurité du flux (L8-1) et audit.sh (L8-3)
 L9  Gouvernance             [######....]  60%  EBIOS (annexe) + PCA/PRA §5.7 rédigés ; reste NIS2/DORA (L9-3)
 L10 Recette & e2e           [..........]   0%   e2e + checklist matérielle (non faits)
@@ -102,10 +102,10 @@ L10 Recette & e2e           [..........]   0%   e2e + checklist matérielle (non
 
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
-| L7-1 | Compose : `face-id`, `backoffice`, `mosquitto` (réseaux, profils, dépendances, durcissement, healthchecks) ; **WAF route `/api/v1/auth/*` → auth + vhost back-office (M-f)** ; réseau `app` interne (m9) | `infra/compose`, `security/waf` | L1-5, L3-5, L5-1 | M | 🟨 | Compose `face-id`, `backoffice`, `mosquitto`, env `auth`, WAF `127.0.0.1:9443` + 404 sur 80/443 pour `/api/v1/auth/` et `/api/v1/admin/`, plafonds ModSecurity 4 MiB : `test_new_services_are_hardened`, `test_host_listener_9443_is_published_on_loopback_only`, `test_public_server_returns_404_on_host_only_prefixes`, `test_modsecurity_body_limits_match_host_client_max_body_size` (54 tests infra + WAF) ; `be727ad`, `66f685d`. **Reste : `docker compose config/up`, `nginx -t` et prise en compte réelle de `MODSEC_REQ_BODY_*` par l'image (recette)** |
+| L7-1 | Compose : `face-id`, `backoffice`, `mosquitto` (réseaux, profils, dépendances, durcissement, healthchecks) ; **WAF route `/api/v1/auth/*` → auth + vhost back-office (M-f)** ; réseau `app` interne (m9) | `infra/compose`, `security/waf` | L1-5, L3-5, L5-1 | M | 🟨 | Compose `face-id`, `backoffice`, `mosquitto`, env `auth`, WAF `127.0.0.1:9443` + 404 sur 80/443 pour `/api/v1/auth/` et `/api/v1/admin/`, plafonds ModSecurity 4 MiB : `test_new_services_are_hardened`, `test_host_listener_9443_is_published_on_loopback_only`, `test_public_server_returns_404_on_host_only_prefixes`, `test_modsecurity_body_limits_match_host_client_max_body_size` (54 tests infra + WAF) ; `be727ad`, `66f685d`. Revue finale (`401bbd0`) : `ALLOWED_METHODS` CRS couvrant PATCH/PUT/DELETE (`test_crs_allowed_methods_cover_every_backoffice_api_method`), `mosquitto` dépendance `required: false` (`test_auth_starts_without_mqtt_broker`), `BACKOFFICE_FACE_TIMEOUT=8` / `BACKOFFICE_CHALLENGE_TTL=120` (`test_auth_face_timeout_and_challenge_ttl_fit_dlib_and_mediapipe`), secrets face en `${VAR:?…}` (57 tests infra + WAF). **Reste : `docker compose config/up`, `nginx -t` et prise en compte réelle de `MODSEC_REQ_BODY_*` par l'image (recette)** |
 | L7-2 | Prometheus scrape `face-id` ; vérifier que Promtail capte les logs des nouveaux services | `infra/prometheus`, `infra/promtail` | L7-1 | S | 🟨 | Job Prometheus `face-id:8006` (`test_prometheus_scrapes_face_id`) ; `be727ad`. **Reste : cible UP et logs des nouveaux services dans Loki (recette `make up-full`)** |
 | L7-3 | SOPS : `MQTT_*`, **`FACE_INTERNAL_TOKEN` (même valeur sur `auth` et `face-id`)**, (option) clé chiffrement embedding ; `secrets.example.env` + README | `security/sops` | L5-1 | S | ✅ | `secrets.example.env` : `FACE_INTERNAL_TOKEN`, `FACE_DATA_KEY`, `MQTT_AUTH_PASSWORD`, `MQTT_LED_PASSWORD`, `BACKOFFICE_BOOTSTRAP_TOKEN`, `MQTT_BIND` (valeurs factices) ; `test_sops_example_has_new_secrets_with_fake_values`, `test_auth_wired_to_face_id_and_mqtt` ; `be727ad` |
-| L7-4 | Makefile/aliases : build modèle face-id, lancement broker ; `make test` agrège les nouveaux composants | `Makefile`, `README.md` | L7-1 | S | ⬜ | **Non fait** : `Makefile` `PY_COMPONENTS` ne contient pas `services/face-id` et `test-front` ne lance pas `services/backoffice` ⇒ `make test` ne couvre pas encore ces deux composants (lancer leurs suites à la main, cf. README de chaque composant) |
+| L7-4 | Makefile/aliases : build modèle face-id, lancement broker ; `make test` agrège les nouveaux composants | `Makefile`, `README.md` | L7-1 | S | ✅ | `PY_COMPONENTS` inclut `services/face-id`, `FRONT_APPS` = `services/front services/backoffice dashboard` ; exigence **Node ≥ 22.15** (jsdom/undici) documentée (Makefile, README racine § Tests, README back-office) ; `test_face_auth_components_are_aggregated` (`scripts/tests`, 21 verts) ; `1c57b64`. Suites agrégées vertes une à une : face-id 94, back-office Vitest 134 (Node 24). Le build de l'image face-id et le broker passent par `make up` (Compose) — pas d'alias dédié. *`make` absent du poste de dev : recette exécutée composant par composant, contrat du Makefile vérifié statiquement.* |
 
 ## L8 — Sécurité & RGPD
 
@@ -149,9 +149,9 @@ Branche `feat/face-auth-integration` (`5c425c6..66f685d`, 15 commits). Design : 
 | L3 (back-office : thème/API, FaceScanner, login v2, habilitations) | `44ad9e5`, `37c176d`, `30be1d5`, `b0c8092`, `ce30e9a` |
 | L5-1 / L7 (compose, WAF 9443, mosquitto, SOPS) | `be727ad`, `66f685d` |
 
-**Suites vertes (poste de dev, hors stack) :** `auth` 186 · `face-id` 93 · `resilience_db` 10 · `resilience_common` 5 (events ↔ contrat) · infra + WAF 54 · back-office Vitest 131.
+**Suites vertes (poste de dev, hors stack) :** `auth` 186 · `face-id` 93 · `resilience_db` 10 · `resilience_common` 5 (events ↔ contrat) · infra + WAF 54 · back-office Vitest 131. **Après la revue finale :** `auth` 197 · `face-id` 94 · `resilience_db` 10 · `resilience_common` 5 · infra + WAF 57 · `scripts/tests` 21 · back-office Vitest 134 (+ `tsc`, ESLint).
 
-**Reste à faire — recette sur le PC Hôte (rien de ceci n'a été validé) :** caméra USB réelle et **calibrage des marges de capture** (client 0,07 / 0,22 vs serveur 0,10 / 0,15) ; **build Docker de `face-id` (dlib)** et smoke du modèle `team` ; `docker compose config/up` et `nginx -t` ; prise en compte de `MODSEC_REQ_BODY_*` ; démarrage du broker ; **ESP8266 physique** synchronisé avec le jumeau LED ; scrape Prometheus et logs Loki des nouveaux services ; checklist du README back-office (§ Recette). **Reste hors recette :** L7-4 (`make test`), L8-1 (revue sécurité du flux), L8-3 (`audit.sh`), L9-3 (NIS2/DORA), L10-1 à L10-4 (e2e et runbook), validation de l'amendement RGPD par l'équipe (Yanis).
+**Reste à faire — recette sur le PC Hôte (rien de ceci n'a été validé) :** caméra USB réelle et **calibrage des marges de capture** (client 0,07 / 0,22 vs serveur 0,10 / 0,15) ; **build Docker de `face-id` (dlib)** et smoke du modèle `team` ; `docker compose config/up` et `nginx -t` ; prise en compte de `MODSEC_REQ_BODY_*` ; démarrage du broker ; **ESP8266 physique** synchronisé avec le jumeau LED ; scrape Prometheus et logs Loki des nouveaux services ; checklist du README back-office (§ Recette). **Reste hors recette :** L8-1 (revue sécurité du flux), L8-3 (`audit.sh`), L9-3 (NIS2/DORA), L10-1 à L10-4 (e2e et runbook), validation de l'amendement RGPD par l'équipe (Yanis).
 
 ---
 
@@ -175,6 +175,28 @@ Deux revues (agent sécurité du projet + revue de correction) sur L0–L3. **Co
 **Reporté au lot L7 (infra, sans objet hors stack)** : **M-f** le WAF doit router `/api/v1/auth/*` vers `auth` (+ vhost back-office) et **m9** canal auth→face-id en clair (réseau `app` interne). Ajoutés au périmètre de L7-1/L5-1.
 
 Suites vertes après correctifs : **auth 50 · face-id 16 · back-office 14 · resilience_db 8** (+ payment-api 65 non régressé).
+
+## Revue finale de branche & correctifs (2026-10-20)
+
+Revue senior de toute la branche `feat/face-auth-integration` avant merge ; **13 findings corrigés en une vague** (`401bbd0..HEAD`) :
+
+| # | Finding | Correctif | Preuve |
+|---|---|---|---|
+| 1 | CRS 911100 bloquait PUT/PATCH/DELETE (rôle, enrôlement, révocation sur 9443) | `ALLOWED_METHODS` = `GET HEAD POST OPTIONS PUT PATCH DELETE` (Compose `waf`) | `test_crs_allowed_methods_cover_every_backoffice_api_method` ; `401bbd0` |
+| 2 | `BACKOFFICE_FACE_TIMEOUT` 2 s trop court pour dlib (3 images) | `8` dans le Compose ; levier `FACE_DETECT_UPSAMPLE=0` (face-id, recette) | `test_auth_face_timeout_and_challenge_ttl_fit_dlib_and_mediapipe` ; `401bbd0`, `3822929` |
+| 3 | Enrôlements périmés (autre modèle, v1) comptés comme enrôlés | face-id `usable` ; auth : `enrolled`/`stale`, `last_admin` et bootstrap sur les seuls `usable` ; badge back-office | `test_enrollments_list_exposes_no_biometric_data`, `test_stale_enrollment_does_not_count_for_the_last_admin_guard`, `test_bootstrap_required_when_admins_only_have_stale_enrollments`, Vitest « enrôlement périmé » ; `3822929`, `5c90d1f`, `077ee14` |
+| 4 | `auth` dépendait durement de `mosquitto` (IP hotspot absente ⇒ ni auth ni WAF) | `depends_on.mosquitto.required: false` | `test_auth_starts_without_mqtt_broker` ; `401bbd0` |
+| 5 | `make test` sans face-id ni back-office | `PY_COMPONENTS` + `FRONT_APPS` ; Node ≥ 22.15 documenté | `test_face_auth_components_are_aggregated` ; `1c57b64` |
+| 6 | `MqttLedNotifier.start()` non protégé au démarrage | try/except ⇒ `led_publish_failed` WARNING, auth démarre | `test_led_start_failure_does_not_prevent_boot` ; `5c90d1f` |
+| 7 | Docs surestimant la protection anti-rejeu | formulation corrigée + résiduel « 3 poses rejouées / photos dans l'ordre affiché » + pistes (entropie, délais, clignement) | consigne §6/§7/§10, ADR 0007, EBIOS SO7/A.4 |
+| 8 | `online` figé après coupure ; refus broker silencieux | `on_disconnect` ⇒ `None` ; `on_connect` en échec journalisé (code seul) | `test_disconnect_resets_online_to_unknown`, `test_refused_connection_is_logged_without_secret_and_not_subscribed` ; `5c90d1f` |
+| 9 | Logs face-id sans `event` | `face_verify_error` / `db_error` | `test_every_log_line_carries_a_reserved_event` ; `3822929` |
+| 10 | `model_version` typé `number` côté back-office | `string \| null` | `admin.test.ts` ; `077ee14` |
+| 11 | Motif `missing` sans libellé FR | « pose manquante » | `adminErrors.test.ts` ; `077ee14` |
+| 12 | `FACE_INTERNAL_TOKEN` / `FACE_DATA_KEY` sans échec franc | `${VAR:?…}` | `test_face_id_service`, `test_auth_wired_to_face_id_and_mqtt` ; `401bbd0` |
+| 13 | TTL de challenge 60 s trop court (MediaPipe à froid + 3 maintiens) | `BACKOFFICE_CHALLENGE_TTL=120` (Compose) | `test_auth_face_timeout_and_challenge_ttl_fit_dlib_and_mediapipe` ; `401bbd0` |
+
+Toujours **hors recette** : `docker compose config/up`, `nginx -t` et prise en compte effective de `ALLOWED_METHODS` / `MODSEC_REQ_BODY_*` par l'image CRS, `required: false` (Compose ≥ 2.20), latence réelle de dlib.
 
 ## Suivi
 
