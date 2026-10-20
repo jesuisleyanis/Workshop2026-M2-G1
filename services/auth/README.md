@@ -118,7 +118,7 @@ curl -s -XPOST localhost:8002/api/v1/auth/password -H 'content-type: application
 Sans administrateur enrôlé, personne ne passe l'étape visage. Si `BACKOFFICE_BOOTSTRAP_TOKEN` est défini :
 
 - `GET /api/v1/auth/bootstrap` → `{"required": true}` ⇔ aucun admin enrôlé **et** token configuré (`503` si face-id est injoignable).
-- `POST /api/v1/auth/bootstrap` `{token, username, password, poses}` → `201 {username, role:"admin"}` ; `403 bootstrap_denied` (token faux, bootstrap non requis ou désactivé) ; `422 enrollment_rejected`. Limité à `5/minute`, token comparé en temps constant. Si le compte existe, mot de passe et rôle `admin` sont mis à jour ; **si l'enrôlement échoue, la création est annulée** (compte supprimé ou état précédent restauré).
+- `POST /api/v1/auth/bootstrap` `{token, username, password, poses}` → `201 {username, role:"admin"}` ; `403 bootstrap_denied` (token faux, bootstrap non requis ou désactivé) ; `422 enrollment_rejected`. Limité à `5/minute`, token comparé en temps constant. Un compte existant n'est repris que s'il est `operator` ou `admin` (mot de passe et rôle `admin` mis à jour) ; un compte `customer` existant est refusé (`403 bootstrap_denied`, rien n'est modifié). **Si l'enrôlement échoue, la création est annulée** : le gabarit éventuellement déjà stocké par face-id est d'abord révoqué (sauf s'il préexistait), puis le compte est supprimé ou son état précédent restauré ; une panne de ce rollback est journalisée (`backoffice_bootstrap`, ERROR) et l'erreur d'origine (422/503) reste celle renvoyée.
 
 Événements : `admin_user_created`, `admin_role_changed`, `admin_face_enrolled`, `admin_face_revoked`, `backoffice_bootstrap` (champ `user` = compte ciblé, le message nomme l'acteur ; jamais de mot de passe, token ni image).
 

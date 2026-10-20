@@ -87,7 +87,7 @@ def add_admin_api(
             ) from exc
         except LookupError as exc:
             raise ApiError(404, "unknown_user", "Unknown user") from exc
-        except FaceUnavailable as exc:
+        except Exception as exc:  # FaceUnavailable, corps 200 illisible... : état inconnu
             raise ApiError(503, "face_service_unavailable", "Face service unavailable") from exc
 
     def require_admin(authorization: str | None = Header(default=None)) -> str:
@@ -239,11 +239,17 @@ def add_admin_api(
 
     # ---------------------------------------------------------------- bootstrap
 
-    def _bootstrap_required() -> bool:
+    def _bootstrap_state() -> tuple[bool, set[str]]:
+        """(bootstrap requis ?, usernames actuellement enrôlés chez face-id)."""
         if not settings.backoffice_bootstrap_token:
-            return False  # jamais requis : bootstrap désactivé
+            return False, set()  # jamais requis : bootstrap désactivé
+        enrolled = {row["username"] for row in _face(face_client.enrollments)}
         with session_factory() as session:
-            return not _enrolled_admins(session)
+            admins = set(session.scalars(select(User.username).where(User.role == "admin")))
+        return not (admins & enrolled), enrolled
+
+    def _bootstrap_required() -> bool:
+        return _bootstrap_state()[0]
 
     @app.get("/api/v1/auth/bootstrap", response_model=BootstrapStatus)
     @limiter.limit(rate)
@@ -260,6 +266,35 @@ def add_admin_api(
             user=username,
         )
         return ApiError(403, "bootstrap_denied", "Bootstrap denied")
+
+    def _rollback_bootstrap(
+        username: str, snapshot: tuple[str, str] | None, revoke_template: bool
+    ) -> None:
+        """Annule un bootstrap en échec, sans jamais masquer l'erreur d'origine.
+
+        1. Révoque le gabarit si besoin : face-id a pu l'enregistrer alors qu'`auth` voit un
+           échec (délai dépassé, 5xx après commit, corps illisible) ; sans cela la suppression
+           du compte violerait la clé étrangère `face_enrollments.user_id`.
+        2. Supprime le compte créé / restaure mot de passe + rôle du compte préexistant.
+        Une panne ici est journalisée (ERROR) ; l'appelant relève l'erreur d'origine.
+        """
+        if revoke_template:
+            try:
+                face_client.revoke(username)
+            except Exception:  # noqa: BLE001, S110 - meilleur effort, l'échec d'origine prime
+                pass
+        try:
+            _undo_bootstrap_user(username, snapshot)
+        except Exception as exc:  # noqa: BLE001
+            log_event(
+                log,
+                logging.ERROR,
+                "backoffice_bootstrap",
+                f"Bootstrap rollback failed for {username} ({type(exc).__name__}): "
+                "manual check of the account required",
+                http_status=503,
+                user=username,
+            )
 
     def _undo_bootstrap_user(username: str, snapshot: tuple[str, str] | None) -> None:
         """Annule la création (ou restaure mot de passe + rôle d'un compte préexistant)."""
@@ -282,11 +317,15 @@ def add_admin_api(
             raise _bootstrap_denied(body.username, "invalid or disabled token")
         password_hash = hash_password(body.password)
         with admins_lock:
-            if not _bootstrap_required():
+            required, enrolled = _bootstrap_state()
+            if not required:
                 raise _bootstrap_denied(body.username, "an enrolled admin already exists")
             with session_factory() as session:
                 user = session.scalar(select(User).where(User.username == body.username))
                 snapshot: tuple[str, str] | None = None
+                if user is not None and user.role not in ("admin", "operator"):
+                    # Un compte client existant ne peut pas être promu par le bootstrap.
+                    raise _bootstrap_denied(body.username, "existing account is not staff")
                 if user is None:
                     # Premier administrateur : aucun compte bancaire.
                     session.add(
@@ -299,8 +338,14 @@ def add_admin_api(
             try:
                 # face-id lit le compte en base : l'enrôlement ne peut avoir lieu qu'après commit.
                 _enroll(body.username, body.poses.model_dump(), body.username)
-            except Exception:  # annuler la création quelle que soit l'erreur
-                _undo_bootstrap_user(body.username, snapshot)
+            except ApiError as exc:
+                # 422/404 : face-id a refusé, rien n'est stocké. Autre échec (503) : état
+                # incertain, on révoque, sauf si le compte était déjà enrôlé avant le bootstrap
+                # (on ne détruit pas un enrôlement légitime).
+                uncertain = exc.status not in (404, 422)
+                _rollback_bootstrap(
+                    body.username, snapshot, uncertain and body.username not in enrolled
+                )
                 raise
         log_event(
             log,

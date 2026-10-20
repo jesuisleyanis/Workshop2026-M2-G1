@@ -14,7 +14,7 @@ from authkit import JWT_SECRET, PASSWORD
 from fastapi.testclient import TestClient
 from resilience_common.events import RESERVED_EVENTS
 from resilience_db import Base, make_engine, make_session_factory
-from resilience_db.models import Account, User
+from resilience_db.models import Account, FaceEnrollment, User
 from resilience_db.passwords import hash_password, verify_password
 from sqlalchemy import select
 
@@ -541,9 +541,12 @@ def test_bootstrap_creates_enrolled_admin_then_not_required(
     assert again.status_code == 403
 
 
-def test_bootstrap_existing_user_gets_new_password_and_admin_role(boot, empty_engine):
+@pytest.mark.parametrize("existing_role", ["operator", "admin"])
+def test_bootstrap_existing_staff_gets_new_password_and_admin_role(
+    boot, empty_engine, existing_role
+):
     with make_session_factory(empty_engine)() as s:
-        s.add(User(username="root01", password_hash=hash_password(PASSWORD), role="customer"))
+        s.add(User(username="root01", password_hash=hash_password(PASSWORD), role=existing_role))
         s.commit()
     r = boot.post("/api/v1/auth/bootstrap", json=boot_body())
     assert r.status_code == 201
@@ -551,6 +554,19 @@ def test_bootstrap_existing_user_gets_new_password_and_admin_role(boot, empty_en
     assert user.role == "admin"
     assert verify_password(NEW_PASSWORD, user.password_hash)
     assert not verify_password(PASSWORD, user.password_hash)
+
+
+def test_bootstrap_refuses_existing_customer_account(boot, empty_engine, boot_face):
+    with make_session_factory(empty_engine)() as s:
+        s.add(User(username="root01", password_hash=hash_password(PASSWORD), role="customer"))
+        s.commit()
+    r = boot.post("/api/v1/auth/bootstrap", json=boot_body())
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "bootstrap_denied"
+    user = user_row(empty_engine, "root01")
+    assert user.role == "customer"
+    assert verify_password(PASSWORD, user.password_hash)  # mot de passe inchangé
+    assert boot_face.enroll_calls == []  # aucun enrôlement tenté
 
 
 def test_bootstrap_rejected_enrollment_rolls_back_creation(boot, empty_engine, boot_face):
@@ -565,12 +581,12 @@ def test_bootstrap_rejected_enrollment_rolls_back_creation(boot, empty_engine, b
 
 def test_bootstrap_rejected_enrollment_restores_existing_user(boot, empty_engine):
     with make_session_factory(empty_engine)() as s:
-        s.add(User(username="root01", password_hash=hash_password(PASSWORD), role="customer"))
+        s.add(User(username="root01", password_hash=hash_password(PASSWORD), role="operator"))
         s.commit()
     r = boot.post("/api/v1/auth/bootstrap", json=boot_body(poses={**POSES, "face": "BAD"}))
     assert r.status_code == 422
     user = user_row(empty_engine, "root01")
-    assert user.role == "customer"
+    assert user.role == "operator"
     assert verify_password(PASSWORD, user.password_hash)
 
 
@@ -611,6 +627,116 @@ def test_bootstrap_is_rate_limited_to_5_per_minute(boot):
     ]
     assert codes[:5] == [403] * 5
     assert codes[5] == 429
+
+
+# ------------------------------------------- bootstrap : face-id a stocké mais auth voit un échec
+
+
+class DbRecordingFaceClient(FakeFaceClient):
+    """Modélise face-id réel : `enroll` INSÈRE une ligne `face_enrollments` (FK vers users) puis
+    échoue côté réponse (délai dépassé, 5xx après commit, corps illisible)."""
+
+    def __init__(self, engine, failure: Exception) -> None:
+        super().__init__()
+        self.engine = engine
+        self.failure = failure
+        self.revoke_calls: list[str] = []
+        self.revoke_fails = False
+
+    def enroll(self, username, poses, enrolled_by) -> dict:
+        self.enroll_calls.append((username, poses, enrolled_by))
+        with make_session_factory(self.engine)() as s:
+            uid = s.scalar(select(User.id).where(User.username == username))
+            s.add(
+                FaceEnrollment(
+                    user_id=uid, embedding=b"x", model_version="fake-1", enrolled_by=enrolled_by
+                )
+            )
+            s.commit()
+        self.seed(username, enrolled_by)
+        raise self.failure
+
+    def revoke(self, username) -> bool:
+        self.revoke_calls.append(username)
+        if self.revoke_fails:
+            raise FaceUnavailable("revoke down")
+        with make_session_factory(self.engine)() as s:
+            row = s.scalar(select(FaceEnrollment).join(User).where(User.username == username))
+            if row is not None:
+                s.delete(row)
+                s.commit()
+        return self.rows.pop(username, None) is not None
+
+
+def enrollment_count(engine) -> int:
+    with make_session_factory(engine)() as s:
+        return len(s.scalars(select(FaceEnrollment)).all())
+
+
+FAILURES = [
+    pytest.param(FaceUnavailable("timeout"), id="timeout"),
+    pytest.param(ValueError("malformed 200 body"), id="corps-illisible"),
+]
+
+
+@pytest.mark.parametrize("failure", FAILURES)
+def test_bootstrap_failure_after_face_id_stored_revokes_and_deletes_new_user(
+    settings, empty_engine, failure
+):
+    face = DbRecordingFaceClient(empty_engine, failure)
+    boot = TestClient(create_app(settings, empty_engine, face_client=face))
+    r = boot.post("/api/v1/auth/bootstrap", json=boot_body())
+    assert r.status_code == 503  # erreur d'origine mappée, pas un 500 (IntegrityError)
+    assert r.json()["error"]["code"] == "face_service_unavailable"
+    assert face.revoke_calls == ["root01"]
+    assert user_row(empty_engine, "root01") is None
+    assert enrollment_count(empty_engine) == 0
+    assert boot.get("/api/v1/auth/bootstrap").json() == {"required": True}
+
+
+def test_bootstrap_failure_after_face_id_stored_restores_existing_user(settings, empty_engine):
+    with make_session_factory(empty_engine)() as s:
+        s.add(User(username="root01", password_hash=hash_password(PASSWORD), role="operator"))
+        s.commit()
+    face = DbRecordingFaceClient(empty_engine, FaceUnavailable("5xx after commit"))
+    boot = TestClient(create_app(settings, empty_engine, face_client=face))
+    r = boot.post("/api/v1/auth/bootstrap", json=boot_body())
+    assert r.status_code == 503
+    user = user_row(empty_engine, "root01")
+    assert user.role == "operator" and verify_password(PASSWORD, user.password_hash)
+    assert face.revoke_calls == ["root01"]
+    assert enrollment_count(empty_engine) == 0  # le gabarit du détenteur du token est supprimé
+
+
+def test_bootstrap_failure_keeps_template_of_already_enrolled_account(settings, empty_engine):
+    # Un opérateur déjà enrôlé (enrôlement légitime antérieur) ne perd pas son gabarit.
+    with make_session_factory(empty_engine)() as s:
+        s.add(User(username="root01", password_hash=hash_password(PASSWORD), role="operator"))
+        s.commit()
+    face = DbRecordingFaceClient(empty_engine, FaceUnavailable("timeout"))
+    face.seed("root01", by="earlier-admin")
+    boot = TestClient(create_app(settings, empty_engine, face_client=face))
+    r = boot.post("/api/v1/auth/bootstrap", json=boot_body())
+    assert r.status_code == 503
+    assert face.revoke_calls == []
+    user = user_row(empty_engine, "root01")
+    assert user.role == "operator" and verify_password(PASSWORD, user.password_hash)
+
+
+def test_bootstrap_rollback_failure_is_logged_and_original_error_is_returned(
+    settings, empty_engine, log_lines
+):
+    # revoke en panne : le compte ne peut pas être supprimé (FK) ; on journalise ERROR et on
+    # renvoie quand même l'erreur d'origine (503), jamais un 500.
+    face = DbRecordingFaceClient(empty_engine, FaceUnavailable("timeout"))
+    face.revoke_fails = True
+    boot = TestClient(create_app(settings, empty_engine, face_client=face))
+    r = boot.post("/api/v1/auth/bootstrap", json=boot_body())
+    assert r.status_code == 503
+    assert r.json()["error"]["code"] == "face_service_unavailable"
+    errors = [row for row in log_lines("backoffice_bootstrap") if row["level"] == "ERROR"]
+    assert len(errors) == 1 and errors[0]["user"] == "root01"
+    assert NEW_PASSWORD not in json.dumps(errors)
 
 
 # --------------------------------------------------------------------------- journaux
