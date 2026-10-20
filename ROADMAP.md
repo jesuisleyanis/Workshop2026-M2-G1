@@ -29,6 +29,7 @@ Phase 5  Dashboard        [#########.]  90%   dashboard branché sur le moteur r
 Phase 6  Cyber & attaques [########..]  85%   WAF, SOPS, durcissement, 4 scénarios OK
 Phase 7  Assistant RAG    [#########.]  90%   RAG livré (98 tests)
 Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés à l'archi
+Phase 9  Consigne add. 1  [#####.....]  50%   L0+L1+L2 faits + L3 login (49+15+14 tests) ; reste habilitations + câblage LED/infra + gouvernance
 ```
 
 > Scaffold initial généré en J1 (structure pro, tests par composant, docs). Les services backend, le moteur de remédiation, le dashboard et les docs de gouvernance sont en cours de finalisation. Validation live (`make up`) et ré-entraînement ML sur vraies séries Prometheus restent à faire.
@@ -93,10 +94,30 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | NIS2/DORA finalisé | `docs/nis2-dora.md` | R18 | — | ✅ | docs/nis2-dora.md |
 | Dossier PDF 8–12 p | `docs/dossier/` | §7 | — | ✅ | #15 : source `docs/dossier/dossier.md` (13 sections + 2 annexes, synthèse reliée au code : archi, incident, ML, remédiation, sécurité, essais, EBIOS, PCA/PRA, NIS2/DORA, limites, contributions) ; export `build.sh` (markdown → HTML → Chrome headless) → `Workshop2026-M2-G1-Dossier.pdf` **généré : 11 pages** (garde + 9 de corps + 1 d'annexes). **À faire avant remise** : remplir les [M] (MTTD/MTTR mesurés en recette) et les lignes « à compléter » du §13 |
 | Slides Pres.pptx | `docs/dossier/slides/` | §7 | — | ✅ | #16 : `build.js` (pptxgenjs, deck structuré : thème, layouts, sections, notes présentateur, graphique natif des tests) → `Workshop2026-M2-G1-Pres.pptx` **généré : 10 slides** (~5 min), validation OOXML OK, contrôle géométrique OK. **À faire avant remise** : relecture visuelle PowerPoint/LibreOffice, [M] de la slide 8, contributions slide 10 |
-| **Clip Chrono ≤ 60 s** | `Workshop2026-M2-G1-VidChrono.mp4` | §7 | — | ⬜ | — |
+| **Clip Chrono ≤ 60 s** | `Workshop2026-M2-G1-VidChrono.mp4` | §7 | — | 🟨 | **Kit de production livré et testé** (#C1) : `docs/dossier/clip/` = storyboard (contrat JSON : 5 temps, budget ≤ 60 s, prise unique sans coupe) + `gen_ass.py` (légendes échappées, temps validés) + `build_clip.sh` (recadrage + incrustation + garde-fou durée ffprobe, sortie temporaire + `mv`) + runbook ; 6 tests `scripts/tests/test_clip_chrono.py` verts (budget, 5 temps ordonnés/contigus, `gen_ass` exécuté : 1 ligne/temps, anti-injection). **Reste : enregistrer le `.mp4` en recette J4** (stack levée + PC Attaquant) — le MP4 est du footage live, non synthétisable hors stack |
 | `Code.zip` (sans secrets) | `scripts/package_deliverables.sh` | §7 | — | ✅ | #18 : archive **générée** (`Workshop2026-M2-G1-Code.zip`, 6,4 Mo, 465 fichiers, audit OK, aucun `.env`/clé ; exclusions `dist`/caches/`egg-info`/dumps/autres livrables ajoutées, re-scan du **contenu** (clé age / clé privée) ; 3 tests `scripts/tests/test_package_deliverables.py` sur faux dépôt ; ignorée par git). À régénérer au gel du code (J4 17h) |
 | `make test` = agrégat réel du dépôt | `Makefile`, `README.md` | — | — | ✅ | #19 : un process pytest **par composant** (métriques Prometheus déclarées à l'import → `DuplicateTimeseries` en process unique), `infra/tests` + `tests/e2e` ajoutés, échec propagé (plus de `\|\| echo`), `PYTHON=` surchargeable ; procédure venv documentée (README § Tests) ; 2 tests contrat `scripts/tests/test_makefile.py` ; recette rejouée : 12 composants verts |
-| **Gel du code 17h** | — | — | — | ⬜ | — |
+| **Gel du code 17h** | `docs/FREEZE-J4.md` | §7 | — | 🟨 | **Runbook de gel livré** (#C2) : checklist J4 (arbre propre → tests verts → recette live → régénération des 4 livrables depuis le commit → tag ciblé `freeze-j4`), garde-fous « on ne gèle pas si rouge ». Archive **régénérée et vérifiée** (`Workshop2026-M2-G1-Code.zip`, audit + re-scan secrets OK, kit Clip inclus, prises brutes exclues). **Reste : jouer la checklist à J4 17h** (poser le tag sur une machine Docker) |
+
+## Phase 9 — Consigne Additionnelle 1 : renforcement auth back-office (visage + LED)
+
+> Consigne reçue le 2026-10-20 (EPSI). **Cadrage complet : [`docs/consigne-additionnelle-1.md`](docs/consigne-additionnelle-1.md)** · **backlog détaillé et suivi : [`docs/consigne-additionnelle-1-roadmap.md`](docs/consigne-additionnelle-1-roadmap.md)** (10 lots, ~30 tickets, DoD par ticket). Le tableau ci-dessous est le **résumé** ; le suivi fin se fait dans le backlog dédié.
+
+| Lot | Objet | Composant(s) | Statut | Preuve |
+|---|---|---|---|---|
+| L0 | Delta contrat + ADR 0004/0005/0006 + modèle données (rôles, `face_enrollments`) | `docs/contracts.md`, `docs/adr`, `resilience_db` | ✅ | contrat §5 + migration `0002` ; tests verts |
+| L1 | Service `face-id` (IA légère, reconnaissance 1:1, enrôlement) | `services/face-id` | ✅ | service + **10 tests verts** ; smoke modèle réel en recette |
+| L2 | Auth à étapes (identifiant→visage→mdp) + verrouillage 1 reprise/5 min **[critique]** | `services/auth` | ✅ | 13 tests (49 auth au total) ; LED fail-open + rôle dans le JWT |
+| L3 | Back-office React + capture webcam (`getUserMedia`, caméra PC Hôte) **[critique]** | `services/backoffice` | 🟨 | login à étapes + webcam + miroir LED livrés (14 tests) ; reste habilitations (L6) |
+| L4 | Firmware ESP8266 LED bicolore (CLion/PlatformIO, machine à états) | `iot/esp8266-led` | 🟨 | machine à états + tests native + firmware posés ; recette matérielle |
+| L5 | Transport MQTT (broker Mosquitto durci + client auth fail-open) | `infra/compose`, `services/auth` | 🟨 | config broker durcie + ACL ; service Compose + client auth à câbler |
+| L6 | Habilitations (rôles + enrôlement/révocation visage) | `services/{auth,face-id,backoffice}` | ⬜ | backlog L6 |
+| L7 | Infra & observabilité (compose, Prometheus, SOPS, durcissement) | `infra/*`, `security/sops` | ⬜ | backlog L7 |
+| L8 | Sécurité & RGPD (biométrie, surface MQTT/caméra, pas de bypass) | `security/*`, `services/face-id` | ⬜ | backlog L8 |
+| L9 | Gouvernance (EBIOS biométrie, PCA/PRA break-glass, NIS2/DORA accès) | `docs/{ebios-rm,pca-pra,nis2-dora}.md` | ⬜ | backlog L9 |
+| L10 | Recette & e2e (flux complet + **ZTR inchangé** + checklist matériel) | `tests/e2e`, `docs/` | ⬜ | backlog L10 |
+
+> **Garde-fou résilience (D4) :** le facteur visage/LED ne s'applique qu'à l'**accès privilégié** du back-office. La boucle Zero-Touch Recovery (`verify_tx`, détection, remédiation) et le Clip Chrono **ne dépendent jamais** de la caméra/du visage/du broker/de l'ESP — pas d'auto-DoS de la démo notée.
 
 ---
 
@@ -110,6 +131,9 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | J1 | SOC = règles Loki/Grafana (pas Wazuh par défaut) | acté |
 | J1 | Remédiation via docker-socket-proxy, jamais le socket brut | acté |
 | J1 | Attaque depuis PC physique pour la démo (profil `attack` = dev) | acté |
+| Consigne 1 | Back-office = app dédiée `services/backoffice` (ADR 0004) | cadré |
+| Consigne 1 | Caméra USB lue dans le navigateur de l'hôte, pas montée dans Docker (ADR 0005) | cadré |
+| Consigne 1 | LED pilotée via MQTT, auth publie des états, le firmware rend les motifs ; facteur visage limité à l'accès privilégié (ADR 0006) | cadré |
 
 ## Points d'intégration
 

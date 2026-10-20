@@ -176,7 +176,7 @@ L'attaque principale de la démo est `service_flood` : crédible pour une platef
 | `assistant` | 97 | indexation, réponse, mode dégradé sans Ollama |
 | `tests/e2e` | 7 (sautés hors stack) | rejeu des 5 temps contre la stack réelle, dont `data_corruption` KO → OK |
 
-**Essais de bout en bout (stack levée)** : la chaîne a été câblée de bout en bout et chaque maillon est testé isolément ; les tickets bloquants (crash au démarrage du moteur, `verify_tx` non conforme, WAF sans image, enveloppe SSE non consommée) ont été fermés en J3. **Le rejeu complet sur la machine hôte, le relevé des MTTD/MTTR et le Clip Chrono sont l'objet de la recette J4** ; les valeurs mesurées remplaceront les [M] du tableau suivant dans la version finale de ce dossier.
+**Essais de bout en bout (stack levée)** : la chaîne a été câblée de bout en bout et chaque maillon est testé isolément ; les tickets bloquants (crash au démarrage du moteur, `verify_tx` non conforme, WAF sans image, enveloppe SSE non consommée) ont été fermés en J3. **Le rejeu complet sur la machine hôte, le relevé des MTTD/MTTR et le Clip Chrono sont l'objet de la recette J4** ; les valeurs mesurées remplaceront les [M] du tableau suivant dans la version finale de ce dossier. Le Clip Chrono est outillé pour une prise unique sans coupe : storyboard, script d'assemblage et validation sont livrés dans `docs/dossier/clip/` ; seul l'enregistrement reste à produire sur la stack levée.
 
 | Scénario | Délai de détection p95 | MTTR p95 | RTO perçu p95 | Cible |
 |---|---|---|---|---|

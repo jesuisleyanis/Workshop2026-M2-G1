@@ -17,6 +17,16 @@ def _bool(name: str, default: bool) -> bool:
     return os.environ.get(name, str(default)).strip().lower() in {"1", "true", "yes"}
 
 
+def _read_face_token() -> str:
+    """Token pour face-id /verify (optionnel) : FACE_INTERNAL_TOKEN_FILE puis FACE_INTERNAL_TOKEN."""
+    from pathlib import Path
+
+    file_var = os.environ.get("FACE_INTERNAL_TOKEN_FILE")
+    if file_var and Path(file_var).is_file():
+        return Path(file_var).read_text().strip()
+    return os.environ.get("FACE_INTERNAL_TOKEN", "")
+
+
 @dataclass(frozen=True)
 class Settings:
     jwt_secret: str
@@ -28,6 +38,15 @@ class Settings:
     enable_docs: bool = False
     register_initial_balance_cents: int = 0
     log_level: str = "INFO"
+    # Back-office à étapes (consigne additionnelle 1)
+    face_id_url: str = "http://face-id:8006"
+    face_internal_token: str = ""  # token envoyé à face-id /verify (défense en profondeur)
+    backoffice_max_attempts: int = 2
+    backoffice_lockout_seconds: int = 300
+    backoffice_challenge_ttl: int = 60
+    backoffice_failure_window: int = 900
+    backoffice_rate_limit: str = "30/minute"
+    backoffice_face_required: bool = True
 
     def __post_init__(self) -> None:
         if len(self.jwt_secret) < MIN_SECRET_LENGTH:
@@ -38,6 +57,8 @@ class Settings:
             raise RuntimeError("LOGIN_RATE_LIMIT invalide (format attendu : '10/minute')")
         if not _RATE_RE.match(self.register_rate_limit):
             raise RuntimeError("REGISTER_RATE_LIMIT invalide (format attendu : '10/minute')")
+        if not _RATE_RE.match(self.backoffice_rate_limit):
+            raise RuntimeError("BACKOFFICE_RATE_LIMIT invalide (format attendu : '30/minute')")
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -53,4 +74,12 @@ class Settings:
                 os.environ.get("REGISTER_INITIAL_BALANCE_CENTS", "0")
             ),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+            face_id_url=os.environ.get("FACE_ID_URL", "http://face-id:8006"),
+            face_internal_token=_read_face_token(),
+            backoffice_max_attempts=int(os.environ.get("BACKOFFICE_MAX_ATTEMPTS", "2")),
+            backoffice_lockout_seconds=int(os.environ.get("BACKOFFICE_LOCKOUT_SECONDS", "300")),
+            backoffice_challenge_ttl=int(os.environ.get("BACKOFFICE_CHALLENGE_TTL", "60")),
+            backoffice_failure_window=int(os.environ.get("BACKOFFICE_FAILURE_WINDOW", "900")),
+            backoffice_rate_limit=os.environ.get("BACKOFFICE_RATE_LIMIT", "30/minute"),
+            backoffice_face_required=_bool("BACKOFFICE_FACE_REQUIRED", True),
         )

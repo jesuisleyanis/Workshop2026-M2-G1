@@ -175,8 +175,11 @@ Dossier de rendu : `Workshop2026-M2-G1`
 |---|---|
 | `Workshop2026-M2-G1-Dossier.pdf` | Dossier d'ingénierie et de gouvernance (8 à 12 pages hors annexes) |
 | `Workshop2026-M2-G1-Pres.pptx` | Support de présentation |
-| `Workshop2026-M2-G1-VidChrono.mp4` | Clip Chrono — 60 s max, sans coupe |
+| `Workshop2026-M2-G1-VidChrono.mp4` | Clip Chrono — 60 s max, sans coupe (kit de production : `docs/dossier/clip/`) |
 | `Workshop2026-M2-G1-Code.zip` | Archive du dépôt Git (sources, IaC, scripts, tests, doc, README) |
+
+Clip Chrono : storyboard + script d'assemblage + validation dans `docs/dossier/clip/` ; le `.mp4` s'enregistre
+en recette (voir son `README.md`). Procédure de **gel du code** J4 : [`docs/FREEZE-J4.md`](docs/FREEZE-J4.md).
 
 Génération de l'archive : `make package` (ou `scripts/package_deliverables.sh`). Le script lance d'abord
 `security/hardening/audit.sh`, exclut `.git`, dépendances (`node_modules`, venv), artefacts de build

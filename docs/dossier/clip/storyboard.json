@@ -1,0 +1,68 @@
+{
+  "deliverable": "Workshop2026-M2-G1-VidChrono.mp4",
+  "title": "Zero-Touch Recovery — Clip Chrono",
+  "budget_seconds_max": 60,
+  "single_take": true,
+  "comment": "Prise unique, SANS coupe (contrainte sujet §7). Les segments ne sont pas des plans montés mais des phases de la MÊME prise continue : seules les incrustations (bandeau + légende) changent aux temps indiqués. build_clip.sh recadre la prise brute et incruste ces légendes ; il ne coupe jamais le flux vidéo.",
+  "capture": {
+    "resolution": "1920x1080",
+    "fps": 30,
+    "video_codec": "libx264",
+    "pix_fmt": "yuv420p",
+    "audio": "none",
+    "layout": "Dashboard ZTR plein écran (timeline + score + MTTD/MTTR), terminal verify_tx en incrustation bas-droite",
+    "source_machine": "poste de démo (stack levée, make up-full) ; l'attaque part du PC Attaquant"
+  },
+  "segments": [
+    {
+      "id": 1,
+      "temps": "avant",
+      "label": "AVANT",
+      "t_start": 0,
+      "t_end": 8,
+      "caption": "AVANT — transaction fictive OK (verify_tx = 0)",
+      "screen": "Dashboard en etat Nominal ; terminal joue scripts/verify_tx -> exit 0",
+      "proof": "resilience_anomaly_score bas, aucun incident ouvert"
+    },
+    {
+      "id": 2,
+      "temps": "attaque",
+      "label": "ATTAQUE",
+      "t_start": 8,
+      "t_end": 16,
+      "caption": "ATTAQUE — service_flood depuis le PC Attaquant",
+      "screen": "attacks/run.sh service_flood (duree 20 s, rate 50) ; le score commence a monter",
+      "proof": "resilience_anomaly_score croissant, http 5xx/latence en hausse"
+    },
+    {
+      "id": 3,
+      "temps": "detection",
+      "label": "DETECTION",
+      "t_start": 16,
+      "t_end": 28,
+      "caption": "DÉTECTION — le modèle ML relève l'anomalie",
+      "screen": "Score franchit le seuil ; le detecteur emet un AnomalyEvent ; incident ouvert sur la timeline",
+      "proof": "AnomalyEvent (incident_type=service_flood) ; MTTD affiche"
+    },
+    {
+      "id": 4,
+      "temps": "remediation",
+      "label": "REMEDIATION",
+      "t_start": 28,
+      "t_end": 48,
+      "caption": "REMÉDIATION — action automatique, aucune main humaine",
+      "screen": "Le moteur applique la table de decision (blocage IP via playbook + reload WAF, redemarrage via proxy) ; verify_tx rejoue apres chaque action",
+      "proof": "timeline des actions ; aucune intervention clavier"
+    },
+    {
+      "id": 5,
+      "temps": "apres",
+      "label": "APRES",
+      "t_start": 48,
+      "t_end": 58,
+      "caption": "APRÈS — retour à la normale prouvé (verify_tx = 0) ; MTTR affiché",
+      "screen": "verify_tx -> exit 0 ; incident clos ; MTTD/MTTR affiches sur le dashboard",
+      "proof": "incident clos, resilience_mttr_seconds renseigne"
+    }
+  ]
+}

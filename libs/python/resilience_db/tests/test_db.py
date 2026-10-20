@@ -3,10 +3,11 @@
 import pytest
 from resilience_db import Base, build_database_url, make_engine, make_session_factory
 from resilience_db.migrate import upgrade
-from resilience_db.models import Account, User
+from resilience_db.models import Account, FaceEnrollment, User
 from resilience_db.passwords import hash_password, verify_password
 from resilience_db.seed import seed_demo_data
 from sqlalchemy import inspect
+from sqlalchemy.exc import IntegrityError
 
 
 def test_migration_creates_same_schema_as_models(tmp_path):
@@ -40,6 +41,56 @@ def test_seed_is_idempotent_and_hashes_password():
         assert user.password_hash != "s3cret-pass"
         assert verify_password("s3cret-pass", user.password_hash)
         assert s.query(Account).count() == 3
+
+
+def test_user_role_defaults_to_customer_and_rejects_unknown_role():
+    # Habilitations (consigne add. 1) : rôle par défaut `customer`, valeurs bornées en DB.
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        u = User(username="op01", password_hash=hash_password("s3cret-pass"))
+        s.add(u)
+        s.commit()
+        assert u.role == "customer"
+        u.role = "operator"
+        s.commit()
+        assert s.query(User).filter_by(username="op01").one().role == "operator"
+        s.add(User(username="bad", password_hash="x", role="root"))
+        with pytest.raises(IntegrityError):
+            s.commit()
+
+
+def test_face_enrollment_stores_embedding_one_per_user():
+    # RGPD : on stocke l'embedding (vecteur), jamais l'image ; un seul enrôlement par user.
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        u = User(username="op01", password_hash=hash_password("s3cret-pass"))
+        s.add(u)
+        s.commit()
+        s.add(
+            FaceEnrollment(
+                user_id=u.id,
+                embedding=b"\x00\x01\x02vector-bytes",
+                model_version="buffalo_s-1.0",
+                enrolled_by="admin01",
+            )
+        )
+        s.commit()
+        enr = s.query(FaceEnrollment).filter_by(user_id=u.id).one()
+        assert enr.embedding == b"\x00\x01\x02vector-bytes"
+        assert enr.model_version == "buffalo_s-1.0"
+        # Un second enrôlement pour le même utilisateur est refusé (contrainte d'unicité).
+        s.add(
+            FaceEnrollment(
+                user_id=u.id,
+                embedding=b"other",
+                model_version="buffalo_s-1.0",
+                enrolled_by="admin01",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            s.commit()
 
 
 def test_password_over_72_bytes_rejected():

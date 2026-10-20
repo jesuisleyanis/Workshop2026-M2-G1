@@ -1,0 +1,12 @@
+# Noyau du service (testable sans modèle ML : le backend par défaut est un stub déterministe).
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+resilience-common
+resilience-db
+# Backend de reconnaissance réel (installé en recette sur le PC Hôte, non requis pour les tests).
+# Décommenter pour RECOGNIZER_BACKEND=insightface :
+# insightface==0.7.3
+# onnxruntime==1.19.2
+# numpy==2.1.1
+# opencv-python-headless==4.10.0.84

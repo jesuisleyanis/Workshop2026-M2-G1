@@ -22,6 +22,14 @@ from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from auth_service.backoffice import (
+    FaceVerifier,
+    HttpFaceVerifier,
+    LedNotifier,
+    LogLedNotifier,
+    add_backoffice_auth,
+)
+from auth_service.challenge import ChallengeStore, LockoutStore
 from auth_service.config import SERVICE_NAME, Settings
 from auth_service.observability import (
     ApiError,
@@ -55,13 +63,24 @@ def _migrate_with_retry(engine: Engine, log: logging.Logger, attempts: int = 5) 
             time.sleep(2)
 
 
-def create_app(settings: Settings | None = None, engine: Engine | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    engine: Engine | None = None,
+    *,
+    face_verifier: FaceVerifier | None = None,
+    led_notifier: LedNotifier | None = None,
+    clock=None,
+) -> FastAPI:
     settings = settings or Settings.from_env()
     engine = engine or make_engine()
     session_factory = make_session_factory(engine)
     log = attach_context(
         get_logger(SERVICE_NAME, getattr(logging, settings.log_level, logging.INFO))
     )
+    if not settings.backoffice_face_required:
+        # Mode dégradé : le mot de passe seul suffit pour un compte privilégié (répétitions de
+        # démo uniquement). À ne jamais positionner dans le compose de démo notée.
+        log.warning("BACKOFFICE_FACE_REQUIRED=false : facteur visage DÉSACTIVÉ (mode dégradé)")
 
     rate = DynamicRateLimit(settings.login_rate_limit)
     limiter = Limiter(
@@ -224,5 +243,29 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         before, after = rate.reset()
         log.info("Login rate limit reset %s -> %s", before, after)
         return RateLimitOut(previous_limit=before, current_limit=after)
+
+    # ---------------------------------------------------------------- back-office à étapes
+    store_kwargs = {"clock": clock} if clock is not None else {}
+    challenges = ChallengeStore(settings.backoffice_challenge_ttl, **store_kwargs)
+    lockouts = LockoutStore(
+        settings.backoffice_max_attempts,
+        settings.backoffice_lockout_seconds,
+        failure_window_seconds=settings.backoffice_failure_window,
+        **store_kwargs,
+    )
+    add_backoffice_auth(
+        app,
+        settings=settings,
+        session_factory=session_factory,
+        log=log,
+        face_verifier=face_verifier
+        or HttpFaceVerifier(settings.face_id_url, settings.face_internal_token),
+        led=led_notifier or LogLedNotifier(log),
+        challenges=challenges,
+        lockouts=lockouts,
+        limiter=limiter,
+    )
+    app.state.challenges = challenges
+    app.state.lockouts = lockouts
 
     return app
