@@ -15,7 +15,7 @@ Dépendances **encore non livrées** dont dépendent les objectifs : `infra/comp
 | **S1** | **Paiement** (`payment-api`, via WAF + front) | **Vitale** | Postgres (`/ready`), WAF. **Valide le JWT localement** (HS256 + `JWT_SECRET`) : pas d'appel à `auth` à chaque requête | Postgres KO : paiement KO. `auth` KO : les sessions déjà émises (15 min) continuent de fonctionner |
 | **S2** | **Authentification** (`auth`) | **Haute** | Postgres | Pas de nouvelle connexion ; paiement des sessions actives non touché |
 | **S3** | **Données** (Postgres 16, réseau `data` interne) | **Vitale** (porte VM2) | volume, dumps | Perte ou corruption : perte d'intégrité (ER2) |
-| **S4** | **WAF** (Nginx + CRS) | **Vitale** (seule porte d'entrée) | `blocked_ips.conf`, `nginx.conf` | WAF KO : plus aucun accès externe (S1, S2 inaccessibles) |
+| **S4** | **WAF** (Nginx + CRS) | **Vitale** (seule porte d'entrée) | `blocklist/blocked_ips.conf`, `templates/conf.d/default.conf.template` | WAF KO : plus aucun accès externe (S1, S2 inaccessibles) |
 | **S5** | **Chaîne de reprise** : collector, detector (modèle v1.0.0), moteur de remédiation, Prometheus, Loki | **Haute** pour l'**autonomie**, nulle pour le paiement | Prometheus -> collector -> detector -> remédiation ; remédiation -> proxy Docker, Ansible, auth, Loki, `verify_tx` | Panne : le paiement continue **mais la reprise n'est plus autonome** (mode dégradé = runbook manuel, §5.5) |
 | **S6** | Supervision (Grafana, dashboard, Alertmanager), assistant RAG | Moyenne / faible | S5 | Perte de visibilité seulement ; assistant arrêtable sans impact |
 
@@ -114,7 +114,7 @@ Après >= 10 rejeux par scénario : `RTO_retenu = arrondi_sup(1,5 x p95(D + MTTR
 ### 5.1 `service_flood` et `auth_abuse` (automatique, sans perte de données)
 
 1. Détection : le detector émet `anomaly_detected` et un `POST /events` (token `REMEDIATION_TOKEN`) au format `docs/contracts.md` §3. Idempotence : un `event_id` rejoué ou un incident déjà en cours est ignoré ; le cooldown de 60 s évite la ré-action.
-2. Le moteur applique la règle : **blocage de l'IP source** (`waf_deny_ip.yml` : écriture dans `blocked_ips.conf`, idempotent, puis reload Nginx ; refus de bloquer `127.0.0.1`, `::1`, `192.168.137.1`). Pour `auth_abuse` : appel `POST /internal/tighten-rate-limit` (token `INTERNAL_TOKEN`).
+2. Le moteur applique la règle : **blocage de l'IP source** (`waf_deny_ip.yml` : écriture dans `security/waf/blocklist/blocked_ips.conf`, idempotent, puis reload Nginx ; refus de bloquer `127.0.0.1`, `::1`, `192.168.137.1`). Pour `auth_abuse` : appel `POST /internal/tighten-rate-limit` (token `INTERNAL_TOKEN`).
 3. `service_flood` : **redémarrage** de `payment-api` via `docker-socket-proxy` (`POST /containers/{id}/restart`, services autorisés : `payment-api`, `auth`, `front`).
 4. `verify_tx` (jusqu'à 5 essais x 3 s) : OK -> incident clos, MTTR publié ; KO -> action suivante, puis nouvelle tentative après cooldown, puis **escalade** après 3.
 5. Remise en l'état de référence (après essai) : `attacks/reset.sh` vide la deny-list et re-seed. En exploitation réelle, **lever** les mesures (deny-list, rate-limit) est une décision humaine post-incident (§8, R5).
@@ -136,7 +136,7 @@ Action : `restore_pg_dump` (`remediation/actions/postgres.py`), paramètre `back
 
 ### 5.3 `web_attack`
 
-`confirm_waf_block` (lecture seule Loki : `{service="waf"} |= "waf_blocked"` sur 120 s, filtré par IP) puis `waf_blacklist_ip` (liste `permanent`). Aucune restauration de service nécessaire : le CRS a répondu 403 avant l'application. Retour arrière : retirer la ligne de `blocked_ips.conf` + reload (ou `attacks/reset.sh`).
+`confirm_waf_block` (lecture seule Loki : `{service="waf-exporter"} |= "waf_blocked"` sur 120 s, filtré par IP) puis `waf_blacklist_ip` (liste `permanent`). Aucune restauration de service nécessaire : le CRS a répondu 403 avant l'application. Retour arrière : retirer la ligne de `security/waf/blocklist/blocked_ips.conf` + reload (ou `attacks/reset.sh`).
 
 ### 5.4 PRA : reconstruction sur une autre machine (manuel, non éprouvé)
 
@@ -149,7 +149,7 @@ Action : `restore_pg_dump` (`remediation/actions/postgres.py`), paramètre `back
 
 ### 5.5 Mode dégradé (reprise autonome indisponible)
 
-Déclencheurs : escalade `remediation_failed`, moteur ou proxy en panne, type `unknown`. Un opérateur applique la **même séquence que l'automate** (`blocked_ips.conf` + reload, redémarrage du service, restauration du dump) puis `make verify`. Toute intervention de ce type **met fin au caractère zero-touch** de l'incident : elle est consignée dans le post-mortem. (Elle est interdite dans la démo notée.)
+Déclencheurs : escalade `remediation_failed`, moteur ou proxy en panne, type `unknown`. Un opérateur applique la **même séquence que l'automate** (`blocklist/blocked_ips.conf` + reload, redémarrage du service, restauration du dump) puis `make verify`. Toute intervention de ce type **met fin au caractère zero-touch** de l'incident : elle est consignée dans le post-mortem. (Elle est interdite dans la démo notée.)
 
 ### 5.6 Inventaire des playbooks (lien avec `remediation/actions/runner.py`)
 

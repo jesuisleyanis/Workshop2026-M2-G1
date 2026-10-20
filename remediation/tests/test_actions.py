@@ -125,6 +125,8 @@ async def test_confirm_waf_block_reads_loki_only():
     assert res.ok and res.data["confirmed"] is True
     assert {r.method for r in net.requests} == {"GET"}
     assert "203.0.113.7" in net.requests[0].url.params["query"]
+    # label posé par Promtail = service compose qui émet l'event (waf-exporter, pas waf)
+    assert net.requests[0].url.params["query"].startswith('{service="waf-exporter"}')
     net.loki_values = []
     res = await build_action("confirm_waf_block", {}).execute(ctx_for(client(net)))
     assert res.ok and res.data["confirmed"] is False

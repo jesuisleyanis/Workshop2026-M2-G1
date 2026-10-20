@@ -25,6 +25,12 @@ networks:
   obs:
 
 volumes:
+  # Journal d'audit ModSecurity : EN MÉMOIRE (non persistant), borné, dossier 0750
+  # nginx:nginx (lu par waf-exporter via son groupe). Il peut contenir la donnée appariée
+  # par une règle (cf. security/waf/README.md) : il ne doit ni survivre ni grossir sans fin.
+  waf-logs:
+    driver: local
+    driver_opts: { type: tmpfs, device: tmpfs, o: "size=64m,uid=101,gid=101,mode=0750" }
   pgdata:
   grafana-data:
   loki-data:
@@ -38,18 +44,39 @@ services:
     <<: *hardening
     build: { context: ../../security/waf }
     networks: [edge, app]
+    # Le conteneur écoute 8080/8443 (non-root, cap_drop ALL : pas de port < 1024).
     ports:
-      - "80:80"
-      - "443:443"
+      - "80:8080"
+      - "443:8443"
     volumes:
-      - ../../security/waf/blocked_ips.conf:/etc/nginx/blocked_ips.conf:rw
+      # DOSSIER (pas le fichier) en lecture seule : la liste est écrite SUR L'HÔTE (playbook
+      # waf_deny_ip.yml, par renommage) ; un bind mount de fichier garderait l'ancien inode
+      # sur un hôte Linux. Un WAF compromis ne peut pas débloquer lui-même une source.
+      - ../../security/waf/blocklist:/etc/nginx/blocklist:ro
+      - waf-logs:/var/log/modsec            # journal d'audit ModSecurity -> waf-exporter
     depends_on: [front, payment-api, auth]
     mem_limit: 256m
-    healthcheck:
-      test: ["CMD", "curl", "-fsk", "https://localhost/ || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
+    cpus: 0.5
+    pids_limit: 128
+    # Healthcheck : celui du Dockerfile (https://127.0.0.1:8443/healthz).
+    # Non read_only : l'entrypoint de l'image OWASP rend sa conf et son certificat au
+    # démarrage dans /etc/nginx et /etc/modsecurity.d (un tmpfs masquerait les règles CRS) ;
+    # risque résiduel documenté dans security/waf/README.md.
+
+  # Journal d'audit ModSecurity -> resilience_waf_blocked_total (+ event waf_blocked).
+  # Lecture seule, aucun port publié, réseau obs uniquement (scrapé par Prometheus).
+  waf-exporter:
+    <<: *hardening
+    build: { context: ../../security/waf, dockerfile: Dockerfile.exporter }
+    networks: [obs]
+    volumes:
+      - waf-logs:/var/log/modsec:ro
+    group_add: ["101"]                      # groupe nginx : lecture du journal (dossier 0750)
+    read_only: true
+    depends_on: [waf]
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 32
 
   # ---------------------------------------------------------------- app (métier)
   front:

@@ -1,0 +1,13 @@
+# WAF RESILIENCE-ALPHA — journaux (remplace le logging.conf de l'image CRS).
+# Access log JSON sur stdout, une ligne par requête : Promtail le récupère via le driver
+# Docker et le pousse dans Loki (fonction SOC). Les blocages ModSecurity sont, eux, dans le
+# journal d'audit JSON lu par le service waf-exporter (métrique + event `waf_blocked`).
+log_format json_waf escape=json
+  '{"ts":"$time_iso8601","level":"INFO","service":"waf","event":"http_request",'
+  '"message":"$request_method $uri $status","request_id":null,'
+  '"client_ip":"$remote_addr","http_method":"$request_method",'
+  '"http_path":"$uri","http_status":$status,'
+  '"request_time_s":$request_time,"ua":"$http_user_agent"}';
+
+access_log /dev/stdout json_waf;
+error_log ${ERRORLOG} ${LOGLEVEL};
