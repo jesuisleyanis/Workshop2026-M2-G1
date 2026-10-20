@@ -25,6 +25,7 @@ zip -r "${CODE}" . \
   -x '*.egg-info/*' '*/.pytest_cache/*' '.pytest_cache/*' '*/.ruff_cache/*' '.ruff_cache/*' '*/.mypy_cache/*' '.mypy_cache/*' \
   -x 'infra/ansible/backups/*' \
   -x 'attacks/.runlog' 'attacks/.run.pid' \
+  -x '*.mkv' '*.mp4' '*.mov' '*.ass' 'prise_brute*' \
   -x 'Workshop2026-M2-G1-*' \
   >/dev/null
 
