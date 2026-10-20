@@ -2,6 +2,7 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
+cryptography==44.0.0
 resilience-common
 resilience-db
 # Backend de reconnaissance réel (installé en recette sur le PC Hôte, non requis pour les tests).

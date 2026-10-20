@@ -55,7 +55,7 @@ def test_enroll_then_verify_matches_same_face(client, seed_user):
     body = r.json()
     assert r.status_code == 200
     assert body["match"] is True
-    assert body["model_version"] == "stub-1.0"
+    assert body["model_version"] == "stub-2.0"
     assert "score" not in body  # le score n'est jamais renvoyé (anti hill-climbing)
 
 

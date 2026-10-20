@@ -32,10 +32,10 @@ from sqlalchemy import Engine, text
 from face_id import SERVICE_NAME
 from face_id.config import Settings
 from face_id.recognizer import (
+    MultipleFacesError,
     NoFaceError,
     Recognizer,
     build_recognizer,
-    cosine_similarity,
     deserialize_embedding,
     serialize_embedding,
 )
@@ -147,8 +147,8 @@ def create_app(
         start = time.perf_counter()
         image = _decode_image(req.image_b64)
         try:
-            probe = recognizer.embed(image)
-        except NoFaceError as exc:
+            probe = recognizer.analyze(image).embedding
+        except (NoFaceError, MultipleFacesError) as exc:
             face_verifications_total.labels("error").inc()
             log.warning(
                 "Vérification impossible: aucun visage exploitable",
@@ -173,8 +173,9 @@ def create_app(
             # (anti-énumération : même réponse qu'un visage qui ne correspond pas).
             score, match = 0.0, False
         else:
-            score = cosine_similarity(probe, deserialize_embedding(stored.embedding))
-            match = score >= recognizer.threshold
+            # Adaptation minimale à l'API v2 (distance) ; les routes sont réécrites en Task 2.
+            score = recognizer.distance(probe, deserialize_embedding(stored.embedding))
+            match = score <= recognizer.threshold
 
         face_verify_duration_seconds.observe(time.perf_counter() - start)
         if match:
@@ -202,12 +203,12 @@ def create_app(
         for image_b64 in req.images_b64:
             image = _decode_image(image_b64)
             try:
-                embeddings.append(recognizer.embed(image))
-            except NoFaceError as exc:
+                embeddings.append(recognizer.analyze(image, precise=True).embedding)
+            except (NoFaceError, MultipleFacesError) as exc:
                 raise HTTPException(status_code=422, detail="no_face_detected") from exc
-        # Qualité = cohérence inter-images (min des similarités au centroïde).
+        # Qualité = 1 - plus grande distance au centroïde (cohérence inter-images).
         centroid = _mean(embeddings)
-        quality = min((cosine_similarity(e, centroid) for e in embeddings), default=1.0)
+        quality = 1.0 - max((recognizer.distance(e, centroid) for e in embeddings), default=0.0)
         try:
             store.upsert(
                 req.username,
