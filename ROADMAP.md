@@ -55,7 +55,8 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | Tâche | Composant | Réf. | Propriétaire | Statut | Preuve |
 |---|---|---|---|---|---|
 | auth : login/register, JWT, bcrypt, rate-limit | `services/auth` | R1 | — | ✅ | 36 tests verts (métriques contrat §2) |
-| payment-api : comptes, transactions, health/ready, métriques | `services/payment-api` | R1,R2 | — | ✅ | 54 tests verts (+1 skip Postgres) |
+| payment-api : comptes, transactions, health/ready, métriques | `services/payment-api` | R1,R2 | — | ✅ | 65 tests verts (+1 skip Postgres) |
+| Test de charge payment-api (débit/latence/portes SLO) | `services/payment-api/loadtest` | R2,R17 | — | ✅ | générateur de charge in-process (ASGI/SQLite WAL, sans Docker) + mode live `--url`/`--auth-url` (login auth ≠ API payment-api) ; rapport p50/p95/p99 + export JSON + portes SLO (code 2) ; **profil par défaut : 0 erreur** ; 11 tests fumée `tests/test_loadtest_smoke.py` verts (dont régressions `--mix` write-only, garde `-c 0`, `-n` prime sur `-d`). CDC + README. Baseline « charge normale » vs `service_flood` ; **chiffres de capacité officiels à mesurer en recette (`--url` sur stack PostgreSQL), à reporter dans `docs/pca-pra.md §4.3`** |
 | front : login, solde, comptes, virement, historique | `services/front` | R1 | — | ✅ | CDC+README+src+tests ; contrat payment-api réaligné (centimes/ids) ; design « Banque Résilience » intégré (44 tests Vitest verts, lint+build OK, vérifié contre auth/payment-api locaux) |
 | seed + verify_tx | `scripts/` | R2 | — | ✅ | **réalignés sur le contrat** (#4/#5) : `verify_tx` résout les ids de comptes via l'API et poste `TransactionIn` (3 entiers) ; seed unique = `resilience_db.seed` (comptes financés, `SEED_PASSWORD` SOPS), `scripts/seed.py` délègue ; 11 tests `scripts/tests` verts ; `scripts/README.md` |
 | Observabilité provisionnée (Prom/Loki/Grafana/Alert) | `infra/*` | R7 | — | ✅ | configs + provisioning |
