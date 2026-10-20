@@ -36,13 +36,9 @@ def upgrade() -> None:
     op.create_table(
         "face_enrollments",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column(
-            "user_id",
-            sa.Integer(),
-            sa.ForeignKey("users.id"),
-            nullable=False,
-            unique=True,
-        ),
+        # L'unicité (un seul enrôlement par utilisateur) est portée par l'index unique ci-dessous,
+        # comme le fait le modèle (unique=True + index=True => un unique index) : pas de doublon.
+        sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("embedding", sa.LargeBinary(), nullable=False),
         sa.Column("model_version", sa.String(64), nullable=False),
         sa.Column("enrolled_by", sa.String(64), nullable=False),
