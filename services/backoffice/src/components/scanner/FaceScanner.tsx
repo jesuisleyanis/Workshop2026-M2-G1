@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import type { FaceFrame, Pose } from '../../api/auth'
 import type { Camera } from '../../hooks/useCamera'
-import { poseFromRotation } from '../../lib/pose'
 import { loadMediaPipeDetector, type DetectorFactory, type Landmarks, type PoseDetector } from '../../vision/detector'
 import { HudOverlay, VerdictOverlay, YawGauge, formatRotation, type Direction, type Engine, type LiveReading, type Verdict } from './HudOverlay'
+import { meetsCapture } from './captureMargins'
 import { useHoldTimer } from './useHoldTimer'
 import './scanner.css'
 
@@ -214,7 +214,10 @@ export function FaceScanner({
       setIndex(next)
       if (next >= posesRef.current.length) {
         setDone(true)
-        onCompleteRef.current(framesRef.current)
+        // Les JPEG ne restent pas en mémoire pendant l'analyse / le verdict.
+        const frames = framesRef.current
+        framesRef.current = []
+        onCompleteRef.current(frames)
       }
       return true
     },
@@ -258,7 +261,7 @@ export function FaceScanner({
         ts >= pauseUntilRef.current &&
         !!cur &&
         cur.faces === 1 &&
-        poseFromRotation(cur.rotation) === expected
+        meetsCapture(expected, cur.rotation)
       if (tick(ok, ts)) commit(ts)
     }
     raf = requestAnimationFrame(loop)
@@ -273,15 +276,16 @@ export function FaceScanner({
         setCountdown(countdown - 1)
       } else {
         setCountdown(null)
-        commit(performance.now())
+        // Comme en auto : rien n'est capturé sous un verdict affiché par le parent.
+        if (verdictRef.current === 'idle') commit(performance.now())
       }
     }, 1000)
     return () => clearTimeout(t)
   }, [countdown, commit])
 
   const expected = done ? undefined : poses[index]
-  const currentPose = live ? poseFromRotation(live.rotation) : null
-  const poseOk = engine === 'auto' && verdict === 'idle' && !!live && live.faces === 1 && currentPose === expected
+  const poseOk =
+    engine === 'auto' && verdict === 'idle' && !!live && live.faces === 1 && !!expected && meetsCapture(expected, live.rotation)
   const manual = engine === 'manual'
 
   let instruction: string
@@ -294,6 +298,9 @@ export function FaceScanner({
   else if (!live || live.faces === 0) instruction = 'Placez votre visage dans le cadre'
   else if (live.faces > 1) instruction = 'Un seul visage doit être visible'
   else if (poseOk) instruction = 'Ne bougez plus…'
+  // Bon sens mais pas assez franc pour la marge de capture : on encourage à continuer.
+  else if (expected === 'gauche' && (live.rotation ?? 0) > 0) instruction = 'Tournez encore un peu vers votre gauche'
+  else if (expected === 'droite' && (live.rotation ?? 0) < 0) instruction = 'Tournez encore un peu vers votre droite'
   else instruction = INSTRUCTIONS[expected]
 
   const shownProgress = manual ? (countdown === null ? 0 : (COUNTDOWN_FROM - countdown) / COUNTDOWN_FROM) : progress

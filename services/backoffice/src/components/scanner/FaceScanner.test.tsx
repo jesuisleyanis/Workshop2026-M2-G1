@@ -169,6 +169,47 @@ describe('FaceScanner — capture automatique', () => {
   })
 })
 
+describe('FaceScanner — marges de capture (écart MediaPipe / dlib)', () => {
+  function lookRot(rotation: number) {
+    seen = { points: [], rotation, faces: 1 }
+  }
+
+  it('ne capture pas « gauche » à 0.18 (valide pour lib/pose mais sous la marge)', async () => {
+    const { camera } = await mount({ poses: ['gauche'] })
+    lookRot(0.18)
+    frames(40)
+    expect(camera.capture).not.toHaveBeenCalled()
+    expect(screen.getByTestId('fs-instruction').textContent).toMatch(/encore un peu vers votre gauche/i)
+  })
+
+  it('capture « gauche » à 0.25', async () => {
+    const { onComplete } = await mount({ poses: ['gauche'] })
+    lookRot(0.25)
+    frames(10)
+    expect(onComplete).toHaveBeenCalledWith([{ pose: 'gauche', image_b64: 'IMG1' }])
+  })
+
+  it('ne capture pas « droite » à -0.18, capture à -0.25', async () => {
+    const { camera } = await mount({ poses: ['droite'] })
+    lookRot(-0.18)
+    frames(40)
+    expect(camera.capture).not.toHaveBeenCalled()
+    lookRot(-0.25)
+    frames(10)
+    expect(camera.capture).toHaveBeenCalledTimes(1)
+  })
+
+  it('ne capture pas « face » à 0.09, capture à 0.05', async () => {
+    const { camera } = await mount({ poses: ['face'] })
+    lookRot(0.09)
+    frames(40)
+    expect(camera.capture).not.toHaveBeenCalled()
+    lookRot(0.05)
+    frames(10)
+    expect(camera.capture).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('FaceScanner — consigne et accessibilité', () => {
   it('annonce la consigne de la pose attendue dans une région aria-live', async () => {
     await mount()
@@ -236,6 +277,15 @@ describe('FaceScanner — mode manuel', () => {
       { pose: 'face', image_b64: 'IMG2' },
       { pose: 'droite', image_b64: 'IMG3' },
     ])
+  })
+
+  it('ne capture pas en manuel si un verdict apparaît pendant le compte à rebours', async () => {
+    const { camera, rerender, props } = await mount({ detectorFactory: () => Promise.reject(new Error('wasm')) })
+    act(() => screen.getByRole('button', { name: /capturer/i }).click())
+    rerender(<FaceScanner {...props} verdict="denied" />)
+    // Une seconde par act : chaque tic du 3-2-1 est un rendu distinct.
+    for (let i = 0; i < 3; i++) act(() => vi.advanceTimersByTime(1000))
+    expect(camera.capture).not.toHaveBeenCalled()
   })
 
   it('bascule en mode manuel si le détecteur plante en cours de route', async () => {

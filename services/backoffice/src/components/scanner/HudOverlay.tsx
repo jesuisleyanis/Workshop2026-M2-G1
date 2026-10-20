@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { Pose } from '../../api/auth'
-import { SEUIL_FACE, SEUIL_PROFIL } from '../../lib/pose'
+import { CAPTURE_FACE_MAX, CAPTURE_PROFILE_MIN } from './captureMargins'
 
 // Couches HUD du FaceScanner (purement visuelles, hors couche miroir : textes et flèches
 // restent lisibles). Toute la mise en scène sci-fi vit ici et dans scanner.css (préfixe fs-).
@@ -22,10 +22,11 @@ const TICKS = 60
 // (rotation > 0 = tête vers la gauche de la personne = vers la gauche de l'écran).
 const GAUGE_SPAN = 0.4
 const gaugeX = (r: number) => 50 - (Math.max(-GAUGE_SPAN, Math.min(GAUGE_SPAN, r)) / GAUGE_SPAN) * 50
+// Zones cibles = marges de capture (cf. captureMargins.ts), pas les seuils bruts du contrat.
 const ZONES: Record<Pose, { left: number; width: number }> = {
-  gauche: { left: 0, width: gaugeX(SEUIL_PROFIL) },
-  face: { left: gaugeX(SEUIL_FACE), width: gaugeX(-SEUIL_FACE) - gaugeX(SEUIL_FACE) },
-  droite: { left: gaugeX(-SEUIL_PROFIL), width: 100 - gaugeX(-SEUIL_PROFIL) },
+  gauche: { left: 0, width: gaugeX(CAPTURE_PROFILE_MIN) },
+  face: { left: gaugeX(CAPTURE_FACE_MAX), width: gaugeX(-CAPTURE_FACE_MAX) - gaugeX(CAPTURE_FACE_MAX) },
+  droite: { left: gaugeX(-CAPTURE_PROFILE_MIN), width: 100 - gaugeX(-CAPTURE_PROFILE_MIN) },
 }
 
 export function formatRotation(r: number | null): string {
