@@ -90,7 +90,7 @@ Extrait du compose (`*hardening` = `cap_drop: [ALL]`, `no-new-privileges`, `rest
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: assistant/Dockerfile }
     profiles: [ai]
-    networks: [app]                                 # pas de ports publiés, pas sur `edge`
+    networks: [ai]                                  # réseau dédié (assistant, ollama, dashboard) : pas de route vers remediation, data, obs ; pas de ports publiés
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}   # ou http://<IP-PC-IA>:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
@@ -152,7 +152,7 @@ Ollama n'est jamais exposé par le WAF ; seul l'assistant l'appelle.
 
 **Choix : page servie par l'assistant** (`GET /`), embarquée dans le dashboard comme **onglet via une iframe**. Raisons : une seule source de vérité, zéro build front supplémentaire, aucun CORS (la page appelle `api/v1/ask` et charge `static/*` en **relatif**, donc fonctionne à la racine comme sous `/assistant/`), isolation (CSP, pas de HTML injecté : tout est rendu par `textContent`).
 
-Onglet « Assistant » intégré au dashboard : iframe sur `/assistant/`, proxifié par le nginx du dashboard vers `assistant:8006` (variable `ASSISTANT_UPSTREAM`, préfixe `/assistant` retiré). Seules `GET /assistant/`, `GET /assistant/static/*` et `POST /assistant/api/v1/ask` sont relayées. L'iframe est donc **same-origin** : `frame-ancestors 'self'` suffit, `FRAME_ANCESTORS` n'est nécessaire qu'en dev (dashboard Vite sur `http://localhost:5174` pointant directement vers `:8006`). L'API de l'assistant (`:8006`) n'est **pas** publiée sur `edge`. **Pas d'authentification applicative dans l'assistant** (service interne en lecture seule, réseau `app`) ; si l'on l'expose via le WAF, l'authentification doit être appliquée à ce niveau.
+Onglet « Assistant » intégré au dashboard : iframe sur `/assistant/`, proxifié par le nginx du dashboard vers `assistant:8006` (variable `ASSISTANT_UPSTREAM`, préfixe `/assistant` retiré). Seules `GET /assistant/`, `GET /assistant/static/*` et `POST /assistant/api/v1/ask` sont relayées. L'iframe est donc **same-origin** : `frame-ancestors 'self'` suffit, `FRAME_ANCESTORS` n'est nécessaire qu'en dev (dashboard Vite sur `http://localhost:5174` pointant directement vers `:8006`). L'API de l'assistant (`:8006`) n'est **pas** publiée sur `edge`. **Pas d'authentification applicative dans l'assistant** (service interne en lecture seule, réseau `ai`) ; si l'on l'expose via le WAF, l'authentification doit être appliquée à ce niveau.
 
 ## Logs, métriques, sondes
 
@@ -176,7 +176,8 @@ Aucun accès réseau : Ollama est mocké, `/ready` sonde un faux Ollama, corpus 
 | `tests/test_retrieval.py` | bons passages pour une question donnée, **sans LLM** |
 | `tests/test_api.py` | `/ask` -> `{answer, sources}` (LLM mocké), mode dégradé, `/health`, `/ready`, erreurs |
 | `tests/test_incident_routes.py` | `/summarize`, `/postmortem`, `/propose` : nominal, dégradé, validation, injection, payload trop gros |
-| `tests/test_security_guard.py` | **test négatif** : aucun endpoint d'action, aucune capacité d'exécution, `/propose` sans processus ni appel sortant, conteneur non-root |
+| `tests/test_security_guard.py` | **test négatif** : aucun endpoint d'action, aucune capacité d'exécution, `/propose` sans processus ni appel sortant, conteneur non-root ; **compose vérifié** : réseau `ai` sans intersection avec `remediation`, ni secret/token, montages `:ro` (sauf Chroma), aucun `depends_on` vers l'assistant |
+| `tests/test_api.py` (sans mémoire) | deux `/ask` successifs : la 2e invocation du LLM ne contient pas la 1re question ; `AskRequest` n'a que `question` |
 
 ## Limites connues
 

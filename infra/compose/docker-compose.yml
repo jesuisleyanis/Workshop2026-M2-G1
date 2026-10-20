@@ -21,11 +21,13 @@ x-pylimits: &pylimits
 
 networks:
   edge:
-  app:   # non `internal` : seul réseau avec sortie (pull d'images, modèles Ollama). Aucun `ports:`.
+  app:   # non `internal` : sortie (pull d'images). Aucun `ports:`.
   data:
     internal: true
   obs:
     internal: true   # observabilité : aucun besoin de sortie Internet (P4S-02)
+  ai:    # assistant + ollama (+ dashboard pour le proxy /assistant/) : isolés du moteur de remédiation.
+         # Non `internal` : Ollama tire ses modèles, OLLAMA_BASE_URL peut viser un PC IA externe.
 
 # Secret Compose alimenté depuis .env (SOPS) : monté en fichier dans Alertmanager (credentials_file),
 # jamais écrit dans alertmanager.yml (fichier versionné).
@@ -259,7 +261,7 @@ services:
     # /remediation/stream -> remediation:8005/stream (Bearer injecté côté serveur),
     # /prometheus/api/v1/query -> prometheus:9090 (score ML + santé, GET lecture seule).
     # VITE_* sont des build-args Vite, pas des variables runtime : la base /remediation est le défaut du build.
-    networks: [app]
+    networks: [app, ai]   # ai : proxy /assistant/ (l'assistant n'est pas sur `app`)
     environment:
       REMEDIATION_UPSTREAM: remediation:8005
       REMEDIATION_AUTH_HEADER: "Bearer ${REMEDIATION_TOKEN}"
@@ -365,7 +367,7 @@ services:
     <<: *hardening
     image: ollama/ollama:0.3.14
     profiles: [ai]
-    networks: [app]
+    networks: [ai]
     volumes:
       - ollama-models:/root/.ollama
     mem_limit: 8g          # lourd — déporter sur le PC IA si la RAM est serrée
@@ -374,7 +376,8 @@ services:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: assistant/Dockerfile }
     profiles: [ai]
-    networks: [app]
+    # Réseau `ai` seul : aucune route vers remediation:8005 (app) ni postgres (data) ni obs.
+    networks: [ai]
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}   # ou http://<IP-PC-IA>:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}

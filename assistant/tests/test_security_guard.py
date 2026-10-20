@@ -166,3 +166,41 @@ def test_container_has_no_docker_socket_or_privileges():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "docker.sock" not in dockerfile
     assert re.search(r"^USER\s+(?!root)\S+", dockerfile, re.M), "le conteneur doit tourner en non-root"
+
+
+# ---------------------------------------------------------------- compose : isolement de l'assistant
+COMPOSE = ROOT.parent / "infra" / "compose" / "docker-compose.yml"
+
+
+@pytest.fixture
+def services():
+    if not COMPOSE.exists():  # image Docker : seul assistant/ est copié
+        pytest.skip("docker-compose.yml absent")
+    import yaml
+
+    return yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
+
+
+def test_compose_assistant_has_no_secret_nor_write_access(services):
+    a = services["assistant"]
+    assert "secrets" not in a
+    env = " ".join(f"{k}={v}" for k, v in (a.get("environment") or {}).items()).upper()
+    for word in ("TOKEN", "SECRET", "PASSWORD", "REMEDIATION"):
+        assert word not in env, word
+    vols = a.get("volumes", [])
+    assert not any("docker.sock" in v for v in vols)
+    assert all(v.endswith(":ro") for v in vols if v != "chroma-data:/data/chroma"), vols
+    assert "incidents-export:/data/incidents:ro" in vols  # le journal = copie JSON en lecture seule
+
+
+def _deps(svc) -> set[str]:
+    return set(svc.get("depends_on") or [])  # liste ou dict : les clés sont les noms de services
+
+
+def test_compose_assistant_is_isolated_from_remediation(services):
+    nets = set(services["assistant"]["networks"])
+    assert not nets & set(services["remediation"]["networks"]), nets
+    assert not nets & {"data", "obs"}, nets
+    # Reprise indépendante : rien n'attend l'assistant, le moteur ne le connaît pas.
+    assert not [n for n, s in services.items() if "assistant" in _deps(s)]
+    assert "assistant" not in str(services["remediation"].get("environment", "")).lower()

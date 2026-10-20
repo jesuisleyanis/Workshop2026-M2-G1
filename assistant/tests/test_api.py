@@ -3,7 +3,7 @@
 from dataclasses import replace
 
 import pytest
-from app.main import create_app
+from app.main import AskRequest, create_app
 from app.store import open_store
 from fastapi.testclient import TestClient
 
@@ -128,3 +128,14 @@ def test_ui_is_served_with_frame_policy(client):
     assert client.get("/static/assistant.js").status_code == 200
     # chemins relatifs : la page reste fonctionnelle derrière le proxy /assistant/ du dashboard
     assert 'src="static/assistant.js"' in r.text and 'href="static/assistant.css"' in r.text
+
+
+def test_ask_has_no_conversation_memory(client, fake_llm):
+    """Chaque question est traitée seule : rien de la précédente n'est renvoyé au LLM."""
+    assert set(AskRequest.model_fields) == {"question"}  # aucun champ d'historique accepté
+    first = "Quelle est la procédure pour service_flood ?"
+    assert client.post("/api/v1/ask", json={"question": first}).status_code == 200
+    assert client.post("/api/v1/ask", json={"question": "Comment bloquer une IP au WAF ?"}).status_code == 200
+    assert fake_llm.invoke.call_count == 2
+    second_call = " ".join(m.content for m in fake_llm.invoke.call_args.args[0])
+    assert first not in second_call and "Réponse simulée" not in second_call
