@@ -1,9 +1,14 @@
 # backoffice — back-office durci (consigne additionnelle 1)
 
 Application React + Vite + TypeScript + Tailwind, réservée aux rôles `operator`/`admin`, servie
-derrière le WAF. Porte le **login à étapes** (identifiant → visage → mot de passe) et, à venir,
-l'écran d'habilitations. Voir le [cahier des charges](CAHIER-DES-CHARGES.md) et le
+derrière le WAF. Porte le **login à étapes** (identifiant → visage → mot de passe), l'écran
+**Habilitations** (rôles + visages), l'assistant **Nouvel agent** et l'**initialisation** du premier
+administrateur. Voir le [cahier des charges](CAHIER-DES-CHARGES.md) et le
 [cadrage](../../docs/consigne-additionnelle-1.md).
+
+> **Accès : PC Hôte uniquement, `https://localhost:9443`.** Le WAF ne sert le back-office et
+> `/api/v1/auth/*` + `/api/v1/admin/*` que sur ce listener lié à `127.0.0.1` (404 sur 80/443) :
+> la caméra utilisée est donc forcément celle de l'hôte.
 
 ## Lancer / tester
 
@@ -42,22 +47,67 @@ identifiant ──/auth/identify──► caméra ON (getUserMedia, caméra du P
 
 ## Scanner de visage (`src/components/scanner/FaceScanner.tsx`)
 
-- Suivi de pose **dans le navigateur** (MediaPipe Face Landmarker, chargé à la demande) : chaque
-  pose demandée par le serveur (`face`, `gauche`, `droite`) est capturée automatiquement après
-  1 s de maintien, un seul visage dans le champ. Repli **manuel** (bouton + 3-2-1) si le
-  détecteur ne charge pas.
+- Suivi de pose **dans le navigateur** (MediaPipe Face Landmarker, **auto-hébergé** : chargé à la
+  demande depuis `/models` et `/mediapipe`, aucun CDN) : chaque pose demandée (`face`, `gauche`,
+  `droite`) est capturée automatiquement après 1 s de maintien, un seul visage dans le champ.
+  Repli **manuel** (bouton + 3-2-1) si le détecteur ne charge pas.
 - Rotation calculée sur l'image **non miroir** (même formule que `face-id`) ; seul l'aperçu est
   affiché en miroir, d'où la flèche « gauche » vers la gauche de l'écran.
-- Assets servis en same-origin (`/models`, `/mediapipe`, ignorés par git, préparés par
-  `npm run prepare:vision`, aussi lancé par le Dockerfile) ; CSP `script-src 'self' 'wasm-unsafe-eval'`.
+- Assets servis en same-origin (`/models`, `/mediapipe`, ignorés par git) : à préparer une fois avec
+  **`npm run prepare:vision`** (aussi lancé par le Dockerfile) ; CSP `script-src 'self' 'wasm-unsafe-eval'`.
+- Marges de capture (`scanner/captureMargins.ts`) : face `|r| ≤ 0.07`, profil `|r| ≥ 0.22`, plus
+  strictes que les seuils du contrat (0.10 / 0.15) pour absorber l'écart de mesure MediaPipe / dlib.
 - Captures JPEG ≤ 640 px envoyées telles quelles ; rien n'est conservé côté client.
+
+## Habilitations, assistant « Nouvel agent », initialisation
+
+Écrans réservés au rôle `admin` (claim du jeton, utilisé pour choisir l'écran seulement : le serveur
+reste l'autorité, `403` sinon, affiché en clair). Un opérateur voit la carte « Accès opérateur »
+(lecture seule, aucun appel à l'API d'administration).
+
+- **Habilitations** (`pages/HabilitationsPage.tsx`) : tableau des agents (identifiant, rôle en
+  `<select>`, statut visage « Enrôlé le … par … » / « Non enrôlé »). Actions : **Voir photos**
+  (`PhotoStrip`, trois vignettes servies par `auth`), **Ré-enrôler**, **Révoquer** (avec
+  confirmation). `409 last_admin` (dernier administrateur) est affiché en clair ; `401` ramène au login.
+- **Assistant « Nouvel agent »** (`components/EnrollWizard.tsx`) : 1) identifiant, mot de passe
+  (+ confirmation), rôle — règles miroir du serveur (identifiant `^[A-Za-z0-9_.-]{3,32}$`, mot de
+  passe 8–72 octets UTF-8) ; 2) `FaceScanner mode="enroll"` sur les poses `face`, `gauche`, `droite` ;
+  3) récapitulatif des vignettes puis « Valider l'enrôlement » (`createUser` puis `enrollFace`). Le
+  compte n'est créé qu'à la validation ; un **rejet 422** affiche le motif par pose (pose incorrecte,
+  aucun visage, plusieurs visages, pas la même personne, image illisible) et **refait les 3 poses**
+  sans recréer le compte. Le ré-enrôlement saute l'étape 1 (`enrollFace` seul).
+- **Initialisation** (`pages/BootstrapPage.tsx`) : affichée quand `GET /auth/bootstrap` indique
+  qu'aucun admin n'existe. Jeton d'initialisation + identifiant + mot de passe → même scanner →
+  `POST /auth/bootstrap` → message de succès puis connexion. Jeton refusé (`403 bootstrap_denied`)
+  → retour au formulaire.
+- Les photos capturées ne vivent en mémoire que le temps du récapitulatif ; la caméra est coupée dès
+  que le scanner est démonté.
+
+## Recette sur le PC Hôte (matériel réel)
+
+Non automatisable (caméra, ESP8266) : à dérouler à la main sur `https://localhost:9443`.
+
+- [ ] Caméra USB de l'hôte détectée, aperçu affiché, voyant de la caméra éteint hors scan.
+- [ ] 3 poses (face, gauche, droite) capturées automatiquement au login et à l'enrôlement.
+- [ ] Visage refusé : LED rouge fixe, caméra ON, **refroidissement 30 s**, puis identifiant vidé.
+- [ ] Mot de passe refusé : LED **rouge ×10 en 3 s**, champ gelé 3 s.
+- [ ] Accès autorisé : LED **verte 30 s**.
+- [ ] 2 échecs : **blocage 5 min** (écran de blocage + décompte).
+- [ ] **LED physique synchronisée** avec le jumeau LED de l'écran (mêmes états, mêmes timings).
+- [ ] **Calibrage des marges de capture** (`captureMargins.ts` : face `|r| ≤ 0.07`, profil
+      `|r| ≥ 0.22`) : comparer la rotation du HUD à celle de `face-id` sur la caméra réelle ; ajuster
+      si des `wrong_pose` apparaissent à l'enrôlement.
+- [ ] Environnement vierge : initialisation, ajout d'un agent, ré-enrôlement, révocation, refus du
+      `last_admin`.
 
 ## État
 
-- ✅ Login à étapes v2 (thème front, FaceScanner, refroidissements 30 s / 3 s, blocage 5 min, jumeau LED aux timings firmware) — **98 tests Vitest** (`npm test`).
-- 🟨 Écran **habilitations** (enrôlement des visages + rôles) — lot **L6** (placeholder actuel).
+- ✅ Login à étapes v2 (thème front, FaceScanner, refroidissements 30 s / 3 s, blocage 5 min, jumeau LED aux timings firmware).
+- ✅ Habilitations, assistant « Nouvel agent », ré-enrôlement, révocation, initialisation du premier admin — **131 tests Vitest** (`npm test`).
+- 🟨 Recette matérielle sur le PC Hôte (checklist ci-dessus).
 
 ## Place dans le flux
 
-Consommateur de `auth` (étapes) ; pour l'enrôlement (L6), de `auth → face-id`. Ne manipule aucun
-secret et ne fait pas foi pour les habilitations (décision côté `auth`, claim `role` du JWT).
+Consommateur de `auth` (étapes et administration) ; l'enrôlement passe par `auth → face-id`. Ne
+manipule aucun secret et ne fait pas foi pour les habilitations (décision côté `auth`, claim `role`
+du JWT).

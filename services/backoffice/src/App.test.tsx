@@ -15,6 +15,8 @@ vi.mock('./pages/LoginPage', () => ({
     </button>
   ),
 }))
+// Habilitations mockée : l'accueil admin ne doit pas appeler l'API d'administration ici.
+vi.mock('./pages/HabilitationsPage', () => ({ HabilitationsPage: () => <div data-testid="habilitations" /> }))
 vi.mock('./api/auth', async (orig) => {
   const actual = await orig<typeof import('./api/auth')>()
   return { ...actual, bootstrapStatus: vi.fn() }
