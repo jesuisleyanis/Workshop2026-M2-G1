@@ -15,9 +15,9 @@ import hmac
 import logging
 import time
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from resilience_common.logging import get_logger
 from resilience_common.metrics import (
     face_enrollments,
@@ -44,15 +44,18 @@ from face_id.store import EnrollmentStore, UnknownUserError
 log = get_logger(SERVICE_NAME)
 
 
+# Plafond anti-DoS (~1 Mo d'image en base64) : une photo de visage est bien en deçà.
+_MAX_IMAGE_B64 = 1_500_000
+
+
 class VerifyRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
-    image_b64: str = Field(min_length=1)
+    image_b64: str = Field(min_length=1, max_length=_MAX_IMAGE_B64)
 
 
 class VerifyResponse(BaseModel):
+    # Le score n'est PAS renvoyé (évite le hill-climbing) : il reste dans les logs/métriques.
     match: bool
-    score: float
-    threshold: float
     model_version: str
 
 
@@ -60,6 +63,13 @@ class EnrollRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     images_b64: list[str] = Field(min_length=1, max_length=10)
     enrolled_by: str = Field(default="system", max_length=64)
+
+    @field_validator("images_b64")
+    @classmethod
+    def _bound_image_sizes(cls, v: list[str]) -> list[str]:
+        if any(len(img) > _MAX_IMAGE_B64 for img in v):
+            raise ValueError("image trop volumineuse")
+        return v
 
 
 class EnrollResponse(BaseModel):
@@ -105,7 +115,8 @@ def create_app(
         log.debug("initialisation de la jauge d'enrôlements différée: %s", exc)
 
     def require_internal_token(x_internal_token: str = Header(default="")) -> None:
-        if not hmac.compare_digest(x_internal_token, settings.internal_token):
+        # compare_digest exige des bytes pour tolérer un header non-ASCII (sinon TypeError -> 500).
+        if not hmac.compare_digest(x_internal_token.encode(), settings.internal_token.encode()):
             raise HTTPException(status_code=401, detail="internal_token_invalid")
 
     @app.get("/health")
@@ -121,12 +132,17 @@ def create_app(
             with session_factory() as s:
                 s.execute(text("SELECT 1"))
         except Exception as exc:  # noqa: BLE001
-            problems.append(f"db injoignable: {exc}")
+            log.warning("readiness DB check failed: %s", exc)  # détail seulement dans les logs
+            problems.append("db injoignable")
         if problems:
             return JSONResponse(status_code=503, content={"status": "not_ready", "problems": problems})
         return {"status": "ready"}
 
-    @app.post("/api/v1/verify", response_model=VerifyResponse)
+    @app.post(
+        "/api/v1/verify",
+        response_model=VerifyResponse,
+        dependencies=[Depends(require_internal_token)],
+    )
     def verify(req: VerifyRequest) -> VerifyResponse:
         start = time.perf_counter()
         image = _decode_image(req.image_b64)
@@ -141,8 +157,19 @@ def create_app(
             raise HTTPException(status_code=422, detail="no_face_detected") from exc
 
         stored = store.get(req.username)
-        if stored is None or stored.model_version != recognizer.model_version:
-            # Identifiant inconnu, non enrôlé, ou enrôlé avec un autre modèle => non-correspondance
+        if stored is not None and stored.model_version != recognizer.model_version:
+            # Embedding enrôlé avec un AUTRE modèle : comparaison invalide. On le journalise
+            # explicitement (réenrôlement requis) plutôt que de le confondre avec un vrai no-match.
+            face_verifications_total.labels("error").inc()
+            face_verify_duration_seconds.observe(time.perf_counter() - start)
+            log.warning(
+                "Embedding enrôlé avec un modèle différent (réenrôlement requis)",
+                extra={"event": "face_verify_error", "user": req.username},
+            )
+            return VerifyResponse(match=False, model_version=recognizer.model_version)
+
+        if stored is None:
+            # Identifiant inconnu ou non enrôlé => non-correspondance
             # (anti-énumération : même réponse qu'un visage qui ne correspond pas).
             score, match = 0.0, False
         else:
@@ -152,22 +179,18 @@ def create_app(
         face_verify_duration_seconds.observe(time.perf_counter() - start)
         if match:
             face_verifications_total.labels("match").inc()
+            # Le score reste côté serveur (logs), jamais renvoyé au client (anti hill-climbing).
             log.info(
                 "Visage reconnu",
-                extra={"event": "face_verify_match", "user": req.username},
+                extra={"event": "face_verify_match", "user": req.username, "score": round(score, 4)},
             )
         else:
             face_verifications_total.labels("nomatch").inc()
             log.info(
                 "Visage non reconnu",
-                extra={"event": "face_verify_nomatch", "user": req.username},
+                extra={"event": "face_verify_nomatch", "user": req.username, "score": round(score, 4)},
             )
-        return VerifyResponse(
-            match=match,
-            score=round(score, 4),
-            threshold=recognizer.threshold,
-            model_version=recognizer.model_version,
-        )
+        return VerifyResponse(match=match, model_version=recognizer.model_version)
 
     @app.post(
         "/api/v1/enroll",
@@ -216,7 +239,7 @@ def create_app(
             "Enrôlement révoqué",
             extra={"event": "face_enrollment_revoked", "user": username},
         )
-        return JSONResponse(status_code=204, content=None)
+        return Response(status_code=204)  # corps vide : un JSON null casse sous uvicorn (204)
 
     @app.get("/api/v1/enrollments", dependencies=[Depends(require_internal_token)])
     def enrollments() -> list[dict]:

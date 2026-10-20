@@ -80,11 +80,27 @@ class StubRecognizer:
 
 
 def build_recognizer(backend: str, threshold: float | None = None) -> Recognizer:
-    """Fabrique le backend demandé. `insightface` est importé paresseusement (recette)."""
+    """Fabrique le backend demandé. `insightface` est importé paresseusement (recette).
+
+    Garde-fou : le backend `stub` (reconnaissance factice = égalité d'octets) n'est PAS une vraie
+    reconnaissance ; on refuse de démarrer dessus par accident en recette/démo, sauf opt-in explicite
+    `ALLOW_STUB_RECOGNIZER=1`. Les tests injectent directement un StubRecognizer (sans passer ici).
+    """
+    import os
+
     if backend == "stub":
+        if os.getenv("ALLOW_STUB_RECOGNIZER", "") not in {"1", "true", "yes"}:
+            raise RuntimeError(
+                "RECOGNIZER_BACKEND=stub refusé (reconnaissance factice). "
+                "Choisir 'team' ou 'insightface', ou poser ALLOW_STUB_RECOGNIZER=1 pour le dev."
+            )
         return StubRecognizer(threshold if threshold is not None else 0.6)
     if backend == "insightface":  # pragma: no cover - validé en recette, deps non installées
         from face_id.backends.insightface_backend import InsightFaceRecognizer
 
         return InsightFaceRecognizer(threshold if threshold is not None else 0.35)
+    if backend == "team":  # pragma: no cover - modèle de l'équipe (cf. INTEGRATION-ML.md)
+        from face_id.backends.team_backend import TeamRecognizer
+
+        return TeamRecognizer(threshold if threshold is not None else 0.5)
     raise ValueError(f"backend de reconnaissance inconnu: {backend!r}")

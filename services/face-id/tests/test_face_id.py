@@ -21,9 +21,21 @@ def _enroll(client, username="alice", image=FACE_ALICE, by="admin01"):
     )
 
 
+def _verify(client, username="alice", image=FACE_ALICE):
+    return client.post(
+        "/api/v1/verify", json={"username": username, "image_b64": image}, headers=AUTH_HEADER
+    )
+
+
 def test_health_and_ready_ok(client):
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/ready").json()["status"] == "ready"
+
+
+def test_verify_requires_internal_token(client, seed_user):
+    # Défense en profondeur : /verify n'est appelable que par auth (token interne).
+    r = client.post("/api/v1/verify", json={"username": "alice", "image_b64": FACE_ALICE})
+    assert r.status_code == 401
 
 
 def test_enroll_requires_internal_token(client, seed_user):
@@ -39,32 +51,28 @@ def test_enroll_unknown_user_is_404(client):
 
 def test_enroll_then_verify_matches_same_face(client, seed_user):
     assert _enroll(client).status_code == 200
-    r = client.post("/api/v1/verify", json={"username": "alice", "image_b64": FACE_ALICE})
+    r = _verify(client, image=FACE_ALICE)
     body = r.json()
     assert r.status_code == 200
     assert body["match"] is True
-    assert body["score"] >= body["threshold"]
     assert body["model_version"] == "stub-1.0"
+    assert "score" not in body  # le score n'est jamais renvoyé (anti hill-climbing)
 
 
 def test_verify_rejects_a_different_face(client, seed_user):
     assert _enroll(client).status_code == 200
-    body = client.post(
-        "/api/v1/verify", json={"username": "alice", "image_b64": FACE_BOB}
-    ).json()
-    assert body["match"] is False
-    assert body["score"] < body["threshold"]
+    assert _verify(client, image=FACE_BOB).json()["match"] is False
 
 
 def test_verify_unknown_user_is_nomatch_not_404(client):
     # Anti-énumération : un identifiant inconnu se comporte comme un visage non reconnu.
-    r = client.post("/api/v1/verify", json={"username": "ghost", "image_b64": FACE_ALICE})
+    r = _verify(client, username="ghost", image=FACE_ALICE)
     assert r.status_code == 200
     assert r.json()["match"] is False
 
 
 def test_verify_rejects_invalid_base64(client):
-    r = client.post("/api/v1/verify", json={"username": "alice", "image_b64": "!!not-b64!!"})
+    r = _verify(client, image="!!not-b64!!")
     assert r.status_code == 422
 
 
@@ -84,17 +92,14 @@ def test_revoke_deletes_enrollment(client, seed_user):
     assert client.delete("/api/v1/enroll/alice", headers=AUTH_HEADER).status_code == 204
     # Après révocation : plus d'enrôlement, la vérification ne correspond plus.
     assert client.get("/api/v1/enrollments", headers=AUTH_HEADER).json() == []
-    body = client.post(
-        "/api/v1/verify", json={"username": "alice", "image_b64": FACE_ALICE}
-    ).json()
-    assert body["match"] is False
+    assert _verify(client, image=FACE_ALICE).json()["match"] is False
     assert client.delete("/api/v1/enroll/alice", headers=AUTH_HEADER).status_code == 404
 
 
 def test_all_emitted_events_belong_to_the_contract(client, seed_user, log_lines):
     _enroll(client)
-    client.post("/api/v1/verify", json={"username": "alice", "image_b64": FACE_ALICE})
-    client.post("/api/v1/verify", json={"username": "alice", "image_b64": FACE_BOB})
+    _verify(client, image=FACE_ALICE)
+    _verify(client, image=FACE_BOB)
     client.delete("/api/v1/enroll/alice", headers=AUTH_HEADER)
     emitted = {row["event"] for row in log_lines()}
     assert emitted  # on a bien capté des événements
