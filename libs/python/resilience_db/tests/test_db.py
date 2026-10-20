@@ -21,6 +21,14 @@ def test_migration_creates_same_schema_as_models(tmp_path):
         }
 
 
+def test_migrations_up_to_head_add_face_photos_and_poses_columns(tmp_path):
+    # Base fraîche : toute la chaîne Alembic (0001 -> head) doit aboutir à la table v2 complète.
+    engine = make_engine(f"sqlite:///{tmp_path}/fresh.db")
+    upgrade(engine)
+    columns = {c["name"] for c in inspect(engine).get_columns("face_enrollments")}
+    assert {"embedding", "photos", "poses", "model_version", "enrolled_by", "enrolled_at"} <= columns
+
+
 def test_migration_is_idempotent(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path}/m.db")
     upgrade(engine)
