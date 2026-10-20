@@ -290,6 +290,19 @@ Broker **Mosquitto** durci (`allow_anonymous false`, creds SOPS, **ACL par topic
 
 La publication MQTT est **fail-open** : un broker injoignable n'empêche jamais la connexion (événement `led_publish_failed`).
 
+L'ESP8266 expose aussi trois commandes directes sur son adresse du PA. Elles exigent
+HTTP Basic (`LED_HTTP_USERNAME`/`LED_HTTP_PASSWORD` dans le firmware), ne prennent pas
+de corps et répondent `204` après déclenchement :
+
+| Méthode et route | État appliqué |
+|---|---|
+| `POST /api/v1/led/green/blink` | `recognized` |
+| `POST /api/v1/led/green/solid` | `auth_ok` |
+| `POST /api/v1/led/red/blink` | `auth_fail` |
+
+Ces commandes passent par la même machine à états que MQTT. Le service `auth` utilise
+le contrat MQTT ; l'API HTTP est une commande directe de l'objet sur le réseau du PA.
+
 ### 5.4 Modèle de données (`resilience_db`)
 
 - `users.role` : `customer` (défaut) | `operator` | `admin`. Le back-office exige `operator`/`admin`.
