@@ -1,5 +1,7 @@
 # Secrets déchiffrés et clés — JAMAIS commités
 .env
+security/sops/secrets.env
+security/sops/secrets.enc.env
 *.decrypted.env
 *.env.dec
 secrets.enc.env.dec

@@ -18,6 +18,8 @@
 | `INTERNAL_TOKEN` | auth de `/internal/*` | remediation → auth |
 | `SEED_PASSWORD` | mot de passe des comptes fictifs du seed | `make seed`, `scripts/verify_tx`, remediation (verify) |
 | `GRAFANA_PASSWORD` | mot de passe admin Grafana (requis : le compose échoue sans, plus de repli `admin`) | grafana |
+| `MQTT_AUTH_PASSWORD` | publication des commandes LED | `mosquitto`, futur client MQTT de `auth` |
+| `MQTT_LED_PASSWORD` | abonnement de l'ESP8266 et publication de son statut | `mosquitto`, firmware |
 
 ## Mise en place (une fois par poste)
 
