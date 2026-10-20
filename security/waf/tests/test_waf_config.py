@@ -85,6 +85,24 @@ def test_backoffice_upstream_targets_backoffice_container():
     assert re.search(r"upstream\s+backoffice_app\s*\{\s*server\s+backoffice:8080;", _directives(NGINX))
 
 
+def test_modsecurity_body_limits_match_host_client_max_body_size():
+    """Les plafonds ModSecurity doivent suivre le 4m du listener hôte, sinon le défaut CRS (~128 Kio) rejette les captures."""
+    yaml = pytest.importorskip("yaml")
+    env = yaml.safe_load(COMPOSE)["services"]["waf"]["environment"]
+    size = re.search(r"client_max_body_size\s+(\d+)m;", HOST_SERVER)
+    assert size, "le listener hôte doit déclarer client_max_body_size en Mo"
+    expected = int(size.group(1)) * 1024 * 1024
+    assert expected == 4194304
+    assert int(env["MODSEC_REQ_BODY_LIMIT"]) == expected
+    assert int(env["MODSEC_REQ_BODY_NOFILES_LIMIT"]) == expected
+    # Le serveur public garde le défaut nginx (1m) : pas de client_max_body_size, donc plafonné par nginx.
+    assert "client_max_body_size" not in PUBLIC_SERVER
+    # Aucun autre endroit ne surcharge ces limites (Dockerfile / entrypoint).
+    assert "MODSEC_REQ_BODY" not in DOCKERFILE
+    for script in (WAF / "docker-entrypoint.d").glob("*"):
+        assert "MODSEC_REQ_BODY" not in script.read_text(encoding="utf-8")
+
+
 def test_host_listener_9443_routes_auth_admin_and_backoffice():
     assert re.search(r"listen\s+9443\s+ssl;", HOST_SERVER)
     assert "http2 on;" in HOST_SERVER

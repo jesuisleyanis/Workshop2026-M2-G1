@@ -22,7 +22,7 @@
 | `MQTT_AUTH_PASSWORD` | mot de passe MQTT du compte `auth` (publie les commandes LED, lit l'état) | mosquitto, auth |
 | `MQTT_LED_PASSWORD` | mot de passe MQTT du compte `led` (objet ESP8266) | mosquitto (fichier `passwd` généré au démarrage en tmpfs) |
 | `BACKOFFICE_BOOTSTRAP_TOKEN` | jeton d'initialisation du premier admin du back-office | auth |
-| `MQTT_BIND` | IP du hotspot sur laquelle le port 1883 est publié (non secret, défaut `192.168.137.1`) | mosquitto |
+| `MQTT_BIND` | IP du hotspot sur laquelle le port 1883 est publié (non secret, défaut `192.168.137.1` ; en dev sur une machine sans l'IP du hotspot : `MQTT_BIND=127.0.0.1`) | mosquitto |
 | `GRAFANA_PASSWORD` | mot de passe admin Grafana (requis : le compose échoue sans, plus de repli `admin`) | grafana |
 
 ## Mise en place (une fois par poste)
