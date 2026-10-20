@@ -74,20 +74,20 @@ else
   pass "aucune clé age dans le dépôt"
 fi
 
-# 5. Exposition réseau : SEUL le WAF publie des ports (R11/R19, point dur jury).
-echo "[5] Exposition réseau (seul le WAF publie des ports)"
+# 5. Exposition réseau : SEUL le WAF (HTTP) et mosquitto (MQTT, bind hotspot) publient des ports (R11/R19, point dur jury).
+echo "[5] Exposition réseau (seuls le WAF et mosquitto publient des ports)"
 COMPOSE="infra/compose/docker-compose.yml"
 if [[ -f "${COMPOSE}" ]]; then
   # Repère les services (indent 2) du bloc `services:` qui déclarent une clé `ports:` (indent 4).
   offenders="$(awk '
     /^[A-Za-z0-9_-]+:/        { in_services = ($0 ~ /^services:/) ; next }
     in_services && /^  [A-Za-z0-9_-]+:/ { svc = $1; sub(/:$/, "", svc) }
-    in_services && /^    ports:/        { if (svc != "waf") print svc }
+    in_services && /^    ports:/        { if (svc != "waf" && svc != "mosquitto") print svc }
   ' "${COMPOSE}" | sort -u)"
   if [[ -n "${offenders}" ]]; then
-    fail "des services autres que le WAF publient des ports : ${offenders}"
+    fail "des services autres que le WAF et mosquitto publient des ports : ${offenders}"
   else
-    pass "seul le WAF publie des ports (DB/API/obs internes)"
+    pass "seuls le WAF et mosquitto (hotspot) publient des ports (DB/API/obs internes)"
   fi
 else
   fail "docker-compose.yml introuvable"

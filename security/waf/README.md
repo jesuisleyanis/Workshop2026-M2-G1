@@ -24,7 +24,8 @@ security/waf/
 | Point | Choix |
 |---|---|
 | Base | `owasp/modsecurity-crs:4.25.2-nginx-alpine-lts` (ModSecurity v3 + OWASP CRS préinstallés, configurés par l'entrypoint de l'image : `BLOCKING_PARANOIA=1`, `ANOMALY_INBOUND=5`, `ANOMALY_OUTBOUND=4`) |
-| Utilisateur | **non-root** (`nginx`, image *unprivileged*) → écoute **8080 / 8443** ; Compose publie `80:8080` et `443:8443` (seul service avec `ports:`) |
+| Utilisateur | **non-root** (`nginx`, image *unprivileged*) → écoute **8080 / 8443** ; Compose publie `80:8080`, `443:8443` et `127.0.0.1:9443:9443` (listener hôte, loopback) ; seul avec mosquitto (MQTT hotspot) à avoir des `ports:` |
+| Listener hôte 9443 | back-office (`backoffice:8080`) + `/api/v1/auth/` et `/api/v1/admin/` → `auth`, `client_max_body_size 4m` ; ces deux préfixes répondent **404** sur le serveur public 80/443 (`/api/v1/login` et `/register` restent publics) |
 | TLS | certificat **auto-signé généré au build** (`openssl req -x509`, ECDSA P-256, SAN `localhost`/`waf`/`192.168.137.1`) dans `/etc/nginx/conf/` — jamais commité ; les clients de labo utilisent `-k` / contexte non vérifié |
 | Config | `nginx.conf` du projet copié tel quel (les templates `nginx.conf`/`conf.d` de l'image sont retirés) ; les templates `modsecurity.d` de l'image restent et rendent `/etc/modsecurity.d/setup.conf` au démarrage |
 | Upstreams | `front:8080` (le conteneur front est lui aussi non-root sur 8080), `payment-api:8001`, `auth:8002` |

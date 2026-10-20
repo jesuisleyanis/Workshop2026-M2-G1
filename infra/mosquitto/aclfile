@@ -1,8 +1,12 @@
 # ACL par topic (ADR 0006) : moindre privilège sur le bus LED.
-# `auth` publie les commandes ; l'objet ESP8266 (`led`) les lit et publie son statut/LWT.
+# `auth` publie les commandes et lit l'état de l'objet (jumeau LED du back-office) ;
+# l'objet ESP8266 (`led`) lit les commandes et publie son statut/LWT.
 
 user auth
 topic write resilience/led/cmd
+topic read resilience/led/status
+# Sonde de vie (healthcheck Compose) : uptime du broker uniquement.
+topic read $SYS/broker/uptime
 
 user led
 topic read resilience/led/cmd

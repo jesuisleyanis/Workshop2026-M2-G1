@@ -1,0 +1,2 @@
+# Script monté tel quel dans un conteneur Linux (bind mount) : LF obligatoire même sous autocrlf Windows.
+infra/mosquitto/docker-entrypoint.sh text eol=lf

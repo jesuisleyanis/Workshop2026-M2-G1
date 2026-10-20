@@ -2,7 +2,7 @@
 # Profils : (défaut=demo) chemin critique | full=observabilité complète | attack=banc d'essai | ai=assistant RAG
 # Secrets injectés depuis ../../.env (produit par scripts/decrypt-secrets.sh à partir de SOPS).
 # Durcissement : non-root (Dockerfiles), cap_drop ALL, no-new-privileges, limites ressources,
-# seul le WAF publie des ports. Voir ../../security/hardening/hardening.md.
+# seuls le WAF (HTTP) et mosquitto (MQTT, bind hotspot) publient des ports. Voir ../../security/hardening/hardening.md.
 # Reproductibilité (R5) : toutes les images tierces sont épinglées à une version précise (aucun
 # `:latest`) — un rebuild ultérieur ne doit pas tirer un major différent (Grafana/Loki/Prometheus…).
 
@@ -52,10 +52,12 @@ services:
     <<: *hardening
     build: { context: ../../security/waf }
     networks: [edge, app]
-    # Image non-root (nginx unprivileged) : écoute 8080/8443 ; seuls 80/443 sont publiés côté hôte.
+    # Image non-root (nginx unprivileged) : écoute 8080/8443/9443 ; 80/443 publiés côté hôte.
+    # 9443 = listener HÔTE (back-office + /api/v1/auth/ + /api/v1/admin/) : loopback uniquement.
     ports:
       - "80:8080"
       - "443:8443"
+      - "127.0.0.1:9443:9443"
     environment:
       # Audit ModSecurity (blocages 4xx/5xx, JSON Serial) écrit dans le volume partagé lu par waf-exporter (#12).
       MODSEC_AUDIT_ENGINE: RelevantOnly
@@ -65,7 +67,7 @@ services:
     volumes:
       - waf-deny:/etc/nginx/deny:rw
       - waf-logs:/var/log/modsec:rw
-    depends_on: [front, payment-api, auth]
+    depends_on: [front, payment-api, auth, backoffice]
     mem_limit: 256m
     healthcheck:
       # /healthz est servi par le WAF lui-même (sans upstream) ; cert auto-signé -> -k.
@@ -106,6 +108,21 @@ services:
     tmpfs: ["/tmp"]
     mem_limit: 128m
 
+  backoffice:
+    # Back-office (React/Vite, nginx non-root :8080) : joignable uniquement via le listener hôte du WAF (9443).
+    # Le build exécute `npm run prepare:vision` (modèle de pose + runtime wasm) : accès réseau requis au build.
+    <<: *hardening
+    build: { context: ../../services/backoffice }
+    networks: [app]
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
   payment-api:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: services/payment-api/Dockerfile }
@@ -136,11 +153,70 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
-    depends_on: [postgres]
+      # Authentification v2 : visage (face-id) + jumeau/pilotage LED (MQTT) + initialisation du premier admin.
+      FACE_ID_URL: http://face-id:8006
+      FACE_INTERNAL_TOKEN: ${FACE_INTERNAL_TOKEN}
+      MQTT_HOST: mosquitto
+      MQTT_AUTH_PASSWORD: ${MQTT_AUTH_PASSWORD}
+      BACKOFFICE_BOOTSTRAP_TOKEN: ${BACKOFFICE_BOOTSTRAP_TOKEN}
+    depends_on: [postgres, face-id, mosquitto]
     read_only: true
     tmpfs: ["/tmp"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8002/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  face-id:
+    # Reconnaissance faciale (gabarits chiffrés AES-256 en base, backend « team » = dlib). Jamais exposé :
+    # appelé par auth seul (token interne), réseau app + data (Postgres). Aucun ports:.
+    <<: *hardening
+    build: { context: ../.., dockerfile: services/face-id/Dockerfile }
+    networks: [app, data]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: resilience
+      POSTGRES_USER: resilience
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      FACE_INTERNAL_TOKEN: ${FACE_INTERNAL_TOKEN}
+      FACE_DATA_KEY: ${FACE_DATA_KEY}      # base64 de 32 octets (AES-256) — voir security/sops/secrets.example.env
+      RECOGNIZER_BACKEND: team
+    depends_on: [postgres]
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 1g
+    cpus: 1.5
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8006/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  mosquitto:
+    # Broker MQTT du pilotage LED (ADR 0006). Seul ingress MQTT : publié sur l'IP du hotspot (jamais 0.0.0.0).
+    # Racine en lecture seule ; le fichier de mots de passe est généré au démarrage par l'entrypoint dans
+    # le tmpfs /mosquitto/run (uid 1883) à partir de MQTT_AUTH_PASSWORD / MQTT_LED_PASSWORD (SOPS).
+    <<: *hardening
+    image: eclipse-mosquitto:2.0.20
+    user: "1883:1883"
+    networks: [app]
+    ports:
+      - "${MQTT_BIND:-192.168.137.1}:1883:1883"
+    entrypoint: ["/bin/sh", "/mosquitto/docker-entrypoint.sh"]
+    environment:
+      MQTT_AUTH_PASSWORD: ${MQTT_AUTH_PASSWORD}
+      MQTT_LED_PASSWORD: ${MQTT_LED_PASSWORD}
+    volumes:
+      - ../mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../mosquitto/aclfile:/mosquitto/config/aclfile:ro
+      - ../mosquitto/docker-entrypoint.sh:/mosquitto/docker-entrypoint.sh:ro
+    read_only: true
+    tmpfs: ["/mosquitto/run:uid=1883,gid=1883,mode=0700"]
+    mem_limit: 64m
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -u auth -P \"$$MQTT_AUTH_PASSWORD\" -C 1 -W 3 -t '$$SYS/broker/uptime' >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
