@@ -115,6 +115,12 @@ Le `collector` interroge l'API Prometheus et construit ce vecteur ordonné (voir
   cpu_pct_max, mem_pct_max, db_errors_per_s ]
 ```
 
+Définitions à noter (requêtes : `build_queries` de `ml/collector/collector.py`, partagées par la capture et la démo) :
+- `auth_failed_per_s` = échecs de login (`resilience_auth_logins_total{result="failed"}`) **+ refus du rate-limit** (`resilience_auth_rate_limited_total`). Une force brute est vite refusée en 429 : sans le second terme, la feature retombe à ~0 pendant l'attaque.
+- `cpu_pct_max`, `mem_pct_max` = conteneur le plus chargé **parmi les services de la plateforme** (`waf`, `front`, `payment-api`, `auth`, `postgres`), pas l'observabilité.
+
+Changer une de ces définitions impose de recapturer la baseline et les attaques (`ml/training/README.md` §6).
+
 > **Règle :** l'ordre et la liste des features sont figés dans `ml/shared/features.py`. Le `training` et le `detector` importent la même définition — jamais de duplication.
 
 ---

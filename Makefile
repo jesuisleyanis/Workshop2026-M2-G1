@@ -17,6 +17,11 @@ MIN_ROWS := 200
 # Durée d'un scénario (attacks/run.sh --duration, max 60) ; RATE_LAG = PROM_RATE_WINDOW,
 # délai avant que les rate() retombent après l'attaque
 ATTACK_S ?= 20
+# Cible des captures d'attaque : le WAF vu depuis CE poste. `attacks/run.sh` vise par défaut
+# https://192.168.137.1 (IP du hotspot, pour le PC attaquant de la démo) : sur le poste qui héberge
+# la stack, cette adresse n'existe que si le hotspot est actif, et sinon l'attaque ne produit aucun
+# signal alors que ses fenêtres seraient étiquetées « attaque ».
+ATTACK_TARGET ?= https://localhost
 RATE_LAG := 30
 VERSION  ?= 1.1.0
 ML_TOOLS := resilience/ml-tools
@@ -85,7 +90,7 @@ capture-baseline: ## Joue DURATION (60m) de trafic normal puis capture la baseli
 # pas les 90 s de trafic de fond : sinon le detection_rate réel serait dilué.
 capture-attack: ## Joue le scénario SC (ATTACK_S s, sur fond de trafic normal) et ajoute ses fenêtres (detector arrêté)
 	@test -n "$(SC)" || { echo "SC=<scenario> requis"; exit 1; }
-	@set -e; $(DETECTOR_OFF); 	  start_s=$$(date -u +%s); 	  python3 scripts/gen_normal_traffic.py --duration 90s & 	  attacks/run.sh $(SC) --duration $(ATTACK_S); sleep $(RATE_LAG); wait; 	  end_s=$$(( start_s + $(ATTACK_S) + $(RATE_LAG) )); 	  $(COMPOSE) exec -T collector python -m ml.collector.capture 	    --start $$(date -u -d @$$start_s +%Y-%m-%dT%H:%M:%SZ) 	    --end $$(date -u -d @$$end_s +%Y-%m-%dT%H:%M:%SZ) 	    --label $(SC) > $(ML_DATA)/attacks_real.csv.tmp; 	  if [ -s $(ML_DATA)/attacks_real.csv ]; then 	    tail -n +2 $(ML_DATA)/attacks_real.csv.tmp >> $(ML_DATA)/attacks_real.csv; 	  else cp $(ML_DATA)/attacks_real.csv.tmp $(ML_DATA)/attacks_real.csv; fi; 	  echo "$(SC) ajouté à $(ML_DATA)/attacks_real.csv"
+	@set -e; $(DETECTOR_OFF); 	  start_s=$$(date -u +%s); 	  python3 scripts/gen_normal_traffic.py --duration 90s & 	  attacks/run.sh $(SC) --target $(ATTACK_TARGET) --duration $(ATTACK_S); sleep $(RATE_LAG); wait; 	  end_s=$$(( start_s + $(ATTACK_S) + $(RATE_LAG) )); 	  $(COMPOSE) exec -T collector python -m ml.collector.capture 	    --start $$(date -u -d @$$start_s +%Y-%m-%dT%H:%M:%SZ) 	    --end $$(date -u -d @$$end_s +%Y-%m-%dT%H:%M:%SZ) 	    --label $(SC) > $(ML_DATA)/attacks_real.csv.tmp; 	  if [ -s $(ML_DATA)/attacks_real.csv ]; then 	    tail -n +2 $(ML_DATA)/attacks_real.csv.tmp >> $(ML_DATA)/attacks_real.csv; 	  else cp $(ML_DATA)/attacks_real.csv.tmp $(ML_DATA)/attacks_real.csv; fi; 	  echo "$(SC) ajouté à $(ML_DATA)/attacks_real.csv"
 
 # train / calibrate / test-ml tournent dans l'image `ml-tools` (étape du Dockerfile detector) :
 # même Python 3.12 et même scikit-learn que le build du detector. Le modèle calibré est donc
