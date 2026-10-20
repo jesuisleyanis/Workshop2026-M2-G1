@@ -7,21 +7,21 @@
 ## Tableau de bord
 
 ```
-L0  Cadrage & contrats     [##########] 100%  contrat + ADR + modèle données (migration) — tests verts
-L1  Service face-id        [#########.]  90%  service + 15 tests verts + point de branchement modèle équipe (INTEGRATION-ML.md) ; modèle réel en recette
-L2  Auth à étapes          [##########] 100%  identifiant→visage→mdp + verrouillage 1 reprise/5 min — 13 tests verts  ✅
-L3  Back-office + webcam    [########..]  80%  login à étapes + webcam + miroir LED livrés (14 tests Vitest) ; reste écran habilitations (L6)
+L0  Cadrage & contrats     [##########] 100%  contrat §5 v2 + ADR 0004-0007 + migrations 0002/0003 — tests verts
+L1  Service face-id        [#########.]  90%  v2 (3 poses, chiffrement AES-GCM, photos) — 93 tests verts ; recette : build Docker de dlib + modèle réel
+L2  Auth à étapes          [##########] 100%  poses aléatoires, frames ordonnées, refroidissements 30 s / 3 s, verrouillage — 186 tests auth verts
+L3  Back-office + webcam    [#########.]  90%  login v2 + FaceScanner + habilitations + bootstrap — 131 tests Vitest ; recette : caméra réelle, marges 0,07 / 0,22
 L4  Firmware ESP8266        [######....]  60%  machine à états + tests native + firmware posés ; recette matérielle à faire
-L5  Transport MQTT          [####......]  40%  config broker durcie + ACL posées ; service Compose + client auth à câbler
-L6  Habilitations           [..........]   0%   rôles + enrôlement/révocation visage
-L7  Infra & observabilité   [..........]   0%   compose, Prometheus, SOPS, durcissement
-L8  Sécurité & RGPD         [..........]   0%   biométrie, liveness résiduel, surface MQTT/caméra
-L9  Gouvernance             [..........]   0%   EBIOS / PCA-PRA / NIS2-DORA
-L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + checklist matériel
+L5  Transport MQTT          [########..]  80%  broker durci (compose, ACL) + MqttLedNotifier fail-open + GET /auth/device — 30 tests ; recette : broker live + ESP
+L6  Habilitations           [##########] 100%  rôles + API admin + enrôlement/révocation + garde last_admin + bootstrap — tests verts
+L7  Infra & observabilité   [######....]  60%  compose + WAF 9443 + SOPS + scrape face-id (54 tests infra/WAF) ; reste Makefile (L7-4) et recette compose/Loki
+L8  Sécurité & RGPD         [###.......]  30%  RGPD amendé + chiffrement testé (L8-2) ; reste revue sécurité du flux (L8-1) et audit.sh (L8-3)
+L9  Gouvernance             [######....]  60%  EBIOS (annexe) + PCA/PRA §5.7 rédigés ; reste NIS2/DORA (L9-3)
+L10 Recette & e2e           [..........]   0%   e2e + checklist matérielle (non faits)
 ```
 
-**Chemin critique :** L0 ✅ → **L2** (prochain) → L3 → L10. Parallélisables : L1 (fait), L4 (logique faite), L5, L7, L9.
-**Fondations posées** (2026-10-20) : contrat + modèle de données + service `face-id` (testé) + logique firmware (testée) + config broker. Prochaine étape : **L2** (auth à étapes), qui consomme `face-id` déjà livré.
+**Chemin critique :** L0 ✅ → L2 ✅ → L3 🟨 (recette caméra) → **L10 (recette & e2e : prochaine étape, rien n'est fait)**.
+**Intégration de bout en bout livrée** (2026-10-20, branche `feat/face-auth-integration`, `5c425c6..HEAD`) : modèle de l'équipe, vivacité par poses, photos chiffrées, habilitations, bootstrap, LED MQTT, listener hôte `127.0.0.1:9443`. **Tout est testé hors stack ; rien n'a été validé en recette** (caméra réelle, build Docker de dlib, ESP8266 physique, broker live) — voir « Intégration de bout en bout » plus bas.
 
 ---
 
@@ -38,12 +38,12 @@ L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + c
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
 | L1-1 | Scaffold service (CDC + README + FastAPI + `resilience_common` logs/métriques + `/health` `/ready` `/metrics`) — skill `nouveau-composant` | `services/face-id` | L0-1 | M | ✅ | package `face_id` + CDC + README + health/ready/metrics ; suite verte |
-| L1-2 | Abstraction `Recognizer` (embed + compare) avec **backend InsightFace `buffalo_s`** et **stub déterministe** injectable pour les tests | `services/face-id` | L1-1 | L | ✅ | `recognizer.py` (stub centré + cosine) + `backends/insightface_backend.py` ; tests match/no-match déterministes. **Smoke modèle réel en recette** |
-| L1-3 | `POST /verify` (1:1, `{username,image_b64}`→`{match,score,threshold,model_version}`) + events `face_verify_*` + métriques | `services/face-id` | L1-2, L0-3 | ✅ | `test_enroll_then_verify_matches_same_face`, `…rejects_a_different_face`, anti-énumération, garde `model_version` |
-| L1-4 | `POST /enroll`, `DELETE /enroll/{username}`, `GET /enrollments` (token interne) — **embedding seul**, **aucune image renvoyée** | `services/face-id` | L1-3 | ✅ | `store.py` + routes ; `test_enrollments_list_exposes_no_biometric_data`, `test_revoke_deletes_enrollment`, token requis |
-| L1-5 | Dockerfile durci (slim, non-root, modèle épinglé au build) + requirements épinglés | `services/face-id` | L1-4 | ✅ | `Dockerfile` (uid 10001, read_only, healthcheck) + `requirements.txt` épinglés. **Build live en recette** |
+| L1-2 | Abstraction `Recognizer` (embed + compare) avec **backend InsightFace `buffalo_s`** et **stub déterministe** injectable pour les tests | `services/face-id` | L1-1 | L | 🟨 | `Recognizer` **v2** (`analyze`/`distance`/`threshold`, `poses.py` du notebook) ; backends `team` (dlib), `insightface`, `stub` ; `test_poses.py`, `test_recognizer_contract.py` ; commits `64cad40`, `cb0240b`. **Reste : smoke du modèle réel `team` (dlib non installé sur le poste de dev) en recette** |
+| L1-3 | `POST /verify` (1:1, `{username,image_b64}`→`{match,score,threshold,model_version}`) + events `face_verify_*` + métriques | `services/face-id` | L1-2, L0-3 | ✅ | `POST /verify` v2 : 3 frames/poses, `{match, model_version}`, pas de score ; `test_enroll_three_poses_then_verify_in_random_order_matches`, `test_verify_rejects_wrong_pose_in_sequence`, `test_verify_requires_exactly_three_distinct_poses` ; `cb0240b` |
+| L1-4 | `POST /enroll`, `DELETE /enroll/{username}`, `GET /enrollments` (token interne) — **embedding seul**, **aucune image renvoyée** | `services/face-id` | L1-3 | ✅ | `POST /enroll` (3 poses, refus en bloc `enrollment_rejected`), photos chiffrées, `DELETE`, `GET /enrollments` sans biométrie ; `test_enroll_rejects_whole_series_with_per_pose_details`, `test_templates_and_photos_are_encrypted_at_rest`, `test_photos_endpoint_requires_token_and_logs_view`, `test_enrollments_list_exposes_no_biometric_data` ; `cb0240b` |
+| L1-5 | Dockerfile durci (slim, non-root, modèle épinglé au build) + requirements épinglés | `services/face-id` | L1-4 | 🟨 | `Dockerfile` (dlib compilé dans l'étage builder, runtime slim non-root, `read_only`) + `requirements*.txt` ; `test_face_id_service` (infra) ; `cb0240b`, `be727ad`. **Reste : `docker build` réel (jamais lancé : Docker indisponible sur le poste de dev)** |
 
-> **L1 — 10 tests verts** (`PYTHONPATH=services/face-id/src pytest services/face-id/tests`). Backend réel `insightface` écrit mais non smoke-testé hors stack (deps non installées) : validation en recette.
+> **L1 — 93 tests verts** (`cd services/face-id && pytest -q -p no:cacheprovider`), + `resilience_db` 10 (migration `0003`, `2f34384`). Backends réels `team` (dlib) et `insightface` écrits mais **non exécutés hors stack** (dépendances non installées) : validation en recette.
 
 ## L2 — Authentification à étapes *(chemin critique)*
 
@@ -56,7 +56,9 @@ L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + c
 | L2-5 | **Verrouillage** (CA4) : 2 échecs/cycle → **5 min** par `(username, ip)` + `429 Retry-After` + event `auth_locked_out` | `services/auth` | L2-3 | ✅ | `test_lockout_after_one_retry_then_5_minutes` (+ reset au succès, déblocage après délai) |
 | L2-6 | `/login` **conservé** pour comptes de service / front client (D4) + non-régression auth | `services/auth` | L2-1 | ✅ | `test_legacy_login_still_works` ; 36 tests auth d'origine toujours verts (49 au total) |
 
-> **L2 — 13 tests verts** (`services/auth/tests/test_auth_stepped.py`) ; suite auth complète **49 verts**. LED émise via un notifieur injectable (fail-open) — le backend MQTT réel est L5-2. Le contrôle de rôle anticipe L6-1.
+> **L2 (v2, intégration) :** `identify` renvoie un **ordre aléatoire de poses** ; `face` exige 3 frames dans cet ordre ; refroidissements 30 s (visage) / 3 s (mot de passe) ; `96ae104` — `test_identify_returns_random_permutation_of_three_poses`, `test_frames_out_of_order_are_rejected_without_calling_face_id`, `test_face_rejection_starts_30s_cooldown_on_identify`, `test_wrong_password_starts_3s_cooldown`. Suite auth complète : **186 verts**.
+>
+> **L2 (v1) — 13 tests verts** (`services/auth/tests/test_auth_stepped.py`) ; suite auth complète **49 verts** à l'époque. LED émise via un notifieur injectable (fail-open) — le backend MQTT réel est L5-2. Le contrôle de rôle anticipe L6-1.
 >
 > **Point de branchement du modèle de l'équipe** (lié à L1-2) : `face-id` isole le modèle derrière l'interface `Recognizer`. Gabarit `backends/team_backend.py` + backend `team` + **`services/face-id/INTEGRATION-ML.md`** (contrat `embed()` + test de conformité) : le modèle du coéquipier se branche sans toucher au reste.
 
@@ -65,12 +67,12 @@ L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + c
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
 | L3-1 | Scaffold app React/Vite/TS/Tailwind `services/backoffice` (CDC + README + client API auth) | `services/backoffice` | L0-2 | M | ✅ | Vite 8 + React 19 + Tailwind 4 + Vitest ; `api/auth.ts` (client §5.2) ; lint + build + typecheck OK |
-| L3-2 | Page login à étapes : saisie identifiant → **`getUserMedia`** (caméra hôte) → envoi trame → saisie mdp conditionnelle | `services/backoffice` | L3-1, L2-4 | L | ✅ | `LoginPage` + `useCamera` ; vitest (getUserMedia **mocké**) : ordre imposé, vidage sur rejet, caméra OFF, happy path, rôle refusé |
-| L3-3 | Témoin d'état miroir de la LED + messages (reconnu / non reconnu / blocage 5 min) | `services/backoffice` | L3-2 | S | ✅ | `LedIndicator` + `lib/led.ts` (5 états) ; vitest LED + message de blocage 429 |
-| L3-4 | Écran **habilitations** (liste users/rôles, enrôlement par webcam, révocation) gated `admin` | `services/backoffice` | L3-2, L6-2 | L | ⬜ | **dépend de L6** — placeholder dans l'accueil |
-| L3-5 | Dockerfile durci + route WAF dédiée (`/admin` ou vhost), `read_only`+tmpfs (parité front) | `services/backoffice`, `security/waf` | L3-2 | M | 🟨 | Dockerfile nginx non-root 8080 + headers (parité front) ; **route WAF** à câbler (L7) |
+| L3-2 | Page login à étapes : saisie identifiant → **`getUserMedia`** (caméra hôte) → envoi trame → saisie mdp conditionnelle | `services/backoffice` | L3-1, L2-4 | L | ✅ | `LoginPage` v2 + `FaceScanner` (HUD sci-fi, MediaPipe auto-hébergé, repli manuel) + `useCamera` ; vitest (caméra et détecteur **mockés**) : ordre des poses du serveur, vidage sur rejet, caméra OFF, refroidissements, blocage ; `37c176d`, `30be1d5`, `b0c8092`. **Reste : caméra réelle en recette** |
+| L3-3 | Témoin d'état miroir de la LED + messages (reconnu / non reconnu / blocage 5 min) | `services/backoffice` | L3-2 | S | ✅ | `LedIndicator` + `lib/led.ts` (jumeau LED aux timings firmware : 30 s, ×10 en 3 s) + pastille « module LED en ligne / hors ligne » (`GET /auth/device`) ; vitest `led.test.ts`, `LoginPage.test.tsx` ; `b0c8092` |
+| L3-4 | Écran **habilitations** (liste users/rôles, enrôlement par webcam, révocation) gated `admin` | `services/backoffice` | L3-2, L6-2 | L | ✅ | `HabilitationsPage` (tableau, rôles, photos, révocation, ré-enrôlement) + `EnrollWizard` « Nouvel agent » + `BootstrapPage` ; `HabilitationsPage.test.tsx`, `EnrollWizard.test.tsx`, `BootstrapPage.test.tsx`, `admin.test.ts` ; `ce30e9a` |
+| L3-5 | Dockerfile durci + route WAF dédiée (`/admin` ou vhost), `read_only`+tmpfs (parité front) | `services/backoffice`, `security/waf` | L3-2 | M | 🟨 | Dockerfile nginx non-root 8080 + headers (`camera=(self)`, CSP `wasm-unsafe-eval`) ; **route WAF livrée** : listener `127.0.0.1:9443` → back-office (`test_host_listener_9443_routes_auth_admin_and_backoffice`) ; `be727ad`. **Reste : build de l'image et rendu réel derrière le WAF (recette)** |
 
-> **L3 — 14 tests Vitest verts** (`npm test`), lint + `tsc` + `vite build` OK. Login à étapes complet (ordre imposé serveur, caméra coupée hors scan, miroir LED, blocage 5 min). Reste l'écran habilitations (L3-4, après L6).
+> **L3 — 131 tests Vitest verts** (`npm test`), lint + `tsc` + `vite build` OK. Login à étapes v2 (ordre de poses imposé serveur, caméra coupée hors scan, miroir LED, refroidissements, blocage 5 min) + habilitations + bootstrap. **Marges de capture client 0,07 / 0,22** (vs seuils serveur 0,10 / 0,15) **à calibrer en recette** (`captureMargins.ts`).
 
 ## L4 — Firmware ESP8266 (LED bicolore)
 
@@ -85,32 +87,32 @@ L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + c
 
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
-| L5-1 | Broker **Mosquitto** durci : `allow_anonymous false`, user/mdp SOPS, **ACL par topic**, bind interface hotspot, image épinglée | `infra/compose`, `security/*` | L0-1 | 🟨 | `infra/mosquitto/{mosquitto.conf,aclfile,README}` posés (ACL cmd/status, no anonyme, bind hotspot documenté) ; **service Compose + génération passwd SOPS + test contrat** à câbler |
-| L5-2 | Client MQTT dans `auth` : publie les états §5.2, **fail-open** (broker down ⇒ auth continue), events `led_*` | `services/auth` | L5-1, L2-3 | M | ⬜ | tests publication (mock) + **cas broker injoignable** + `resilience_led_publish_total` |
+| L5-1 | Broker **Mosquitto** durci : `allow_anonymous false`, user/mdp SOPS, **ACL par topic**, bind interface hotspot, image épinglée | `infra/compose`, `security/*` | L0-1 | 🟨 | Service Compose `mosquitto` (image épinglée `eclipse-mosquitto:2.0.20`, `${MQTT_BIND:-192.168.137.1}:1883`, passwd généré au démarrage depuis SOPS dans un tmpfs, durci, healthcheck), ACL (`auth` : write `cmd`, read `status` ; `led` : l'inverse) ; `test_mosquitto_not_published_on_all_interfaces`, `test_mosquitto_passwd_lives_in_tmpfs_run_dir_and_config_is_read_only`, `test_acl_auth_reads_led_status_and_least_privilege_kept` ; `be727ad`. **Reste : démarrage réel du broker (recette)** |
+| L5-2 | Client MQTT dans `auth` : publie les états §5.2, **fail-open** (broker down ⇒ auth continue), events `led_*` | `services/auth` | L5-1, L2-3 | M | ✅ | `MqttLedNotifier` (paho, QoS 1, `connect_async`, reconnexion auto, **fail-open**), souscription `status` (LWT) → `GET /api/v1/auth/device` ; 30 tests `test_led_mqtt.py` dont `test_publish_swallows_client_exception`, `test_publish_when_disconnected_is_error`, `test_status_messages_update_online` ; `1c6ed48`. Broker live non joué |
 
 ## L6 — Habilitations (rôles + enrôlement)
 
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
-| L6-1 | Rôles (`customer`/`operator`/`admin`) exploités par auth (claim JWT + garde back-office) | `services/auth`, `resilience_db` | L0-3 | M | ⬜ | tests : rôle dans le JWT, accès back-office réservé |
-| L6-2 | Orchestration enrôlement : back-office → auth (token interne) → `face-id /enroll` ; traçabilité `enrolled_by` | `services/auth`, `services/face-id` | L6-1, L1-4 | M | ⬜ | tests chaîne enrôlement + audit `enrolled_by` |
-| L6-3 | Seed : au moins un `admin` enrôlable pour la démo (visage de démo fictif documenté) | `scripts/`, `resilience_db` | L6-2 | S | ⬜ | `seed` crée un opérateur ; procédure d'enrôlement de démo |
+| L6-1 | Rôles (`customer`/`operator`/`admin`) exploités par auth (claim JWT + garde back-office) | `services/auth`, `resilience_db` | L0-3 | M | ✅ | Rôle dans le JWT + garde back-office (étape mot de passe `403 role_not_authorized`) + `require_admin` **revalidant le rôle en base** : `test_demoted_admin_with_still_valid_token_is_forbidden`, `test_invalid_expired_and_wrongly_signed_tokens_are_401` ; `02eb3ce` |
+| L6-2 | Orchestration enrôlement : back-office → auth (token interne) → `face-id /enroll` ; traçabilité `enrolled_by` | `services/auth`, `services/face-id` | L6-1, L1-4 | M | ✅ | API admin (`/admin/users`, `PATCH` rôle, `PUT`/`DELETE` visage, photos) → `face-id /enroll` avec `enrolled_by = sub` ; garde **`last_admin`** : `test_enroll_face_relays_poses_and_actor`, `test_last_enrolled_admin_cannot_be_demoted`, `test_photos_returns_poses_and_logs_viewer` ; `02eb3ce`, `9db026a` |
+| L6-3 | Seed : au moins un `admin` enrôlable pour la démo (visage de démo fictif documenté) | `scripts/`, `resilience_db` | L6-2 | S | ✅ | Remplacé par le **bootstrap** du premier admin (`BACKOFFICE_BOOTSTRAP_TOKEN`, actif tant qu'aucun admin enrôlé n'existe, refus d'un compte client) : `test_bootstrap_creates_enrolled_admin_then_not_required`, `test_bootstrap_denied_when_not_required`, `test_bootstrap_refuses_existing_customer_account`, rollback `test_bootstrap_failure_after_face_id_stored_revokes_and_deletes_new_user` ; `02eb3ce`, `9db026a`. `scripts/seed.py` **inchangé** (aucun compte admin pré-créé) |
 
 ## L7 — Infra & observabilité
 
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
-| L7-1 | Compose : `face-id`, `backoffice`, `mosquitto` (réseaux, profils, dépendances, durcissement, healthchecks) ; **WAF route `/api/v1/auth/*` → auth + vhost back-office (M-f)** ; réseau `app` interne (m9) | `infra/compose`, `security/waf` | L1-5, L3-5, L5-1 | M | ⬜ | `test_compose_hardening` étendu ; images épinglées (R5) ; route WAF testée |
-| L7-2 | Prometheus scrape `face-id` ; vérifier que Promtail capte les logs des nouveaux services | `infra/prometheus`, `infra/promtail` | L7-1 | S | ⬜ | cible scrappée + logs dans Loki (recette) |
-| L7-3 | SOPS : `MQTT_*`, **`FACE_INTERNAL_TOKEN` (même valeur sur `auth` et `face-id`)**, (option) clé chiffrement embedding ; `secrets.example.env` + README | `security/sops` | L5-1 | S | ⬜ | exemples factices ; audit « aucun secret en clair » ; token partagé vérifié (sinon 503 à l'étape visage) |
-| L7-4 | Makefile/aliases : build modèle face-id, lancement broker ; `make test` agrège les nouveaux composants | `Makefile`, `README.md` | L7-1 | S | ⬜ | `make test` intègre face-id + backoffice ; doc |
+| L7-1 | Compose : `face-id`, `backoffice`, `mosquitto` (réseaux, profils, dépendances, durcissement, healthchecks) ; **WAF route `/api/v1/auth/*` → auth + vhost back-office (M-f)** ; réseau `app` interne (m9) | `infra/compose`, `security/waf` | L1-5, L3-5, L5-1 | M | 🟨 | Compose `face-id`, `backoffice`, `mosquitto`, env `auth`, WAF `127.0.0.1:9443` + 404 sur 80/443 pour `/api/v1/auth/` et `/api/v1/admin/`, plafonds ModSecurity 4 MiB : `test_new_services_are_hardened`, `test_host_listener_9443_is_published_on_loopback_only`, `test_public_server_returns_404_on_host_only_prefixes`, `test_modsecurity_body_limits_match_host_client_max_body_size` (54 tests infra + WAF) ; `be727ad`, `66f685d`. **Reste : `docker compose config/up`, `nginx -t` et prise en compte réelle de `MODSEC_REQ_BODY_*` par l'image (recette)** |
+| L7-2 | Prometheus scrape `face-id` ; vérifier que Promtail capte les logs des nouveaux services | `infra/prometheus`, `infra/promtail` | L7-1 | S | 🟨 | Job Prometheus `face-id:8006` (`test_prometheus_scrapes_face_id`) ; `be727ad`. **Reste : cible UP et logs des nouveaux services dans Loki (recette `make up-full`)** |
+| L7-3 | SOPS : `MQTT_*`, **`FACE_INTERNAL_TOKEN` (même valeur sur `auth` et `face-id`)**, (option) clé chiffrement embedding ; `secrets.example.env` + README | `security/sops` | L5-1 | S | ✅ | `secrets.example.env` : `FACE_INTERNAL_TOKEN`, `FACE_DATA_KEY`, `MQTT_AUTH_PASSWORD`, `MQTT_LED_PASSWORD`, `BACKOFFICE_BOOTSTRAP_TOKEN`, `MQTT_BIND` (valeurs factices) ; `test_sops_example_has_new_secrets_with_fake_values`, `test_auth_wired_to_face_id_and_mqtt` ; `be727ad` |
+| L7-4 | Makefile/aliases : build modèle face-id, lancement broker ; `make test` agrège les nouveaux composants | `Makefile`, `README.md` | L7-1 | S | ⬜ | **Non fait** : `Makefile` `PY_COMPONENTS` ne contient pas `services/face-id` et `test-front` ne lance pas `services/backoffice` ⇒ `make test` ne couvre pas encore ces deux composants (lancer leurs suites à la main, cf. README de chaque composant) |
 
 ## L8 — Sécurité & RGPD
 
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
 | L8-1 | Revue `security-reviewer` du flux (surface MQTT/caméra, privilèges, pas de bypass visage, anti-énumération, fail-open) | tous | L2-5, L5-2, L3-5 | M | ⬜ | rapport de revue + correctifs |
-| L8-2 | RGPD : embedding seul, (option) chiffrement au repos, effacement, rétention — tracé dans la doc | `services/face-id`, `docs/` | L1-4 | S | ⬜ | section RGPD + test « no image persisted » |
+| L8-2 | RGPD : embedding seul, (option) chiffrement au repos, effacement, rétention — tracé dans la doc | `services/face-id`, `docs/` | L1-4 | S | ✅ | RGPD **amendé** (ADR 0007, contrat §5.4, cadrage §7) : gabarits + vignettes ≤ 240 px **chiffrés AES-256-GCM** (`FACE_DATA_KEY`, AAD = username), consultation admin journalisée, effacement total ; `test_blob_est_chiffre_et_versionne`, `test_aad_differente_leve_seal_error`, `test_templates_and_photos_are_encrypted_at_rest`, `test_enrollments_list_exposes_no_biometric_data` ; `64cad40`, `cb0240b`. **L'amendement de la règle « jamais d'image » reste à valider par l'équipe (Yanis)** |
 | L8-3 | Durcissement confirmé : `audit.sh` couvre face-id/backoffice/mosquitto (non-root, cap_drop, read_only, exposition) | `security/hardening` | L7-1 | S | ⬜ | `audit.sh` exit 0 |
 | L8-4 | (Option) Signal SOC : règle Loki sur rafale `face_verify_nomatch`/`auth_face_rejected` | `infra/grafana\|loki` | L2-5 | S | ⏭️ | règle + test (si retenu) |
 
@@ -118,8 +120,8 @@ L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + c
 
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
-| L9-1 | EBIOS RM : valeur métier « accès privilégié », événement redouté « fuite biométrique » (RGPD), scénarios (spoof, DoS face-id, flood MQTT), nouveaux biens support | `docs/ebios-rm.md` | L0-1 | M | ⬜ | section dédiée reliée à l'archi réelle |
-| L9-2 | PCA/PRA : scénario « perte du facteur biométrique » + **break-glass**, RTO/RPO, résiduels | `docs/pca-pra.md` | L0-1 | S | ⬜ | procédure break-glass + RTO/RPO |
+| L9-1 | EBIOS RM : valeur métier « accès privilégié », événement redouté « fuite biométrique » (RGPD), scénarios (spoof, DoS face-id, flood MQTT), nouveaux biens support | `docs/ebios-rm.md` | L0-1 | M | ✅ | `docs/ebios-rm.md` : annexe consigne 1 (VM5, BS11-BS14, SO7 usurpation de visage, SO8 fuite biométrique, SO9 facteur indisponible, SO10 surfaces MQTT/admin, cotations **proposées**, résiduels) |
+| L9-2 | PCA/PRA : scénario « perte du facteur biométrique » + **break-glass**, RTO/RPO, résiduels | `docs/pca-pra.md` | L0-1 | S | ✅ | `docs/pca-pra.md` : §5.7 break-glass + perte de `FACE_DATA_KEY` ⇒ réenrôlement, ligne §4.2, risque R13 ; **procédure non éprouvée (recette)** |
 | L9-3 | NIS2/DORA : renforcement du contrôle d'accès (MFA/biométrie), journalisation des accès, gouvernance de la donnée biométrique | `docs/nis2-dora.md` | L0-1 | S | ⬜ | mapping mis à jour |
 
 ## L10 — Recette & e2e
@@ -130,7 +132,26 @@ L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + c
 | L10-2 | e2e **chemins de rejet** : non reconnu (rouge 30 s, retry, lock 5 min) ; mauvais mdp (rouge ×10, relance) | `tests/e2e` | L10-1 | M | ⬜ | tests e2e des 2 branches |
 | L10-3 | **Non-régression ZTR** : `verify_tx` + boucle détection→remédiation **inchangés et verts**, indépendants du visage (G10) | `tests/e2e`, `scripts/` | L2-6 | S | ⬜ | suite ZTR existante rejouée verte |
 | L10-4 | **Checklist recette matérielle** : caméra USB sur l'hôte, ESP connecté au PA, LED off par défaut, broker live, 5 états observés | `docs/` (runbook) | L4-4, L7-2 | M | ⬜ | runbook coché sur le PC Hôte |
-| L10-5 | Mise à jour `ROADMAP.md` (Phase 9) + preuves consolidées de la consigne | `ROADMAP.md` | tout | S | ⬜ | Phase 9 à jour |
+| L10-5 | Mise à jour `ROADMAP.md` (Phase 9) + preuves consolidées de la consigne | `ROADMAP.md` | tout | S | ✅ | `ROADMAP.md` Phase 9 mise à jour avec les preuves de l'intégration (cette roadmap, ADR 0007, contrat §5) |
+
+---
+
+## Intégration de bout en bout (2026-10-20) — preuves et reste à faire
+
+Branche `feat/face-auth-integration` (`5c425c6..66f685d`, 15 commits). Design : [`superpowers/specs/2026-10-20-face-auth-integration-design.md`](superpowers/specs/2026-10-20-face-auth-integration-design.md) ; décisions D1-D10 : ADR [0007](adr/0007-acces-hote-vivacite-poses-photos-chiffrees.md) (D2, D4, D5) et conception.
+
+| Lot | Commits |
+|---|---|
+| L0 / L8-2 (modèle de données, events, chiffrement, Recognizer v2) | `01bf28b`, `64cad40`, `2f34384` |
+| L1 (`face-id` v2) | `cb0240b` |
+| L2 / L5-2 (`auth` : poses, cooldowns, MQTT) | `96ae104`, `1c6ed48` |
+| L6 (API admin, bootstrap) | `02eb3ce`, `9db026a` |
+| L3 (back-office : thème/API, FaceScanner, login v2, habilitations) | `44ad9e5`, `37c176d`, `30be1d5`, `b0c8092`, `ce30e9a` |
+| L5-1 / L7 (compose, WAF 9443, mosquitto, SOPS) | `be727ad`, `66f685d` |
+
+**Suites vertes (poste de dev, hors stack) :** `auth` 186 · `face-id` 93 · `resilience_db` 10 · `resilience_common` 5 (events ↔ contrat) · infra + WAF 54 · back-office Vitest 131.
+
+**Reste à faire — recette sur le PC Hôte (rien de ceci n'a été validé) :** caméra USB réelle et **calibrage des marges de capture** (client 0,07 / 0,22 vs serveur 0,10 / 0,15) ; **build Docker de `face-id` (dlib)** et smoke du modèle `team` ; `docker compose config/up` et `nginx -t` ; prise en compte de `MODSEC_REQ_BODY_*` ; démarrage du broker ; **ESP8266 physique** synchronisé avec le jumeau LED ; scrape Prometheus et logs Loki des nouveaux services ; checklist du README back-office (§ Recette). **Reste hors recette :** L7-4 (`make test`), L8-1 (revue sécurité du flux), L8-3 (`audit.sh`), L9-3 (NIS2/DORA), L10-1 à L10-4 (e2e et runbook), validation de l'amendement RGPD par l'équipe (Yanis).
 
 ---
 

@@ -40,7 +40,7 @@ Ordre de grandeur **pédagogique** (hypothèses fictives, à valider par la dire
 
 | Id | Bien support | Exposition / privilèges | Valeurs portées | Réf. |
 |---|---|---|---|---|
-| **BS1** | **WAF** Nginx + ModSecurity + CRS | **Seul** composant exposé (80/443, TLS auto-signé) ; porte la deny-list IP | VM1, VM4 | `security/waf/` [R] (conf), déploiement via `infra/compose` [R] |
+| **BS1** | **WAF** Nginx + ModSecurity + CRS | **Seul** point d'entrée HTTP (80/443, TLS auto-signé ; + `127.0.0.1:9443` réservé à l'hôte pour le back-office, annexe A) ; porte la deny-list IP | VM1, VM4 | `security/waf/` [R] (conf), déploiement via `infra/compose` [R] |
 | **BS2** | **front** (React, Nginx) | derrière le WAF ; en-têtes de sécurité | VM1 | `services/front/` [R] |
 | **BS3** | **payment-api** (FastAPI) | réseau `app` ; valide le JWT localement (HS256 épinglé, `exp`/`sub` requis) | VM1, VM2 | `services/payment-api/` [R] |
 | **BS4** | **auth** (FastAPI) | réseau `app` ; bcrypt, rate-limit `10/minute` par IP (stockage mémoire), API interne `/internal/tighten-rate-limit` | VM4, VM1 | `services/auth/` [R] |
@@ -54,7 +54,7 @@ Ordre de grandeur **pédagogique** (hypothèses fictives, à valider par la dire
 ### 1.5 Socle de sécurité : mesures en place et écarts assumés
 
 En place : réseaux `edge`/`app`/`data`/`obs` avec `data` interne [R compose] ; conteneurs non-root, `cap_drop: ALL`, `read_only`, limites ([R] dans `infra/compose`, `security/hardening/hardening.md` + `audit.sh` [R]) ; logs JSON normalisés avec `request_id` ; JWT à `alg` épinglé ; mots de passe hachés ; validation stricte des paramètres d'actions.
-**Écarts connus** (à lire comme risques résiduels, cf. atelier 5) : pas de MFA ; secret JWT **symétrique partagé** entre `auth` et `payment-api` ; rate-limit en mémoire (perdu au redémarrage) ; TLS auto-signé ; pas de sauvegarde hors hôte ; un seul hôte, un seul WAF, un seul Postgres.
+**Écarts connus** (à lire comme risques résiduels, cf. atelier 5) : pas de MFA sur le parcours client (le **back-office** est renforcé par visage + mot de passe, annexe A) ; secret JWT **symétrique partagé** entre `auth` et `payment-api` ; rate-limit en mémoire (perdu au redémarrage) ; TLS auto-signé ; pas de sauvegarde hors hôte ; un seul hôte, un seul WAF, un seul Postgres.
 
 ---
 
@@ -208,3 +208,48 @@ Aucun risque Élevé ou Critique ne subsiste. Les quatre risques Moyens (SO1-SO5
 | P2 | Clé age réelle + `secrets.enc.env` ; relecture `gitleaks` | Cyber | J2 |
 | P2 | Règles SOC sur les `event` normalisés : livrées [R] (`soc.yml`, `soc-rules.yml`) | Cyber / Infra | J3 |
 | P3 | Mettre à jour cette cotation avec les MTTR mesurés et les incidents du chaos engineering | Transformation | J4 |
+
+---
+
+## Annexe — Consigne Additionnelle 1 : accès privilégié du back-office (visage + LED)
+
+> Ajout du 2026-10-20 (intégration de bout en bout). Cadrage : `docs/consigne-additionnelle-1.md` ; décisions : `docs/adr/0007-acces-hote-vivacite-poses-photos-chiffrees.md` ; interfaces : `docs/contracts.md` §5. Cotations **proposées**, à valider par la direction ; mesures marquées **[R]** = présentes dans le dépôt et testées hors stack, **[M]** = à valider en **recette** (caméra réelle, build Docker de dlib, ESP8266, broker live : **non faite à ce jour**).
+
+### A.1 Valeur métier et biens supports ajoutés
+
+| Id | Élément | Critère dominant | Où |
+|---|---|---|---|
+| **VM5** | **Accès privilégié au back-office** (habilitations, rôles, visages des agents) | Confidentialité, intégrité | `services/backoffice`, `services/auth` (`/api/v1/admin/*`) |
+| **BS11** | **face-id** (modèle `face_recognition`/dlib de l'équipe) + table `face_enrollments` | Confidentialité (donnée biométrique **sensible, RGPD**) | `services/face-id`, `resilience_db` migration `0003` [R] |
+| **BS12** | **Clé `FACE_DATA_KEY`** (AES-256-GCM, SOPS) | Confidentialité | `security/sops/secrets.example.env` [R] ; clé réelle [S] |
+| **BS13** | **Broker MQTT + ESP8266 + LED** | Disponibilité (témoin), pas un facteur | `infra/mosquitto`, `iot/esp8266-led` [R] code, [M] matériel |
+| **BS14** | **Listener hôte WAF `127.0.0.1:9443`** | Intégrité du périmètre | `security/waf/nginx.conf`, `infra/compose` [R] |
+
+BS1 est précisé : le WAF publie 80/443 **et** 9443 en **loopback uniquement** (hôte) ; `/api/v1/auth/*` et `/api/v1/admin/*` ne sont **pas** servis sur 80/443 (404). Le broker MQTT est le **seul** autre port publié (interface hotspot).
+
+### A.2 Scénarios et risques
+
+| Id | Scénario (source -> chemin) | Événement redouté | Mesures (preuve) |
+|---|---|---|---|
+| **SO7** | **Usurpation du visage** (SR2/SR3) : photo ou vidéo d'un agent présentée à la caméra, puis mot de passe volé | **ER6 Prise de compte privilégié** | **Vivacité par poses** : 3 poses dans un **ordre aléatoire tiré par le serveur** à chaque `identify`, chaque frame validée en pose **et** identité ; le visage n'est **pas** un bypass (mot de passe + rôle requis) ; verrouillage 2 échecs -> 5 min par `(username, ip)` ; refroidissement 30 s [R tests auth/face-id] ; seuils de pose et d'identité à calibrer [M] |
+| **SO8** | **Fuite biométrique** (SR3/SR4) : lecture de la base et/ou de la clé | **ER7 Fuite de données biométriques (RGPD)** | Gabarits **et** vignettes (240 px max) **chiffrés AES-256-GCM**, AAD = username, clé SOPS hors base ; liste sans biométrie ; consultation admin **journalisée** (`face_photos_viewed`) ; aucun log d'image/embedding ; effacement total (`DELETE`) [R] ; **amendement de la règle « jamais d'image » à valider par l'équipe (Yanis)** |
+| **SO9** | **Indisponibilité du facteur visage** (panne face-id, perte de clé, caméra HS) : auto-DoS de l'accès privilégié | **ER8 Back-office inaccessible** | Inaccessible **par conception** ; boucle ZTR, `verify_tx` et front **indépendants** (D4) ; **break-glass** et réenrôlement : `docs/pca-pra.md` §5.7 ; garde-fou `last_admin` [R] ; bootstrap par token [R] |
+| **SO10** | **Abus des surfaces ajoutées** (SR1/SR2) : poste du hotspot -> broker MQTT ; accès à l'API d'administration depuis le réseau | ER4 (étendu) | Broker `allow_anonymous false`, ACL par topic (`auth` écrit `cmd`, lit `status` ; `led` l'inverse), bind hotspot, conteneur durci ; MQTT **fail-open** (la LED n'est qu'un témoin) ; admin API **absente du serveur public**, rôle `admin` revalidé en base, bootstrap temps constant + rate-limit [R] ; broker et ESP réels [M] |
+
+### A.3 Cotation (proposée)
+
+| Id | Risque | G init. | V init. | **Initial** | G rés. | V rés. | **Résiduel** |
+|---|---|---|---|---|---|---|---|
+| SO7 | Usurpation de visage (ER6) | 3 | 3 | **9 Élevé** | 3 | 2 | **6 Moyen** |
+| SO8 | Fuite biométrique (ER7) | 4 | 3 | **12 Élevé** | 4 | 2 | **8 Moyen** |
+| SO9 | Back-office inaccessible (ER8) | 2 | 3 | **6 Moyen** | 2 | 2 | **4 Faible** |
+| SO10 | Abus de la surface MQTT / admin | 2 | 3 | **6 Moyen** | 1 | 2 | **2 Faible** |
+
+Justifications : SO7 passe de V3 à V2 grâce à la vivacité par poses (photo/vidéo **préparée** écartée) et au second facteur obligatoire ; reste un résiduel pour un **deepfake temps réel** ou un attaquant ayant les 3 poses et le mot de passe. SO8 reste G4 (donnée sensible, non révocable) : seule la vraisemblance baisse, car il faut **base et clé** ; un accès root à l'hôte donne les deux (hors périmètre retenu, BS9). SO9 : gravité bornée à G2 car la **disponibilité du paiement** (VM1) et la reprise autonome (VM3) n'en dépendent pas.
+
+### A.4 Risques résiduels à porter devant la direction (ajouts)
+
+8. **Photos d'agents conservées (chiffrées)** : écart assumé avec la règle « embedding seul ». Base légale, durée de conservation et **validation par l'équipe (Yanis)** à acter avant tout usage réel.
+9. **Deepfake temps réel / rejeu en direct** non couvert par la vivacité par poses ; pas de détection de profondeur.
+10. **Non-recette** : modèle réel (dlib), caméra, ESP physique, broker live et **calibrage des marges de capture** (client 0,07 / 0,22 vs serveur 0,10 / 0,15) n'ont pas été validés sur le PC Hôte ; les taux de faux rejet / fausse acceptation sont **inconnus** (aucune mesure).
+11. **Store de challenge, refroidissement et verrouillage en mémoire** (perdus au redémarrage de `auth`, un seul worker) : limite héritée, voir `docs/consigne-additionnelle-1.md` §10.
