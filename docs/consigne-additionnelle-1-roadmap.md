@@ -8,9 +8,9 @@
 
 ```
 L0  Cadrage & contrats     [##########] 100%  contrat + ADR + modèle données (migration) — tests verts
-L1  Service face-id        [#########.]  90%  service livré + 10 tests verts ; smoke modèle réel en recette
-L2  Auth à étapes          [..........]   0%   challenge identifiant→visage→mdp + verrouillage  [CHEMIN CRITIQUE]
-L3  Back-office + webcam    [#.........]  10%  CDC + README posés ; app React à construire       [CHEMIN CRITIQUE]
+L1  Service face-id        [#########.]  90%  service + 15 tests verts + point de branchement modèle équipe (INTEGRATION-ML.md) ; modèle réel en recette
+L2  Auth à étapes          [##########] 100%  identifiant→visage→mdp + verrouillage 1 reprise/5 min — 13 tests verts  ✅
+L3  Back-office + webcam    [########..]  80%  login à étapes + webcam + miroir LED livrés (14 tests Vitest) ; reste écran habilitations (L6)
 L4  Firmware ESP8266        [######....]  60%  machine à états + tests native + firmware posés ; recette matérielle à faire
 L5  Transport MQTT          [####......]  40%  config broker durcie + ACL posées ; service Compose + client auth à câbler
 L6  Habilitations           [..........]   0%   rôles + enrôlement/révocation visage
@@ -49,22 +49,28 @@ L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + c
 
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
-| L2-1 | Store de challenge en mémoire (TTL, usage unique par étape) + machine à états §5.1 | `services/auth` | L0-1 | M | ⬜ | tests cycle `IDENTIFY→FACE→PASSWORD→OK` + expiration + rejeu refusé |
-| L2-2 | `POST /auth/identify` (toujours 200 hors lockout, **anti-énumération**) + event + caméra ON | `services/auth` | L2-1 | S | ⬜ | test : compte inconnu ≡ compte connu (réponse indistinguable) |
-| L2-3 | `POST /auth/face` → appelle `face-id /verify` ; match→PASSWORD, no-match→IDENTIFY + compteur | `services/auth` | L2-2, L1-3 | M | ⬜ | tests transition + `resilience_auth_face_steps_total` + client face-id mocké |
-| L2-4 | `POST /auth/password` (valide seulement en step PASSWORD) → JWT + **contrôle de rôle** ; KO→IDENTIFY | `services/auth` | L2-3, L6-1 | M | ⬜ | tests : saut d'étape refusé, rôle non privilégié refusé, mauvais mdp relance l'identification |
-| L2-5 | **Verrouillage** (CA4) : 2 échecs/cycle → **5 min** par `(username, ip)` + `429 Retry-After` + event `auth_locked_out` | `services/auth` | L2-3 | M | ⬜ | tests lockout, déverrouillage après TTL, verrou **non global** |
-| L2-6 | `/login` **conservé** pour comptes de service / front client (D4) + non-régression auth | `services/auth` | L2-1 | S | ⬜ | 36 tests auth existants restent verts |
+| L2-1 | Store de challenge en mémoire (TTL, usage unique par étape) + machine à états §5.1 | `services/auth` | L0-1 | M | ✅ | `challenge.py` (ChallengeStore/LockoutStore, horloge injectable) ; tests cycle + expiration + rejeu refusé |
+| L2-2 | `POST /auth/identify` (toujours 200 hors lockout, **anti-énumération**) + event + caméra ON | `services/auth` | L2-1 | S | ✅ | `test_identify_unknown_user_still_returns_a_challenge` |
+| L2-3 | `POST /auth/face` → appelle `face-id /verify` ; match→PASSWORD, no-match→IDENTIFY + compteur | `services/auth` | L2-2, L1-3 | ✅ | `HttpFaceVerifier` + stub injectable ; transitions, rejeu, `auth_face_steps_total`, 503 si face-id down |
+| L2-4 | `POST /auth/password` (valide seulement en step PASSWORD) → JWT + **contrôle de rôle** ; KO→IDENTIFY | `services/auth` | L2-3 | ✅ | rôle dans le JWT ; saut d'étape 409, rôle non privilégié 403, mauvais mdp 401 + LED auth_fail |
+| L2-5 | **Verrouillage** (CA4) : 2 échecs/cycle → **5 min** par `(username, ip)` + `429 Retry-After` + event `auth_locked_out` | `services/auth` | L2-3 | ✅ | `test_lockout_after_one_retry_then_5_minutes` (+ reset au succès, déblocage après délai) |
+| L2-6 | `/login` **conservé** pour comptes de service / front client (D4) + non-régression auth | `services/auth` | L2-1 | ✅ | `test_legacy_login_still_works` ; 36 tests auth d'origine toujours verts (49 au total) |
+
+> **L2 — 13 tests verts** (`services/auth/tests/test_auth_stepped.py`) ; suite auth complète **49 verts**. LED émise via un notifieur injectable (fail-open) — le backend MQTT réel est L5-2. Le contrôle de rôle anticipe L6-1.
+>
+> **Point de branchement du modèle de l'équipe** (lié à L1-2) : `face-id` isole le modèle derrière l'interface `Recognizer`. Gabarit `backends/team_backend.py` + backend `team` + **`services/face-id/INTEGRATION-ML.md`** (contrat `embed()` + test de conformité) : le modèle du coéquipier se branche sans toucher au reste.
 
 ## L3 — Back-office + capture webcam *(chemin critique)*
 
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
-| L3-1 | Scaffold app React/Vite/TS/Tailwind `services/backoffice` (CDC + README + client API auth) | `services/backoffice` | L0-2 | 🟨 | CDC + README posés (périmètre figé) ; **amorçage Vite + tests vitest** à faire |
-| L3-2 | Page login à étapes : saisie identifiant → **`getUserMedia`** (caméra hôte) → envoi trame → saisie mdp conditionnelle | `services/backoffice` | L3-1, L2-4 | L | ⬜ | vitest (getUserMedia **mocké**) : ordre des étapes, vidage identifiant sur rejet, caméra OFF |
-| L3-3 | Témoin d'état miroir de la LED + messages (reconnu / non reconnu / blocage 5 min) | `services/backoffice` | L3-2 | S | ⬜ | vitest états UI |
-| L3-4 | Écran **habilitations** (liste users/rôles, enrôlement par webcam, révocation) gated `admin` | `services/backoffice` | L3-2, L6-2 | L | ⬜ | vitest flux enrôlement + gating rôle |
-| L3-5 | Dockerfile durci + route WAF dédiée (`/admin` ou vhost), `read_only`+tmpfs (parité front) | `services/backoffice`, `security/waf` | L3-2 | M | ⬜ | build + config WAF ; audit durcissement |
+| L3-1 | Scaffold app React/Vite/TS/Tailwind `services/backoffice` (CDC + README + client API auth) | `services/backoffice` | L0-2 | M | ✅ | Vite 8 + React 19 + Tailwind 4 + Vitest ; `api/auth.ts` (client §5.2) ; lint + build + typecheck OK |
+| L3-2 | Page login à étapes : saisie identifiant → **`getUserMedia`** (caméra hôte) → envoi trame → saisie mdp conditionnelle | `services/backoffice` | L3-1, L2-4 | L | ✅ | `LoginPage` + `useCamera` ; vitest (getUserMedia **mocké**) : ordre imposé, vidage sur rejet, caméra OFF, happy path, rôle refusé |
+| L3-3 | Témoin d'état miroir de la LED + messages (reconnu / non reconnu / blocage 5 min) | `services/backoffice` | L3-2 | S | ✅ | `LedIndicator` + `lib/led.ts` (5 états) ; vitest LED + message de blocage 429 |
+| L3-4 | Écran **habilitations** (liste users/rôles, enrôlement par webcam, révocation) gated `admin` | `services/backoffice` | L3-2, L6-2 | L | ⬜ | **dépend de L6** — placeholder dans l'accueil |
+| L3-5 | Dockerfile durci + route WAF dédiée (`/admin` ou vhost), `read_only`+tmpfs (parité front) | `services/backoffice`, `security/waf` | L3-2 | M | 🟨 | Dockerfile nginx non-root 8080 + headers (parité front) ; **route WAF** à câbler (L7) |
+
+> **L3 — 14 tests Vitest verts** (`npm test`), lint + `tsc` + `vite build` OK. Login à étapes complet (ordre imposé serveur, caméra coupée hors scan, miroir LED, blocage 5 min). Reste l'écran habilitations (L3-4, après L6).
 
 ## L4 — Firmware ESP8266 (LED bicolore)
 
@@ -94,7 +100,7 @@ L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + c
 
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
-| L7-1 | Compose : `face-id`, `backoffice`, `mosquitto` (réseaux, profils, dépendances, durcissement, healthchecks) | `infra/compose` | L1-5, L3-5, L5-1 | M | ⬜ | `test_compose_hardening` étendu ; images épinglées (R5) |
+| L7-1 | Compose : `face-id`, `backoffice`, `mosquitto` (réseaux, profils, dépendances, durcissement, healthchecks) ; **WAF route `/api/v1/auth/*` → auth + vhost back-office (M-f)** ; réseau `app` interne (m9) | `infra/compose`, `security/waf` | L1-5, L3-5, L5-1 | M | ⬜ | `test_compose_hardening` étendu ; images épinglées (R5) ; route WAF testée |
 | L7-2 | Prometheus scrape `face-id` ; vérifier que Promtail capte les logs des nouveaux services | `infra/prometheus`, `infra/promtail` | L7-1 | S | ⬜ | cible scrappée + logs dans Loki (recette) |
 | L7-3 | SOPS : `MQTT_*`, `FACE_INTERNAL_TOKEN`, (option) clé chiffrement embedding ; `secrets.example.env` + README | `security/sops` | L5-1 | S | ⬜ | exemples factices ; audit « aucun secret en clair » |
 | L7-4 | Makefile/aliases : build modèle face-id, lancement broker ; `make test` agrège les nouveaux composants | `Makefile`, `README.md` | L7-1 | S | ⬜ | `make test` intègre face-id + backoffice ; doc |
@@ -127,6 +133,27 @@ L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + c
 | L10-5 | Mise à jour `ROADMAP.md` (Phase 9) + preuves consolidées de la consigne | `ROADMAP.md` | tout | S | ⬜ | Phase 9 à jour |
 
 ---
+
+## Revue de sécurité & correction (2026-10-20)
+
+Deux revues (agent sécurité du projet + revue de correction) sur L0–L3. **Correctifs appliqués et testés** :
+
+| # | Finding | Correctif | Preuve |
+|---|---|---|---|
+| B1 | Verrou vérifié seulement à `/identify` (contournable via challenges pré-créés) | Vérification du verrou au **début de chaque étape** (`/face`, `/password`) | `test_lockout_is_enforced_on_prebuilt_challenges` |
+| B2 | `Permissions-Policy: camera=()` casse `getUserMedia` | `camera=(self)` | `security-headers.conf` |
+| M-a | `face-id /verify` non authentifié + expose le `score` | `X-Internal-Token` requis + réponse réduite à `{match, model_version}` | `test_verify_requires_internal_token` |
+| M-b | Pas de rate-limit, stores non bornés, timeout face long | `@limiter.limit` sur les 3 routes + purge/plafond des stores + timeout 2 s | `challenge.py`, `backoffice.py` |
+| M-c | Usage unique non atomique (TOCTOU) | `take()` atomique (`threading.Lock`) + réinsertion si l'étape avance | `challenge.py` |
+| M-d | Pas de limite de taille sur `image_b64` | `max_length` (~1 Mo) côté auth et face-id | `schemas.py`, `face_id/main.py` |
+| M-e | Backend `stub` par défaut silencieux | `build_recognizer` refuse `stub` sauf `ALLOW_STUB_RECOGNIZER=1` | `recognizer.py` |
+| F3 | Métrique/journal de verrou sur-comptés | `just_locked` (transition uniquement) | `challenge.py` |
+| F4/F5 | Fuite caméra si `getUserMedia` résout après `stop()` ; trame noire si non démarrée | drapeau d'annulation + `capture()` échoue sans flux ; retour identifiant si `start()` échoue | `useCamera.ts`, `LoginPage.tsx` |
+| m1–m8 | `compare_digest` non-ASCII (500), `revoke` 204 cassé, `/ready` fuit l'erreur DB, fenêtre glissante des échecs, doc rejeu, écart contrat §5.2 (`step:"identify"`), dérive modèle, warning mode dégradé | tous corrigés | tests auth/face-id |
+
+**Reporté au lot L7 (infra, sans objet hors stack)** : **M-f** le WAF doit router `/api/v1/auth/*` vers `auth` (+ vhost back-office) et **m9** canal auth→face-id en clair (réseau `app` interne). Ajoutés au périmètre de L7-1/L5-1.
+
+Suites vertes après correctifs : **auth 50 · face-id 16 · back-office 14 · resilience_db 8** (+ payment-api 65 non régressé).
 
 ## Suivi
 

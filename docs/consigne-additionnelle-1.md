@@ -95,7 +95,7 @@ Le facteur visage + LED s'applique **au back-office** (accès privilégié), **e
 
 - **Anti-énumération :** un identifiant **inconnu** n'a **pas d'enrôlement** ⇒ `no-match`, donc chemin **identique** à « visage non reconnu ». `POST /auth/identify` renvoie **toujours** un `challenge_id` (ne révèle pas l'existence du compte).
 - **Verrouillage (CA4) :** compteur unifié d'**échecs d'accès** = `face no-match` **ou** `mot de passe erroné`. Seuil par défaut **2** (⇒ « 1 reprise »), puis **5 min**. Configurable (`BACKOFFICE_MAX_ATTEMPTS`, `BACKOFFICE_LOCKOUT_SECONDS`). Lecture littérale de la consigne (phase identification) documentée ; l'unification couvre aussi le brute-force mot de passe.
-- **Rejeu :** `challenge_id` **à usage unique par étape**, TTL court (`BACKOFFICE_CHALLENGE_TTL`, défaut 60 s) ; une trame ne peut être rejouée.
+- **Rejeu :** le `challenge_id` est **à usage unique par étape** (retiré atomiquement), TTL court (`BACKOFFICE_CHALLENGE_TTL`, défaut 60 s) — il ne peut être rejoué. La trame elle-même n'étant pas liée au challenge, une photo volée reste un risque (spoofing/liveness, §7).
 - **Store :** en mémoire, par processus (cohérent avec le rate-limit auth existant — limite assumée §10 ; option Redis documentée).
 
 ### 5.2 LED bicolore (`iot/esp8266-led`) — rendu des états (CA7)
@@ -159,7 +159,7 @@ Le facteur visage + LED s'applique **au back-office** (accès privilégié), **e
 - **Donnée biométrique = sensible (RGPD).** On stocke **l'embedding** (vecteur), **jamais** l'image. Table sur réseau `data` interne, accès via `X-Internal-Token`, renvoi d'enrôlements **sans biométrie**. **Chiffrement au repos** de la colonne `embedding` recommandé (clé SOPS) — a minima porté en risque résiduel. Droit à l'effacement : `DELETE /enroll/{username}`.
 - **Le visage n'est pas un bypass.** C'est un **facteur ajouté** : l'étape mot de passe + le **rôle privilégié** restent obligatoires. Un visage reconnu seul n'ouvre rien.
 - **Anti-spoofing / liveness.** Non exigé par la consigne mais **photo-d'une-photo** = angle d'attaque. Porté en **risque résiduel** + amélioration optionnelle (challenge de vivacité : clignement / mouvement). À documenter EBIOS.
-- **Rejeu & fraîcheur :** `challenge_id` usage unique, TTL court ; option nonce/horodatage sur la trame.
+- **Rejeu & fraîcheur :** le `challenge_id` est à **usage unique par étape** (retiré atomiquement), TTL court — il ne peut être rejoué. En revanche, la **trame** n'étant pas liée au challenge, une photo/trame volée reste utilisable sur un nouveau challenge : c'est le **risque de spoofing** ci-dessous (absence de liveness), porté en risque résiduel EBIOS. Option : nonce/horodatage lié à la trame.
 - **Caméra :** active **uniquement** pendant l'étape identification, éteinte ensuite (consigne + vie privée).
 - **Broker MQTT = nouvelle surface.** Durci comme le WAF : `allow_anonymous false`, creds SOPS, **ACL par topic**, bind **sur l'interface hotspot seulement**, TLS (`8883`) optionnel documenté, conteneur durci (non-root, `cap_drop`, `read_only`, healthcheck). L'ESP valide la LWT.
 - **Anti-DoS d'accès légitime :** verrouillage **par `(username, ip)`** pour qu'un attaquant ne verrouille pas globalement un admin ; `/login` de service hors de ce chemin (D4).

@@ -252,7 +252,7 @@ Reconnaissance **1:1** (vérification identifiant ↔ visage). Stocke **l'embedd
 
 | Méthode & chemin | Auth | Description |
 |---|---|---|
-| `POST /api/v1/verify` | réseau interne | `{username, image_b64}` → `{match: bool, score: float, threshold: float, model_version: str}`. Appelé **uniquement par `auth`**. |
+| `POST /api/v1/verify` | `X-Internal-Token` (réseau interne) | `{username, image_b64}` → `{match: bool, model_version: str}`. Appelé **uniquement par `auth`**. Le `score` n'est **pas** renvoyé (anti hill-climbing) ; il reste dans les logs/métriques. |
 | `POST /api/v1/enroll` | `X-Internal-Token` | `{username, images_b64: [...]}` → `{enrolled: bool, quality: float, model_version}`. |
 | `DELETE /api/v1/enroll/{username}` | `X-Internal-Token` | `204`. Droit à l'effacement. |
 | `GET /api/v1/enrollments` | `X-Internal-Token` | `[{username, enrolled_at, enrolled_by, model_version}]` — **aucune donnée biométrique**. |

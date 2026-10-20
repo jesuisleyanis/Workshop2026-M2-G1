@@ -29,7 +29,7 @@ Phase 5  Dashboard        [#########.]  90%   dashboard branché sur le moteur r
 Phase 6  Cyber & attaques [########..]  85%   WAF, SOPS, durcissement, 4 scénarios OK
 Phase 7  Assistant RAG    [#########.]  90%   RAG livré (98 tests)
 Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés à l'archi
-Phase 9  Consigne add. 1  [###.......]  30%   fondations posées (contrat+data model, face-id testé, firmware+broker) ; reste auth à étapes + back-office
+Phase 9  Consigne add. 1  [#####.....]  50%   L0+L1+L2 faits + L3 login (49+15+14 tests) ; reste habilitations + câblage LED/infra + gouvernance
 ```
 
 > Scaffold initial généré en J1 (structure pro, tests par composant, docs). Les services backend, le moteur de remédiation, le dashboard et les docs de gouvernance sont en cours de finalisation. Validation live (`make up`) et ré-entraînement ML sur vraies séries Prometheus restent à faire.
@@ -106,8 +106,8 @@ Phase 9  Consigne add. 1  [###.......]  30%   fondations posées (contrat+data m
 |---|---|---|---|---|
 | L0 | Delta contrat + ADR 0004/0005/0006 + modèle données (rôles, `face_enrollments`) | `docs/contracts.md`, `docs/adr`, `resilience_db` | ✅ | contrat §5 + migration `0002` ; tests verts |
 | L1 | Service `face-id` (IA légère, reconnaissance 1:1, enrôlement) | `services/face-id` | ✅ | service + **10 tests verts** ; smoke modèle réel en recette |
-| L2 | Auth à étapes (identifiant→visage→mdp) + verrouillage 1 reprise/5 min **[critique]** | `services/auth` | ⬜ | **prochaine étape** — backlog L2 |
-| L3 | Back-office React + capture webcam (`getUserMedia`, caméra PC Hôte) **[critique]** | `services/backoffice` | 🟨 | CDC+README posés ; app à construire |
+| L2 | Auth à étapes (identifiant→visage→mdp) + verrouillage 1 reprise/5 min **[critique]** | `services/auth` | ✅ | 13 tests (49 auth au total) ; LED fail-open + rôle dans le JWT |
+| L3 | Back-office React + capture webcam (`getUserMedia`, caméra PC Hôte) **[critique]** | `services/backoffice` | 🟨 | login à étapes + webcam + miroir LED livrés (14 tests) ; reste habilitations (L6) |
 | L4 | Firmware ESP8266 LED bicolore (CLion/PlatformIO, machine à états) | `iot/esp8266-led` | 🟨 | machine à états + tests native + firmware posés ; recette matérielle |
 | L5 | Transport MQTT (broker Mosquitto durci + client auth fail-open) | `infra/compose`, `services/auth` | 🟨 | config broker durcie + ACL ; service Compose + client auth à câbler |
 | L6 | Habilitations (rôles + enrôlement/révocation visage) | `services/{auth,face-id,backoffice}` | ⬜ | backlog L6 |
