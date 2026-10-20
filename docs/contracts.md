@@ -63,6 +63,14 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `face_verify_error` | face-id | Erreur de vérification (image illisible, aucun visage détecté) |
 | `face_enrolled` | face-id | Enrôlement d'un visage (embedding stocké, jamais l'image) |
 | `face_enrollment_revoked` | face-id | Révocation d'un enrôlement (droit à l'effacement) |
+| `auth_cooldown` | auth | Refroidissement actif après un refus (visage 30 s, mot de passe 3 s) |
+| `admin_user_created` | auth | Back-office : création d'un compte par un administrateur |
+| `admin_role_changed` | auth | Back-office : changement de rôle d'un compte |
+| `admin_face_enrolled` | auth | Back-office : enrôlement du visage d'un compte par un administrateur |
+| `admin_face_revoked` | auth | Back-office : révocation de l'enrôlement d'un compte par un administrateur |
+| `backoffice_bootstrap` | auth | Création du premier administrateur du back-office au démarrage |
+| `face_photos_viewed` | face-id | Consultation (par un administrateur) des photos d'enrôlement d'un compte |
+| `face_enrollment_rejected` | face-id | Enrôlement refusé (pose manquante ou incorrecte, visages multiples, aucun visage) |
 | `transaction_created` | payment-api | Virement fictif accepté |
 | `transaction_rejected` | payment-api | Virement refusé (solde, validation) |
 | `db_error` | payment-api | Erreur base de données |

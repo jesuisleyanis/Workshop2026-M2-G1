@@ -30,12 +30,21 @@ RESERVED_EVENTS: frozenset[str] = frozenset(
         "auth_locked_out",
         "led_state_published",
         "led_publish_failed",
+        # auth — back-office : refroidissement et administration
+        "auth_cooldown",
+        "admin_user_created",
+        "admin_role_changed",
+        "admin_face_enrolled",
+        "admin_face_revoked",
+        "backoffice_bootstrap",
         # face-id — consigne additionnelle 1 (reconnaissance de visage 1:1)
         "face_verify_match",
         "face_verify_nomatch",
         "face_verify_error",
         "face_enrolled",
         "face_enrollment_revoked",
+        "face_photos_viewed",
+        "face_enrollment_rejected",
         # payment-api
         "transaction_created",
         "transaction_rejected",

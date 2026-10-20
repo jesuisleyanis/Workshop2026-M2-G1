@@ -93,6 +93,33 @@ def test_face_enrollment_stores_embedding_one_per_user():
             s.commit()
 
 
+def test_face_enrollment_has_photos_and_poses_columns():
+    # Enrôlement multi-poses : photos scellées (nullable) + liste des poses enrôlées.
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        u = User(username="op02", password_hash=hash_password("s3cret-pass"))
+        s.add(u)
+        s.commit()
+        # Défauts : photos NULL, poses "face".
+        s.add(
+            FaceEnrollment(
+                user_id=u.id, embedding=b"sealed", model_version="m", enrolled_by="admin01"
+            )
+        )
+        s.commit()
+        enr = s.query(FaceEnrollment).filter_by(user_id=u.id).one()
+        assert enr.photos is None
+        assert enr.poses == "face"
+        enr.photos = b"x"
+        enr.poses = "face,gauche,droite"
+        s.commit()
+        s.expire_all()
+        enr = s.query(FaceEnrollment).filter_by(user_id=u.id).one()
+        assert enr.photos == b"x"
+        assert enr.poses == "face,gauche,droite"
+
+
 def test_password_over_72_bytes_rejected():
     with pytest.raises(ValueError):
         hash_password("x" * 73)
