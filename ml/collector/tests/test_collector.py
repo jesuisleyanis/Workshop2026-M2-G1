@@ -48,6 +48,31 @@ def test_queries_cover_every_feature_with_contract_metrics():
         assert metric in joined
 
 
+def test_auth_failed_counts_rate_limited_refusals_too():
+    """Régression (capture réelle) : une force brute est vite refusée en 429 par le rate-limit,
+    compté à part ; sans lui auth_failed_per_s retombait à ~0 et l'attaque était routée en
+    service_flood (redémarrage de payment-api au lieu du blocage + rate-limit)."""
+    q = QUERIES["auth_failed_per_s"]
+    assert 'resilience_auth_logins_total{result="failed"}' in q
+    assert "resilience_auth_rate_limited_total" in q
+    assert q.count("or vector(0)") == 2  # un compteur encore sans série ne masque pas l'autre
+
+
+@pytest.mark.parametrize("feature", ["cpu_pct_max", "mem_pct_max"])
+def test_resource_features_only_look_at_platform_containers(feature):
+    """La charge de l'observabilité (cAdvisor à 92 % de sa limite, compactions Prometheus) n'est
+    pas un signal d'attaque : elle dominait mem_pct_max (91-99 % en continu dans la baseline)."""
+    from ml.collector.collector import PLATFORM_SERVICES
+
+    q = QUERIES[feature]
+    assert 'name!=""' not in q
+    selector = 'container_label_com_docker_compose_service=~"waf|front|payment-api|auth|postgres"'
+    assert q.count(selector) == (2 if feature == "mem_pct_max" else 1)
+    assert set(PLATFORM_SERVICES) == {"waf", "front", "payment-api", "auth", "postgres"}
+    for excluded in ("cadvisor", "prometheus", "grafana", "loki"):
+        assert excluded not in q
+
+
 def test_collect_builds_vector_in_contract_order():
     values = {n: float(i + 1) for i, n in enumerate(FEATURE_NAMES)}
     snap = asyncio.run(make_collector(values).collect())
