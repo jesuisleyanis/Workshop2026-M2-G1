@@ -21,6 +21,7 @@ Hors périmètre : rotation automatique en production, HSM, Vault en haute dispo
 |---|---|---|
 | `JWT_SECRET` | signature des JWT | auth, payment-api |
 | `POSTGRES_PASSWORD` | mot de passe DB | postgres, services |
+| `MQTT_AUTH_PASSWORD` / `MQTT_LED_PASSWORD` | comptes MQTT séparés par ACL | mosquitto, auth, ESP8266 |
 | `REMEDIATION_TOKEN` | auth de `POST /events` | detector → remediation |
 | `INTERNAL_TOKEN` | auth de `/internal/*` | remediation → auth |
 | `SEED_PASSWORD` | mot de passe des comptes fictifs du seed | `make seed`, `scripts/verify_tx`, remediation (verify) |
