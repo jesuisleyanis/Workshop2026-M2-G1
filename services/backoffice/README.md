@@ -20,14 +20,24 @@ npm run lint
 
 ```
 identifiant ──/auth/identify──► caméra ON (getUserMedia, caméra du PC Hôte, ADR 0005)
-   trame ────/auth/face───────► reconnu ? ─oui─► champ mot de passe (caméra OFF)
-                                          └non─► identifiant vidé, caméra OFF, LED rouge
-   mot de passe ─/auth/password► OK (rôle privilégié) ─► back-office
+   3 poses ──/auth/face───────► reconnu ? ─oui─► champ mot de passe (caméra OFF)
+                                          └non─► LED rouge fixe, caméra ON 30 s (décompte),
+                                                 puis caméra OFF + identifiant vidé
+   mot de passe ─/auth/password► OK (rôle privilégié) ─► « accès autorisé » 1,5 s ─► back-office
+                              └401─► LED rouge ×10, champ gelé 3 s, retour à l'identifiant
 ```
 
-- La caméra est **active seulement pendant le scan** et coupée dès qu'on en sort (vie privée).
-- L'ordre des étapes est **imposé par le serveur** (`auth`) ; l'UI en est le reflet, y compris le
-  blocage 5 min (`429`) et le miroir LED (contrat §5.3).
+- La caméra est **active seulement pendant le scan** (et le refroidissement de 30 s qui suit un
+  refus) ; elle est coupée dès qu'on en sort (vie privée).
+- L'ordre des étapes est **imposé par le serveur** (`auth`) ; l'UI en est le reflet : `429
+  locked_out` → écran de blocage avec décompte 5 min, `429 cooldown` → décompte `Retry-After` sur
+  l'identifiant, dernier essai visage raté → blocage après le refroidissement.
+- **Jumeau LED** (panneau gauche) : rejoue la séquence du firmware aux mêmes timings
+  (`lib/led.ts`, `ledOutputAt`) ; la pastille indique si le module ESP8266 est en ligne
+  (`GET /auth/device`).
+- Mise en page identique au login du front (panneau nuit + formulaire blanc) ; le FaceScanner
+  est le seul élément « sci-fi ». Au montage, `App` interroge `GET /auth/bootstrap` (premier
+  admin à créer ?) avant de présenter le login.
 - Aucune image n'est conservée côté client ; la trame JPEG base64 part vers `auth`.
 
 ## Scanner de visage (`src/components/scanner/FaceScanner.tsx`)
@@ -44,7 +54,7 @@ identifiant ──/auth/identify──► caméra ON (getUserMedia, caméra du P
 
 ## État
 
-- ✅ Login à étapes + capture webcam + miroir LED + gestion blocage/rejets — **14 tests Vitest**.
+- ✅ Login à étapes v2 (thème front, FaceScanner, refroidissements 30 s / 3 s, blocage 5 min, jumeau LED aux timings firmware) — **98 tests Vitest** (`npm test`).
 - 🟨 Écran **habilitations** (enrôlement des visages + rôles) — lot **L6** (placeholder actuel).
 
 ## Place dans le flux
