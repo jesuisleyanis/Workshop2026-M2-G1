@@ -22,6 +22,7 @@ from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from auth_service.admin import add_admin_api
 from auth_service.backoffice import (
     FaceVerifier,
     LedNotifier,
@@ -153,7 +154,7 @@ def create_app(
     # ---------------------------------------------------------------- erreurs
     @app.exception_handler(ApiError)
     async def _api_error(_req: Request, exc: ApiError):
-        return error_response(exc.status, exc.code, exc.message, exc.headers)
+        return error_response(exc.status, exc.code, exc.message, exc.headers, exc.details)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(_req: Request, exc: StarletteHTTPException):
@@ -300,6 +301,14 @@ def create_app(
         challenges=challenges,
         lockouts=lockouts,
         cooldowns=cooldowns,
+        limiter=limiter,
+    )
+    add_admin_api(
+        app,
+        settings=settings,
+        session_factory=session_factory,
+        log=log,
+        face_client=face_client,
         limiter=limiter,
     )
     app.state.challenges = challenges

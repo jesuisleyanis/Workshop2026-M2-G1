@@ -55,6 +55,8 @@ class Settings:
     mqtt_port: int = 1883
     mqtt_username: str = "auth"
     mqtt_password: str = ""
+    # Bootstrap du premier administrateur : secret optionnel, vide => jamais requis (refusé).
+    backoffice_bootstrap_token: str = ""
 
     def __post_init__(self) -> None:
         if len(self.jwt_secret) < MIN_SECRET_LENGTH:
@@ -97,4 +99,6 @@ class Settings:
             mqtt_port=int(os.environ.get("MQTT_PORT", "1883")),
             mqtt_username=os.environ.get("MQTT_USERNAME", "auth"),
             mqtt_password=read_secret("MQTT_AUTH_PASSWORD", required=False) or "",
+            backoffice_bootstrap_token=read_secret("BACKOFFICE_BOOTSTRAP_TOKEN", required=False)
+            or "",
         )

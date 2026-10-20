@@ -22,6 +22,16 @@ def create_access_token(
     return jwt.encode(payload, secret, algorithm=ALGORITHM), int(TOKEN_TTL.total_seconds())
 
 
+def decode_access_token(token: str, secret: str) -> dict:
+    """Décode et valide un JWT HS256 (signature, `exp`, présence de `sub`).
+
+    Lève `jwt.InvalidTokenError` (dont `ExpiredSignatureError`) si le jeton est invalide.
+    """
+    return jwt.decode(
+        token, secret, algorithms=[ALGORITHM], options={"require": ["exp", "sub"]}
+    )
+
+
 def internal_token_matches(provided: str | None, expected: str) -> bool:
     """Comparaison en temps constant du token interne."""
     return provided is not None and hmac.compare_digest(provided.encode(), expected.encode())
