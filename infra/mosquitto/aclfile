@@ -1,0 +1,9 @@
+# ACL par topic (ADR 0006) : moindre privilège sur le bus LED.
+# `auth` publie les commandes ; l'objet ESP8266 (`led`) les lit et publie son statut/LWT.
+
+user auth
+topic write resilience/led/cmd
+
+user led
+topic read resilience/led/cmd
+topic write resilience/led/status

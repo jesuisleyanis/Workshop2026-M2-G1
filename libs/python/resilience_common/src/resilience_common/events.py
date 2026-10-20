@@ -23,6 +23,19 @@ RESERVED_EVENTS: frozenset[str] = frozenset(
         "auth_login_success",
         "auth_login_failed",
         "auth_rate_limited",
+        # auth — consigne additionnelle 1 (authentification à étapes + LED)
+        "auth_identify_started",
+        "auth_face_recognized",
+        "auth_face_rejected",
+        "auth_locked_out",
+        "led_state_published",
+        "led_publish_failed",
+        # face-id — consigne additionnelle 1 (reconnaissance de visage 1:1)
+        "face_verify_match",
+        "face_verify_nomatch",
+        "face_verify_error",
+        "face_enrolled",
+        "face_enrollment_revoked",
         # payment-api
         "transaction_created",
         "transaction_rejected",

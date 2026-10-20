@@ -48,6 +48,41 @@ anomaly_score = Gauge(
     labelnames=("service",),
 )
 
+# --- Consigne additionnelle 1 : reconnaissance de visage + auth à étapes + LED ---
+
+face_verifications_total = Counter(
+    "resilience_face_verifications_total",
+    "Vérifications faciales 1:1 (identifiant <-> visage).",
+    labelnames=("result",),  # match | nomatch | error
+)
+
+face_verify_duration_seconds = Histogram(
+    "resilience_face_verify_duration_seconds",
+    "Latence d'une vérification faciale.",
+)
+
+face_enrollments = Gauge(
+    "resilience_face_enrollments",
+    "Nombre de visages enrôlés (embeddings stockés).",
+)
+
+auth_face_steps_total = Counter(
+    "resilience_auth_face_steps_total",
+    "Issues de l'étape visage de l'authentification back-office.",
+    labelnames=("result",),  # recognized | rejected
+)
+
+auth_lockouts_total = Counter(
+    "resilience_auth_lockouts_total",
+    "Blocages d'accès au back-office (quota d'échecs atteint).",
+)
+
+led_publish_total = Counter(
+    "resilience_led_publish_total",
+    "Publications d'état LED vers le broker MQTT.",
+    labelnames=("state", "result"),  # state sémantique ; result ok | error
+)
+
 # --- HTTP standard (contrat §2) -------------------------------------------------
 # Noms et labels EXACTS du contrat. L'ordre des labels (service avant path) est
 # significatif : il conditionne l'ordre d'affichage dans /metrics.

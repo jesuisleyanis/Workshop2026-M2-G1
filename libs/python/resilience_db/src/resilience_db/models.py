@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     func,
 )
@@ -32,10 +33,20 @@ class TransactionStatus(str, Enum):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        # Habilitations du back-office (consigne additionnelle 1) : seuls operator/admin
+        # accèdent au back-office durci. Garde-fou DB sur les valeurs autorisées.
+        CheckConstraint(
+            "role IN ('customer', 'operator', 'admin')", name="ck_users_role_valid"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="customer", server_default="customer"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utcnow,
@@ -44,6 +55,9 @@ class User(Base):
     )
 
     accounts: Mapped[list[Account]] = relationship(back_populates="user")
+    face_enrollment: Mapped[FaceEnrollment | None] = relationship(
+        back_populates="user", uselist=False
+    )
 
 
 class Account(Base):
@@ -62,6 +76,32 @@ class Account(Base):
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="EUR")
 
     user: Mapped[User] = relationship(back_populates="accounts")
+
+
+class FaceEnrollment(Base):
+    """Enrôlement biométrique d'un utilisateur (consigne additionnelle 1).
+
+    RGPD : on ne stocke QUE l'embedding (vecteur), jamais l'image capturée. La
+    reconnaissance est 1:1 (identifiant ↔ visage). Table sur le réseau `data` interne.
+    """
+
+    __tablename__ = "face_enrollments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, unique=True, index=True
+    )
+    embedding: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    model_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    enrolled_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    enrolled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    user: Mapped[User] = relationship(back_populates="face_enrollment")
 
 
 class Transaction(Base):

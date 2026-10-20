@@ -9,6 +9,7 @@ Ce document définit les quatre interfaces transverses que le sujet impose de ma
 2. [Convention de nommage des métriques Prometheus](#2-métriques-prometheus)
 3. [Schéma d'événement d'anomalie](#3-schéma-dévénement-danomalie)
 4. [Table de décision incident → action](#4-table-de-décision-incident--action)
+5. [Consigne Additionnelle 1 — authentification renforcée du back-office](#5-consigne-additionnelle-1--authentification-renforcée-du-back-office)
 
 Plus les conventions d'API REST et les codes de retour.
 
@@ -51,6 +52,17 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `auth_login_success` | auth | Connexion réussie |
 | `auth_login_failed` | auth | Échec de connexion (mauvais identifiants) |
 | `auth_rate_limited` | auth | Requête rejetée par le rate-limit |
+| `auth_identify_started` | auth | Étape 1 du back-office : identifiant saisi, caméra activée (consigne add. 1) |
+| `auth_face_recognized` | auth | Étape 2 : visage reconnu, saisie du mot de passe débloquée |
+| `auth_face_rejected` | auth | Étape 2 : visage non reconnu (identifiant vidé, caméra éteinte) |
+| `auth_locked_out` | auth | Accès back-office bloqué (quota d'échecs atteint) |
+| `led_state_published` | auth | État LED publié vers le broker MQTT |
+| `led_publish_failed` | auth | Publication LED impossible (broker injoignable — fail-open) |
+| `face_verify_match` | face-id | Vérification 1:1 : le visage correspond à l'identifiant |
+| `face_verify_nomatch` | face-id | Vérification 1:1 : le visage ne correspond pas |
+| `face_verify_error` | face-id | Erreur de vérification (image illisible, aucun visage détecté) |
+| `face_enrolled` | face-id | Enrôlement d'un visage (embedding stocké, jamais l'image) |
+| `face_enrollment_revoked` | face-id | Révocation d'un enrôlement (droit à l'effacement) |
 | `transaction_created` | payment-api | Virement fictif accepté |
 | `transaction_rejected` | payment-api | Virement refusé (solde, validation) |
 | `db_error` | payment-api | Erreur base de données |
@@ -102,6 +114,12 @@ Chaque service Python expose `/metrics` via `prometheus-fastapi-instrumentator`.
 | `resilience_remediation_actions_total` | counter | `action`, `result` | remediation | — |
 | `resilience_mttd_seconds` | gauge | `incident_id` | remediation | MTTD (détection → première action) |
 | `resilience_mttr_seconds` | gauge | `incident_id` | remediation | MTTR |
+| `resilience_face_verifications_total` | counter | `result` (`match`\|`nomatch`\|`error`) | face-id | vérifications 1:1 (consigne add. 1) |
+| `resilience_face_verify_duration_seconds` | histogram | — | face-id | latence d'une vérification |
+| `resilience_face_enrollments` | gauge | — | face-id | nombre de visages enrôlés |
+| `resilience_auth_face_steps_total` | counter | `result` (`recognized`\|`rejected`) | auth | issues de l'étape visage |
+| `resilience_auth_lockouts_total` | counter | — | auth | blocages d'accès back-office (5 min) |
+| `resilience_led_publish_total` | counter | `state`, `result` (`ok`\|`error`) | auth | publications d'état LED |
 
 Infrastructure complémentaire scrappée par Prometheus : **cAdvisor** (CPU/RAM par conteneur) et **postgres-exporter** (santé DB).
 
@@ -221,6 +239,61 @@ rules:
 | `notify_operator` | webhook dashboard / log `remediation_failed` | aucun |
 
 > **Sécurité (sujet §3.4, Axe 2) :** le moteur n'accède **jamais** au socket Docker brut. Il passe par un **docker-socket-proxy** n'autorisant que `POST /containers/{id}/restart` et les verbes strictement nécessaires. Son API `/events` est **authentifiée** (token partagé via SOPS) et **non exposée** sur le réseau `edge`. Voir `remediation/CAHIER-DES-CHARGES.md`.
+
+---
+
+## 5. Consigne Additionnelle 1 — authentification renforcée du back-office
+
+> Cadrage complet : [`consigne-additionnelle-1.md`](consigne-additionnelle-1.md). Ces interfaces ne concernent que l'**accès privilégié** du back-office ; la boucle Zero-Touch Recovery (`verify_tx`, détection, remédiation) n'en dépend jamais.
+
+### 5.1 API `face-id` (interne, réseau `app`, jamais sur `edge`)
+
+Reconnaissance **1:1** (vérification identifiant ↔ visage). Stocke **l'embedding** (vecteur), **jamais l'image**.
+
+| Méthode & chemin | Auth | Description |
+|---|---|---|
+| `POST /api/v1/verify` | réseau interne | `{username, image_b64}` → `{match: bool, score: float, threshold: float, model_version: str}`. Appelé **uniquement par `auth`**. |
+| `POST /api/v1/enroll` | `X-Internal-Token` | `{username, images_b64: [...]}` → `{enrolled: bool, quality: float, model_version}`. |
+| `DELETE /api/v1/enroll/{username}` | `X-Internal-Token` | `204`. Droit à l'effacement. |
+| `GET /api/v1/enrollments` | `X-Internal-Token` | `[{username, enrolled_at, enrolled_by, model_version}]` — **aucune donnée biométrique**. |
+| `GET /health` · `GET /ready` · `GET /metrics` | — | `/ready` = modèle chargé + DB joignable. |
+
+### 5.2 API d'authentification à étapes (`auth`, consommée par le back-office)
+
+Machine à états : `IDENTIFY → FACE → PASSWORD → OK` (détail et verrouillage : cadrage §5.1).
+
+| Méthode & chemin | Description |
+|---|---|
+| `POST /api/v1/auth/identify` | `{username}` → `200 {challenge_id, step:"face", expires_in, camera:true}` ; `429 {retry_after}` si bloqué. **Toujours 200** hors blocage (anti-énumération). |
+| `POST /api/v1/auth/face` | `{challenge_id, image_b64}` → `200 {recognized, step:"password"\|"identify", attempts_left}`. |
+| `POST /api/v1/auth/password` | `{challenge_id, password}` → `200 {access_token, token_type, expires_in, role}` (rôle privilégié) ; `401 {step:"identify"}` sinon. |
+| `POST /api/v1/login` | **Conservé** : comptes de service (`verify_tx`, `seed`) et front client. Hors facteur visage. |
+
+Verrouillage (consigne CA4) : quota d'échecs d'accès par `(username, source_ip)` — défaut **2** tentatives (« 1 reprise ») puis **5 min** (`BACKOFFICE_MAX_ATTEMPTS`, `BACKOFFICE_LOCKOUT_SECONDS`). `challenge_id` à usage unique, TTL court (`BACKOFFICE_CHALLENGE_TTL`, défaut 60 s).
+
+### 5.3 Protocole LED (MQTT)
+
+Broker **Mosquitto** durci (`allow_anonymous false`, creds SOPS, **ACL par topic**, bind interface hotspot). `auth` publie des **états sémantiques** ; le firmware ESP8266 rend les **motifs + timings**.
+
+| Topic | Sens | Payload |
+|---|---|---|
+| `resilience/led/cmd` | hôte → ESP | `{"state":"idle\|recognized\|auth_ok\|auth_fail\|not_recognized","ts":"<iso8601>","challenge_id":"<uuid\|null>"}` |
+| `resilience/led/status` | ESP → hôte | heartbeat + **LWT** (disponibilité de l'objet) |
+
+| État | Motif LED (rendu firmware) | Durée |
+|---|---|---|
+| `idle` | éteinte (défaut) | — |
+| `recognized` | vert clignotant | jusqu'à l'état suivant |
+| `auth_ok` | vert fixe | 30 s → éteinte |
+| `auth_fail` | rouge clignotant ×10 | → éteinte |
+| `not_recognized` | rouge fixe | 30 s → éteinte |
+
+La publication MQTT est **fail-open** : un broker injoignable n'empêche jamais la connexion (événement `led_publish_failed`).
+
+### 5.4 Modèle de données (`resilience_db`)
+
+- `users.role` : `customer` (défaut) | `operator` | `admin`. Le back-office exige `operator`/`admin`.
+- Table `face_enrollments` : `user_id` (FK `users.id`, **unique**), `embedding` (BYTEA — **vecteur uniquement, jamais l'image**), `model_version` (str), `enrolled_by` (str), `enrolled_at` (timestamptz).
 
 ---
 
