@@ -1,13 +1,18 @@
-# Noyau du service (testable sans modèle ML : le backend par défaut est un stub déterministe).
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pydantic==2.9.2
+# Dépendances runtime épinglées, alignées sur le jeu testé d'auth / payment-api. Les libs du
+# monorepo resilience_common / resilience_db s'installent séparément depuis libs/python/
+# (cf. Dockerfile) ; leurs dépendances (SQLAlchemy, alembic, psycopg, prometheus-client) sont
+# donc listées ici. Noyau testable sans modèle ML : le backend par défaut est un stub.
+fastapi==0.146.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+SQLAlchemy==2.1.5
+alembic==1.20.0
+psycopg[binary]==3.3.6
+passlib==1.7.4
+bcrypt==4.0.1
+prometheus-client==0.26.0
+prometheus-fastapi-instrumentator==8.1.0
 cryptography==44.0.0
-resilience-common
-resilience-db
-# Backend de reconnaissance réel (installé en recette sur le PC Hôte, non requis pour les tests).
-# Décommenter pour RECOGNIZER_BACKEND=insightface :
-# insightface==0.7.3
-# onnxruntime==1.19.2
-# numpy==2.1.1
-# opencv-python-headless==4.10.0.84
+# Pillow : vignettes d'enrôlement (JPEG, plus grand côté 240 px).
+pillow==12.2.0
+# Backend réel `team` (dlib / face_recognition) : voir requirements-team.txt (image Docker).

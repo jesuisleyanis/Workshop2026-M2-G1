@@ -1,12 +1,14 @@
 """Accès au stockage des enrôlements biométriques (table face_enrollments).
 
-RGPD : seul l'embedding (vecteur) est persisté, jamais l'image. La liste des enrôlements
-ne renvoie aucune donnée biométrique.
+RGPD : le store ne manipule que des blobs DÉJÀ scellés (AES-GCM, cf. `crypto.py`) : gabarits
+par pose et vignettes d'enrôlement. Le chiffrement/déchiffrement se fait dans la couche
+service, jamais ici. La liste des enrôlements ne renvoie aucune donnée biométrique.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from resilience_db.models import FaceEnrollment, User
 from sqlalchemy import func, select
@@ -18,8 +20,9 @@ class UnknownUserError(LookupError):
 
 
 @dataclass(frozen=True)
-class StoredEmbedding:
-    embedding: bytes
+class StoredEnrollment:
+    templates_blob: bytes
+    photos_blob: bytes | None  # NULL pour une ligne v1 (avant les photos chiffrées)
     model_version: str
 
 
@@ -30,17 +33,31 @@ class EnrollmentStore:
     def _user_id(self, session: Session, username: str) -> int | None:
         return session.scalar(select(User.id).where(User.username == username))
 
-    def get(self, username: str) -> StoredEmbedding | None:
+    def user_exists(self, username: str) -> bool:
+        with self._session_factory() as s:
+            return self._user_id(s, username) is not None
+
+    def get(self, username: str) -> StoredEnrollment | None:
         with self._session_factory() as s:
             row = s.execute(
-                select(FaceEnrollment.embedding, FaceEnrollment.model_version)
+                select(
+                    FaceEnrollment.embedding,
+                    FaceEnrollment.photos,
+                    FaceEnrollment.model_version,
+                )
                 .join(User, User.id == FaceEnrollment.user_id)
                 .where(User.username == username)
             ).first()
-            return StoredEmbedding(row[0], row[1]) if row else None
+            return StoredEnrollment(row[0], row[1], row[2]) if row else None
 
     def upsert(
-        self, username: str, embedding: bytes, model_version: str, enrolled_by: str
+        self,
+        username: str,
+        templates_blob: bytes,
+        photos_blob: bytes | None,
+        poses_csv: str,
+        model_version: str,
+        enrolled_by: str,
     ) -> None:
         with self._session_factory() as s:
             user_id = self._user_id(s, username)
@@ -53,15 +70,20 @@ class EnrollmentStore:
                 s.add(
                     FaceEnrollment(
                         user_id=user_id,
-                        embedding=embedding,
+                        embedding=templates_blob,
+                        photos=photos_blob,
+                        poses=poses_csv,
                         model_version=model_version,
                         enrolled_by=enrolled_by,
                     )
                 )
             else:
-                existing.embedding = embedding
+                existing.embedding = templates_blob
+                existing.photos = photos_blob
+                existing.poses = poses_csv
                 existing.model_version = model_version
                 existing.enrolled_by = enrolled_by
+                existing.enrolled_at = datetime.now(UTC)
             s.commit()
 
     def delete(self, username: str) -> bool:
@@ -78,7 +100,7 @@ class EnrollmentStore:
             return True
 
     def list(self) -> list[dict]:
-        """Métadonnées d'enrôlement — jamais l'embedding."""
+        """Métadonnées d'enrôlement — jamais de gabarit ni de photo."""
         with self._session_factory() as s:
             rows = s.execute(
                 select(
@@ -86,6 +108,7 @@ class EnrollmentStore:
                     FaceEnrollment.enrolled_at,
                     FaceEnrollment.enrolled_by,
                     FaceEnrollment.model_version,
+                    FaceEnrollment.poses,
                 ).join(User, User.id == FaceEnrollment.user_id)
             ).all()
             return [
@@ -94,8 +117,9 @@ class EnrollmentStore:
                     "enrolled_at": at.isoformat() if at else None,
                     "enrolled_by": by,
                     "model_version": mv,
+                    "poses": [p for p in poses.split(",") if p],
                 }
-                for (u, at, by, mv) in rows
+                for (u, at, by, mv, poses) in rows
             ]
 
     def count(self) -> int:
