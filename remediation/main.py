@@ -89,7 +89,13 @@ def create_app(
     # --------------------------------------------------------------- middleware
     @app.middleware("http")
     async def request_context(request: Request, call_next):
-        rid = request.headers.get("x-request-id") or str(uuid.uuid4())
+        # On n'accepte un X-Request-ID entrant que s'il s'agit d'un UUID (anti log-forging,
+        # parité avec auth/payment-api) ; toute autre valeur est remplacée.
+        raw_rid = request.headers.get("x-request-id")
+        try:
+            rid = str(uuid.UUID(raw_rid)) if raw_rid else str(uuid.uuid4())
+        except (ValueError, AttributeError, TypeError):
+            rid = str(uuid.uuid4())
         request.state.request_id = rid
         t0 = time.monotonic()
         response = await call_next(request)

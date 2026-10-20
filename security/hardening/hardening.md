@@ -10,11 +10,11 @@
 | Utilisateur non-root | `USER app` (uid ≥ 1000), pas de process en root | revue Dockerfile |
 | Capabilities | `cap_drop: ALL` ; ajout explicite uniquement si indispensable (aucun `cap_add` à ce jour, voir ci-dessous) | `audit.sh` (ancre présente), `infra/tests/test_compose_hardening.py` (par service) |
 | `no-new-privileges` | `security_opt: ["no-new-privileges:true"]` | compose, `infra/tests/test_compose_hardening.py` |
-| Système de fichiers | `read_only: true` + `tmpfs` pour les écritures nécessaires | compose |
+| Système de fichiers | `read_only: true` + `tmpfs` pour les écritures nécessaires, **quand le service le permet** (exceptions documentées : `docker-socket-proxy`, `pg-exporter`, `cadvisor`) | compose |
 | Limites ressources | `mem_limit` par service ; `cpus` sur les services Python (ancre `x-pylimits`) — 16 Go partagés | compose |
 | Healthcheck | `/health` sur chaque service ; `HEALTHCHECK` dans le Dockerfile | Dockerfile |
 | Réseau | services internes sur `app`/`data`/`obs` ; `data` en `internal: true` ; **seul le WAF** publie des ports | `audit.sh` |
-| Secrets | via SOPS uniquement, injectés en env au runtime ; aucun secret en image | gitleaks + `audit.sh` |
+| Secrets | via SOPS uniquement, injectés en env au runtime ; aucun secret applicatif en image. **Exception de labo** : le certificat TLS auto-signé du WAF est généré au build et figé dans une couche (clé privée partagée entre instances) — acceptable pour une démo, à régénérer au démarrage en production | gitleaks + `audit.sh` |
 
 ## Cas particulier : Postgres sous `cap_drop: ALL` (ticket #11)
 
@@ -52,8 +52,8 @@ doit être recréé (`docker compose down -v` puis `make up`) ; les playbooks (`
 # Scan de secrets (pre-commit)
 gitleaks detect --source . --no-banner
 
-# Scan de vulnérabilités d'images (avant jury)
-trivy image resilience/payment-api:latest
+# Scan de vulnérabilités d'images (avant jury) — nom réel produit par compose (préfixe projet)
+trivy image resilience-g1-payment-api        # ou : trivy config infra/compose/docker-compose.yml
 
 # Audit de configuration du repo (local, rapide)
 security/hardening/audit.sh

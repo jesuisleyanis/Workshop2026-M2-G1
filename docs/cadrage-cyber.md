@@ -8,7 +8,7 @@
 | Composant | Rôle | État actuel |
 |---|---|---|
 | `attacks/` | Banc d'essai Red Team : 4 scénarios, `run.sh`, `reset.sh`, validateur, kill-switch | ✅ v1 livrée, à jouer depuis le vrai 2e PC |
-| `security/waf/` | WAF Nginx + ModSecurity + OWASP CRS (seul point exposé) + exporter Prometheus | ✅ configs + 5 tests |
+| `security/waf/` | WAF Nginx + ModSecurity + OWASP CRS (seul point exposé) + exporter Prometheus | ✅ configs + 25 tests |
 | `security/sops/` | Gestion des secrets SOPS + age (clés hors git) | ✅ v1 |
 | `security/hardening/` | Durcissement conteneurs (non-root, cap_drop, read_only), `audit.sh` | ✅ v1 |
 | `infra/grafana` + `infra/loki` (règles SOC) | Fonction SOC = règles Loki/Grafana ruler | ✅ `soc-rules.yml` (relecture + validation live côté moi) |

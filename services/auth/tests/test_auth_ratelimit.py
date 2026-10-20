@@ -85,3 +85,19 @@ def test_reset_restores_baseline_limit(client):
     r = client.post("/internal/reset-rate-limit", headers=HDR)
     assert r.json() == {"previous_limit": "1/minute", "current_limit": "3/minute"}
     assert client.post("/internal/reset-rate-limit").status_code == 401
+
+
+def test_register_is_rate_limited_after_threshold(client):
+    """/register est borné (anti-flood de comptes, DoS bcrypt, énumération) — défaut 10/minute."""
+    from authkit import PASSWORD
+
+    codes = [
+        client.post(
+            "/api/v1/register", json={"username": f"u{i:02d}", "password": PASSWORD}
+        ).status_code
+        for i in range(12)
+    ]
+    assert codes[:10] == [201] * 10
+    assert codes[10] == 429 and codes[11] == 429
+    r = client.post("/api/v1/register", json={"username": "u99", "password": PASSWORD})
+    assert r.json()["error"]["code"] == "rate_limited"

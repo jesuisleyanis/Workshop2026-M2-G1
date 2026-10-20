@@ -21,15 +21,16 @@ x-pylimits: &pylimits
 
 networks:
   edge:
-  app:
+  app:   # non `internal` : seul réseau avec sortie (pull d'images, modèles Ollama). Aucun `ports:`.
   data:
     internal: true
   obs:
+    internal: true   # observabilité : aucun besoin de sortie Internet (P4S-02)
 
 # Secret Compose alimenté depuis .env (SOPS) : monté en fichier dans Alertmanager (credentials_file),
 # jamais écrit dans alertmanager.yml (fichier versionné).
 # Requiert Docker Compose >= 2.23.1 (source `environment:` des secrets) ; sinon, remplacer par
-# `file: ../../.remediation_token` produit par scripts/decrypt-secrets.sh (voir README-SOC.md).
+# `file: ../../.remediation_token` (fichier à extraire manuellement de .env, hors git ; voir README-SOC.md).
 secrets:
   remediation_token:
     environment: REMEDIATION_TOKEN
@@ -320,6 +321,9 @@ services:
     # Chemin SOC -> remédiation (I6, #13) : reçoit les alertes des règles Prometheus et poste
     # POST /events/alertmanager (Bearer interne via le secret `remediation_token`). Réseau `app`
     # requis pour joindre le moteur ; aucun port publié.
+    # Risque résiduel P4S-01 (docs/ebios-rm.md) : l'API Alertmanager (:9093) n'a pas d'auth propre
+    # et reste joignable depuis `app` ; un conteneur `app` compromis pourrait forger une alerte.
+    # Durcissement cible : réseau `soc` dédié (internal) prometheus<->alertmanager<->remediation.
     <<: *hardening
     image: prom/alertmanager:v0.27.0
     profiles: [full]

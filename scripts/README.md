@@ -18,7 +18,7 @@ ne fait que l'appliquer. Toutes les données sont fictives.
 
 | Utilisateur | Mot de passe | Compte | Solde initial |
 |---|---|---|---|
-| `demo01` … `demo05` | `SEED_PASSWORD` (commun, SOPS → `.env`) | 1 compte EUR chacun, IBAN fictif `FR76 0000 0000 000N …` | **1 000,00 €** (100 000 centimes) |
+| `demo01` … `demo05` | `SEED_PASSWORD` (commun, SOPS → `.env`) | 1 compte EUR chacun, IBAN fictif `FR76 0000 0000 000N 0000 0000 000` | **1 000,00 €** (100 000 centimes) |
 
 - Idempotent : les utilisateurs existants sont ignorés, relançable sans doublon.
 - `SEED_USERS` (défaut `5`) change le nombre de comptes.

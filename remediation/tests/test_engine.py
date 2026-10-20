@@ -225,6 +225,13 @@ async def test_waf_never_blocks_protected_or_missing_ips(make_env):
     sub2 = await env2.run(make_event("service_flood", source_ip=None))
     assert "source_ip" in env2.incident(sub2.incident_id)["actions"][0]["detail"]
 
+    # La forme IPv4-mappée ne doit pas contourner la liste blanche (P4S-05).
+    env3 = make_env(verify=[True])
+    sub3 = await env3.run(make_event("service_flood", source_ip="::ffff:192.168.137.1"))
+    first3 = env3.incident(sub3.incident_id)["actions"][0]
+    assert first3["result"] == "failure" and "protégée" in first3["detail"]
+    assert env3.runner.calls == []
+
 
 async def test_restart_refuses_service_outside_allow_list(make_env):
     from conftest import make_settings

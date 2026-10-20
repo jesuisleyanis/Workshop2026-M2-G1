@@ -71,7 +71,7 @@ remediation_actions_total = Counter(
 
 mttd_seconds = Gauge(
     "resilience_mttd_seconds",
-    "Mean Time To Detect du dernier incident.",
+    "Délai détection -> première action de remédiation (dit MTTD) du dernier incident.",
     labelnames=("incident_id",),
 )
 
