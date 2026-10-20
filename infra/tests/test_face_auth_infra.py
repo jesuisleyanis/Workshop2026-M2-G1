@@ -111,8 +111,9 @@ def test_face_id_service() -> None:
     for k in ("POSTGRES_HOST", "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD",
               "FACE_INTERNAL_TOKEN", "FACE_DATA_KEY"):
         assert k in env, k
-    assert env["FACE_INTERNAL_TOKEN"] == "${FACE_INTERNAL_TOKEN}"
-    assert env["FACE_DATA_KEY"] == "${FACE_DATA_KEY}"
+    # Forme fail-fast `${VAR:?message}` : `docker compose` refuse de démarrer sans le secret.
+    assert env["FACE_INTERNAL_TOKEN"].startswith("${FACE_INTERNAL_TOKEN:?")
+    assert env["FACE_DATA_KEY"].startswith("${FACE_DATA_KEY:?")
     assert env["RECOGNIZER_BACKEND"] == "team"
     assert "/tmp" in _tmpfs_paths(f)
     assert f["mem_limit"] == "1g" and float(f["cpus"]) == 1.5
@@ -133,11 +134,28 @@ def test_auth_wired_to_face_id_and_mqtt() -> None:
     a = SERVICES["auth"]
     env = a["environment"]
     assert env["FACE_ID_URL"] == "http://face-id:8006"
-    assert env["FACE_INTERNAL_TOKEN"] == "${FACE_INTERNAL_TOKEN}"
+    assert env["FACE_INTERNAL_TOKEN"].startswith("${FACE_INTERNAL_TOKEN:?")
     assert env["MQTT_HOST"] == "mosquitto"
     assert env["MQTT_AUTH_PASSWORD"] == "${MQTT_AUTH_PASSWORD}"
     assert env["BACKOFFICE_BOOTSTRAP_TOKEN"] == "${BACKOFFICE_BOOTSTRAP_TOKEN}"
     assert set(a["depends_on"]) >= {"postgres", "face-id", "mosquitto"}
+
+
+def test_auth_face_timeout_and_challenge_ttl_fit_dlib_and_mediapipe() -> None:
+    env = SERVICES["auth"]["environment"]
+    # dlib sur 3 images : le défaut du code (2 s) est trop court pour l'étape visage.
+    assert float(env["BACKOFFICE_FACE_TIMEOUT"]) == 8
+    # Chargement à froid de MediaPipe + 3 maintiens de pose dans la durée de vie du challenge.
+    assert int(env["BACKOFFICE_CHALLENGE_TTL"]) == 120
+
+
+def test_auth_starts_without_mqtt_broker() -> None:
+    """Broker absent (IP du hotspot non montée) : auth et donc le WAF démarrent quand même."""
+    deps = SERVICES["auth"]["depends_on"]
+    assert isinstance(deps, dict), "syntaxe longue requise pour `required: false`"
+    assert deps["mosquitto"].get("required") is False
+    for hard in ("postgres", "face-id"):
+        assert deps[hard].get("required", True) is True, hard
 
 
 def test_prometheus_scrapes_face_id() -> None:

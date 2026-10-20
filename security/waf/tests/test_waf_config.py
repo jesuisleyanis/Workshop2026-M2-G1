@@ -103,6 +103,27 @@ def test_modsecurity_body_limits_match_host_client_max_body_size():
         assert "MODSEC_REQ_BODY" not in script.read_text(encoding="utf-8")
 
 
+def test_crs_allowed_methods_cover_every_backoffice_api_method():
+    """CRS 911100 bloque toute méthode hors `ALLOWED_METHODS` (défaut image : GET HEAD POST OPTIONS).
+
+    Le back-office appelle l'API d'administration en PATCH (rôle), PUT et DELETE (visage) : chaque
+    méthode utilisée par services/backoffice/src/api doit être admise, sinon 403 sur 9443.
+    """
+    yaml = pytest.importorskip("yaml")
+    env = yaml.safe_load(COMPOSE)["services"]["waf"]["environment"]
+    allowed = set(env["ALLOWED_METHODS"].split())
+    api_dir = ROOT / "services" / "backoffice" / "src" / "api"
+    used = {"GET"}  # défaut de http.ts (init.method ?? 'GET')
+    for src in api_dir.glob("*.ts"):
+        if src.name.endswith(".test.ts"):
+            continue
+        used |= set(re.findall(r"method:\s*'([A-Z]+)'", src.read_text(encoding="utf-8")))
+    assert {"POST", "PATCH", "PUT", "DELETE"} <= used, "le scan des clients API a échoué"
+    assert used <= allowed, f"méthodes bloquées par le CRS : {sorted(used - allowed)}"
+    assert {"HEAD", "OPTIONS"} <= allowed  # défaut CRS conservé (sondes, pré-vols)
+    assert "ALLOWED_METHODS" not in DOCKERFILE  # une seule source de vérité : le Compose
+
+
 def test_host_listener_9443_routes_auth_admin_and_backoffice():
     assert re.search(r"listen\s+9443\s+ssl;", HOST_SERVER)
     assert "http2 on;" in HOST_SERVER
