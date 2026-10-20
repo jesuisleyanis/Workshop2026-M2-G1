@@ -66,6 +66,21 @@ describe('HabilitationsPage — liste', () => {
     expect(screen.getByRole('button', { name: /ré-enrôler le visage de alice/i })).toBeInTheDocument()
   })
 
+  it('enrôlement périmé : badge « Réenrôlement requis », ré-enrôler et révoquer proposés, pas de photos', async () => {
+    mList.mockResolvedValue([
+      ...ROWS,
+      { username: 'carol', role: 'admin', enrolled: false, stale: true, enrolled_at: '2026-01-01T10:00:00Z', enrolled_by: 'root' },
+    ])
+    await renderPage()
+    const carol = rowOf('carol')
+    const badge = within(carol).getByText('Réenrôlement requis')
+    expect(badge).toHaveClass('bg-warn-bg')
+    expect(carol).not.toHaveTextContent(/enrôlé le/i)
+    expect(screen.getByRole('button', { name: /ré-enrôler le visage de carol/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /révoquer le visage de carol/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /voir les photos de carol/i })).not.toBeInTheDocument()
+  })
+
   it('erreur de chargement avec bouton Réessayer', async () => {
     mList.mockRejectedValueOnce(new ApiError(0, 'network_error', 'x'))
     render(<HabilitationsPage token="tok" />)

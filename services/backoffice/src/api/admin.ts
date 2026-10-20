@@ -7,7 +7,10 @@ export type AgentRole = 'customer' | 'operator' | 'admin'
 export interface AgentRow {
   username: string
   role: AgentRole
+  /** Enrôlement UTILISABLE (vérifiable par le modèle chargé de face-id). */
   enrolled: boolean
+  /** Ligne d'enrôlement présente mais périmée (changement de modèle, ligne v1) : réenrôlement requis. */
+  stale?: boolean
   enrolled_at: string | null
   enrolled_by: string | null
 }
@@ -23,7 +26,7 @@ export const setRole = (token: string, username: string, role: AgentRole) =>
   request<{ username: string; role: AgentRole }>(userPath(username), { method: 'PATCH', body: { role }, token })
 
 export const enrollFace = (token: string, username: string, poses: Record<Pose, string>) =>
-  request<{ enrolled: boolean; model_version: number }>(`${userPath(username)}/face`, {
+  request<{ enrolled: boolean; model_version: string | null }>(`${userPath(username)}/face`, {
     method: 'PUT',
     body: { poses },
     token,

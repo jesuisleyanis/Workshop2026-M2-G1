@@ -10,6 +10,7 @@ const REJECTION_REASONS: Record<string, string> = {
   multiple_faces: 'plusieurs visages',
   inconsistent: 'pas la même personne',
   invalid_image: 'image illisible',
+  missing: 'pose manquante',
 }
 
 export const reasonLabel = (reason: string): string => REJECTION_REASONS[reason] ?? reason

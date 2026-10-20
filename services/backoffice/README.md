@@ -21,6 +21,9 @@ npm run build      # tsc --noEmit + build de production (nginx statique via Dock
 npm run lint
 ```
 
+**Node ≥ 22.15 (ou 24) requis pour les tests** : la version d'undici embarquée par jsdom ne se charge pas
+sur Node 20. Le back-office est agrégé à `make test` (cible `test-front`, variable `FRONT_APPS`).
+
 ## Flux de connexion (contrat §5.2)
 
 ```
@@ -66,7 +69,7 @@ reste l'autorité, `403` sinon, affiché en clair). Un opérateur voit la carte 
 (lecture seule, aucun appel à l'API d'administration).
 
 - **Habilitations** (`pages/HabilitationsPage.tsx`) : tableau des agents (identifiant, rôle en
-  `<select>`, statut visage « Enrôlé le … par … » / « Non enrôlé »). Actions : **Voir photos**
+  `<select>`, statut visage « Enrôlé le … par … » / « Réenrôlement requis » (badge avertissement : ligne `stale`, gabarit d'un autre modèle — le compte ne peut plus se connecter) / « Non enrôlé »). Actions : **Voir photos**
   (`PhotoStrip`, trois vignettes servies par `auth`), **Ré-enrôler**, **Révoquer** (avec
   confirmation). `409 last_admin` (dernier administrateur) est affiché en clair ; `401` ramène au login.
 - **Assistant « Nouvel agent »** (`components/EnrollWizard.tsx`) : 1) identifiant, mot de passe

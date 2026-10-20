@@ -13,6 +13,13 @@ import { ROLES, ROLE_LABELS } from '../lib/validation'
 type Wizard = { reenroll?: string } | null
 type Photos = { username: string; photos: Record<Pose, string> | null }
 
+/** Statut visage : utilisable, périmé (réenrôlement requis) ou absent. */
+function faceStatus(row: AgentRow): { label: string; ok: boolean } {
+  if (row.enrolled) return { label: formatEnrolled(row), ok: true }
+  if (row.stale) return { label: 'Réenrôlement requis', ok: false }
+  return { label: 'Non enrôlé', ok: false }
+}
+
 function formatEnrolled(row: AgentRow): string {
   const date = row.enrolled_at ? new Date(row.enrolled_at) : null
   const when = date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString('fr-FR') : row.enrolled_at
@@ -199,9 +206,10 @@ export function HabilitationsPage({ token, onUnauthorized }: { token: string; on
                   </td>
                   <td className="px-4 py-3">
                     <span
-                      className={`rounded-md px-2 py-0.5 text-[12px] ${row.enrolled ? 'bg-ok-bg text-ok-fg' : 'bg-warn-bg text-warn-fg'}`}
+                      className={`rounded-md px-2 py-0.5 text-[12px] ${faceStatus(row).ok ? 'bg-ok-bg text-ok-fg' : 'bg-warn-bg text-warn-fg'}`}
+                      title={row.stale && !row.enrolled ? 'Gabarit issu d’un autre modèle : ce compte ne peut plus se connecter' : undefined}
                     >
-                      {row.enrolled ? formatEnrolled(row) : 'Non enrôlé'}
+                      {faceStatus(row).label}
                     </span>
                   </td>
                   <td className="px-4 py-3">
@@ -219,12 +227,12 @@ export function HabilitationsPage({ token, onUnauthorized }: { token: string; on
                       <button
                         type="button"
                         className="btn-ghost !h-9"
-                        aria-label={`${row.enrolled ? 'Ré-enrôler' : 'Enrôler'} le visage de ${row.username}`}
+                        aria-label={`${row.enrolled || row.stale ? 'Ré-enrôler' : 'Enrôler'} le visage de ${row.username}`}
                         onClick={() => setWizard({ reenroll: row.username })}
                       >
-                        {row.enrolled ? 'Ré-enrôler' : 'Enrôler'}
+                        {row.enrolled || row.stale ? 'Ré-enrôler' : 'Enrôler'}
                       </button>
-                      {row.enrolled && (
+                      {(row.enrolled || row.stale) && (
                         <button
                           type="button"
                           className="btn-ghost !h-9 !text-ko-fg"

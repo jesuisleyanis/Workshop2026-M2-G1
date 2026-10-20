@@ -38,7 +38,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   user = userEvent.setup()
   mCreate.mockResolvedValue({ username: 'alice', role: 'operator' })
-  mEnroll.mockResolvedValue({ enrolled: true, model_version: 1 })
+  mEnroll.mockResolvedValue({ enrolled: true, model_version: 'stub-2.0' })
 })
 
 function renderWizard(props: Partial<ComponentProps<typeof EnrollWizard>> = {}) {

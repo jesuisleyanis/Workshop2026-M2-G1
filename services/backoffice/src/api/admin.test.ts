@@ -70,9 +70,9 @@ describe("client de l'API d'administration", () => {
   })
 
   it('enrollFace fait un PUT des poses sur /face', async () => {
-    const f = stubFetch(fakeResponse(200, { enrolled: true, model_version: 3 }))
+    const f = stubFetch(fakeResponse(200, { enrolled: true, model_version: 'team-dlib-1.3.0' }))
     const poses = { face: 'A', gauche: 'B', droite: 'C' }
-    expect(await enrollFace('TOK', 'op', poses)).toEqual({ enrolled: true, model_version: 3 })
+    expect(await enrollFace('TOK', 'op', poses)).toEqual({ enrolled: true, model_version: 'team-dlib-1.3.0' })
     const { url, init, body } = call(f)
     expect(url).toBe('/api/v1/admin/users/op/face')
     expect(init.method).toBe('PUT')
