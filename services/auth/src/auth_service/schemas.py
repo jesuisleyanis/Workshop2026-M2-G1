@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 from resilience_db.passwords import MAX_PASSWORD_BYTES
 
@@ -47,18 +49,28 @@ class IdentifyResponse(BaseModel):
     step: str
     expires_in: int
     camera: bool
+    #: Ordre des 3 poses à présenter (vide si le facteur visage est désactivé).
+    poses: list[str]
+
+
+class FaceFrame(BaseModel):
+    pose: Literal["face", "gauche", "droite"]
+    # Plafond anti-DoS (~600 Ko d'image) : une trame webcam JPEG est bien en deçà.
+    image_b64: str = Field(min_length=1, max_length=800_000)
 
 
 class FaceRequest(BaseModel):
     challenge_id: str = Field(min_length=1, max_length=64)
-    # Plafond anti-DoS (~1 Mo d'image en base64) : une trame webcam JPEG est bien en deçà.
-    image_b64: str = Field(min_length=1, max_length=1_500_000)
+    # Exactement une frame par pose demandée, dans l'ordre tiré par identify.
+    frames: list[FaceFrame] = Field(min_length=3, max_length=3)
 
 
 class FaceResponse(BaseModel):
     recognized: bool
     step: str
     attempts_left: int
+    #: Secondes de refroidissement imposées (30 si non reconnu, sinon 0).
+    cooldown: int = 0
 
 
 class PasswordRequest(BaseModel):

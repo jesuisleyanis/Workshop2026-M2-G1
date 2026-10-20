@@ -18,7 +18,7 @@ def _bool(name: str, default: bool) -> bool:
 
 
 def _read_face_token() -> str:
-    """Token pour face-id /verify (optionnel) : FACE_INTERNAL_TOKEN_FILE puis FACE_INTERNAL_TOKEN."""
+    """Token pour face-id (optionnel) : FACE_INTERNAL_TOKEN_FILE puis FACE_INTERNAL_TOKEN."""
     from pathlib import Path
 
     file_var = os.environ.get("FACE_INTERNAL_TOKEN_FILE")
@@ -40,7 +40,7 @@ class Settings:
     log_level: str = "INFO"
     # Back-office à étapes (consigne additionnelle 1)
     face_id_url: str = "http://face-id:8006"
-    face_internal_token: str = ""  # token envoyé à face-id /verify (défense en profondeur)
+    face_internal_token: str = ""  # token envoyé à face-id (défense en profondeur)
     face_timeout_seconds: float = 2.0  # borne l'appel face-id (protège le threadpool de /login)
     backoffice_max_attempts: int = 2
     backoffice_lockout_seconds: int = 300
@@ -48,6 +48,8 @@ class Settings:
     backoffice_failure_window: int = 900
     backoffice_rate_limit: str = "30/minute"
     backoffice_face_required: bool = True
+    backoffice_reject_cooldown: int = 30  # refroidissement après visage refusé (s)
+    backoffice_fail_cooldown: int = 3  # refroidissement après mot de passe refusé (s)
 
     def __post_init__(self) -> None:
         if len(self.jwt_secret) < MIN_SECRET_LENGTH:
@@ -84,4 +86,6 @@ class Settings:
             backoffice_failure_window=int(os.environ.get("BACKOFFICE_FAILURE_WINDOW", "900")),
             backoffice_rate_limit=os.environ.get("BACKOFFICE_RATE_LIMIT", "30/minute"),
             backoffice_face_required=_bool("BACKOFFICE_FACE_REQUIRED", True),
+            backoffice_reject_cooldown=int(os.environ.get("BACKOFFICE_REJECT_COOLDOWN", "30")),
+            backoffice_fail_cooldown=int(os.environ.get("BACKOFFICE_FAIL_COOLDOWN", "3")),
         )

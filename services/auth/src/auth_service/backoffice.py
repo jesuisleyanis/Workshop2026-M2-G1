@@ -15,9 +15,9 @@ pour des tests déterministes sans réseau ni matériel.
 from __future__ import annotations
 
 import logging
+import secrets
 from typing import Protocol
 
-import httpx
 from fastapi import FastAPI, Request
 from resilience_common.metrics import (
     auth_face_steps_total,
@@ -30,8 +30,16 @@ from resilience_db.passwords import DUMMY_HASH, verify_password
 from slowapi import Limiter
 from sqlalchemy import select
 
-from auth_service.challenge import Challenge, ChallengeStep, ChallengeStore, LockoutStore
+from auth_service.challenge import (
+    POSES,
+    Challenge,
+    ChallengeStep,
+    ChallengeStore,
+    CooldownStore,
+    LockoutStore,
+)
 from auth_service.config import Settings
+from auth_service.face_client import FaceUnavailable
 from auth_service.observability import ApiError, client_ip_var, log_event
 from auth_service.schemas import (
     FaceRequest,
@@ -54,40 +62,10 @@ LED_NOT_RECOGNIZED = "not_recognized"
 
 
 class FaceVerifier(Protocol):
-    def verify(self, username: str, image_b64: str) -> bool:
-        """True si le visage correspond à l'identifiant. Lève FaceUnavailable si face-id injoignable."""
+    def verify(self, username: str, frames: list[dict]) -> bool:
+        """True si les 3 frames correspondent à l'identifiant. Lève FaceUnavailable si face-id
+        est injoignable (ré-exporté ici depuis `face_client`)."""
         ...
-
-
-class FaceUnavailable(RuntimeError):
-    """Le service face-id est injoignable (mode dégradé : back-office inaccessible par conception)."""
-
-
-class HttpFaceVerifier:
-    """Appelle face-id `/verify` (réseau `app`, authentifié par token interne). Timeout court
-    pour ne pas monopoliser le threadpool partagé avec `/login` (la boucle ZTR)."""
-
-    def __init__(self, base_url: str, token: str = "", timeout: float = 2.0) -> None:
-        self._url = base_url.rstrip("/") + "/api/v1/verify"
-        self._token = token
-        self._timeout = timeout
-
-    def verify(self, username: str, image_b64: str) -> bool:
-        headers = {"X-Internal-Token": self._token} if self._token else {}
-        try:
-            resp = httpx.post(
-                self._url,
-                json={"username": username, "image_b64": image_b64},
-                headers=headers,
-                timeout=self._timeout,
-            )
-        except httpx.HTTPError as exc:
-            raise FaceUnavailable(str(exc)) from exc
-        if resp.status_code == 422:
-            return False  # image illisible / aucun visage => non-correspondance
-        if resp.status_code != 200:
-            raise FaceUnavailable(f"face-id HTTP {resp.status_code}")
-        return bool(resp.json().get("match"))
 
 
 class LedNotifier(Protocol):
@@ -125,6 +103,7 @@ def add_backoffice_auth(
     led: LedNotifier,
     challenges: ChallengeStore,
     lockouts: LockoutStore,
+    cooldowns: CooldownStore,
     limiter: Limiter,
 ) -> None:
     """Ajoute les 3 routes de l'authentification à étapes du back-office."""
@@ -161,9 +140,21 @@ def add_backoffice_auth(
         status = lockouts.status(body.username, ip)
         if status.locked:
             raise _locked_response(body.username, ip, status.retry_after)
+        wait, reason = cooldowns.remaining(ip)
+        if wait > 0:
+            log_event(
+                log, logging.WARNING, "auth_cooldown",
+                f"Cooldown active ({reason}), retry in {wait}s", http_status=429, user=body.username,
+            )
+            raise ApiError(429, "cooldown", "Please wait", {"Retry-After": str(wait)})
         # Mode dégradé documenté (répétitions de démo) : sans facteur visage, on va direct au mdp.
-        step = ChallengeStep.FACE if settings.backoffice_face_required else ChallengeStep.PASSWORD
-        challenge = challenges.create(body.username, step=step)
+        if settings.backoffice_face_required:
+            step = ChallengeStep.FACE
+            # Ordre des poses tiré côté serveur (CSPRNG) : une photo/vidéo préparée ne suffit pas.
+            poses = tuple(secrets.SystemRandom().sample(POSES, 3))
+        else:
+            step, poses = ChallengeStep.PASSWORD, ()
+        challenge = challenges.create(body.username, step=step, poses=poses)
         led.publish(LED_IDLE, challenge.challenge_id)
         # Toujours 200 hors blocage : ne révèle pas l'existence du compte (anti-énumération).
         log_event(
@@ -175,6 +166,7 @@ def add_backoffice_auth(
             step=challenge.step.value,
             expires_in=settings.backoffice_challenge_ttl,
             camera=settings.backoffice_face_required,
+            poses=list(challenge.poses),
         )
 
     def _take_for_step(challenge_id: str, expected: ChallengeStep) -> Challenge:
@@ -197,11 +189,16 @@ def add_backoffice_auth(
         ip = client_ip_var.get()
         challenge = _take_for_step(body.challenge_id, ChallengeStep.FACE)
 
-        try:
-            recognized = face_verifier.verify(challenge.username, body.image_b64)
-        except FaceUnavailable as exc:
-            # Back-office inaccessible par conception si le facteur visage est indisponible.
-            raise ApiError(503, "face_service_unavailable", "Face service unavailable") from exc
+        frames = [{"pose": f.pose, "image_b64": f.image_b64} for f in body.frames]
+        if [f["pose"] for f in frames] != list(challenge.poses):
+            # Poses dans le mauvais ordre : refus sans appeler face-id (anti-rejeu de captures).
+            recognized = False
+        else:
+            try:
+                recognized = face_verifier.verify(challenge.username, frames)
+            except FaceUnavailable as exc:
+                # Back-office inaccessible par conception si le facteur visage est indisponible.
+                raise ApiError(503, "face_service_unavailable", "Face service unavailable") from exc
 
         if recognized:
             challenges.reinsert_for_password(challenge)
@@ -212,7 +209,9 @@ def add_backoffice_auth(
                 f"Face recognized for {challenge.username}", http_status=200, user=challenge.username,
             )
             left = lockouts.status(challenge.username, ip).attempts_left
-            return FaceResponse(recognized=True, step=ChallengeStep.PASSWORD.value, attempts_left=left)
+            return FaceResponse(
+                recognized=True, step=ChallengeStep.PASSWORD.value, attempts_left=left, cooldown=0
+            )
 
         # Non reconnu : challenge déjà retiré (consommé), échec compté, LED rouge fixe.
         auth_face_steps_total.labels(result="rejected").inc()
@@ -222,8 +221,14 @@ def add_backoffice_auth(
             f"Face not recognized for {challenge.username}", http_status=200, user=challenge.username,
         )
         left = _record_and_maybe_lock(challenge.username, ip)
+        cooldowns.start(ip, settings.backoffice_reject_cooldown, "not_recognized")
         # step "identify" : on repart à la saisie de l'identifiant (contrat §5.2).
-        return FaceResponse(recognized=False, step="identify", attempts_left=left)
+        return FaceResponse(
+            recognized=False,
+            step="identify",
+            attempts_left=left,
+            cooldown=settings.backoffice_reject_cooldown,
+        )
 
     @app.post("/api/v1/auth/password", response_model=SteppedTokenOut)
     @limiter.limit(rate)
@@ -242,7 +247,11 @@ def add_backoffice_auth(
                 f"Invalid password for {challenge.username}", http_status=401, user=challenge.username,
             )
             _record_and_maybe_lock(challenge.username, ip)
-            raise ApiError(401, "invalid_credentials", "Invalid credentials")
+            cooldowns.start(ip, settings.backoffice_fail_cooldown, "auth_fail")
+            raise ApiError(
+                401, "invalid_credentials", "Invalid credentials",
+                {"Retry-After": str(settings.backoffice_fail_cooldown)},
+            )
 
         if user.role not in PRIVILEGED_ROLES:
             # Identifiants valides mais rôle non autorisé pour le back-office (pas un brute-force

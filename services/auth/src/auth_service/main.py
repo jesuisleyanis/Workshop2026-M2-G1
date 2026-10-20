@@ -24,13 +24,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from auth_service.backoffice import (
     FaceVerifier,
-    HttpFaceVerifier,
     LedNotifier,
     LogLedNotifier,
     add_backoffice_auth,
 )
-from auth_service.challenge import ChallengeStore, LockoutStore
+from auth_service.challenge import ChallengeStore, CooldownStore, LockoutStore
 from auth_service.config import SERVICE_NAME, Settings
+from auth_service.face_client import FaceIdClient
 from auth_service.observability import (
     ApiError,
     RequestContextMiddleware,
@@ -67,6 +67,7 @@ def create_app(
     settings: Settings | None = None,
     engine: Engine | None = None,
     *,
+    face_client: FaceIdClient | None = None,
     face_verifier: FaceVerifier | None = None,
     led_notifier: LedNotifier | None = None,
     clock=None,
@@ -260,21 +261,26 @@ def create_app(
         failure_window_seconds=settings.backoffice_failure_window,
         **store_kwargs,
     )
+    cooldowns = CooldownStore(**store_kwargs)
+    # Un seul client face-id : vérification (login) ET administration des gabarits (T5).
+    face_client = face_client or FaceIdClient(
+        settings.face_id_url, settings.face_internal_token, settings.face_timeout_seconds
+    )
     add_backoffice_auth(
         app,
         settings=settings,
         session_factory=session_factory,
         log=log,
-        face_verifier=face_verifier
-        or HttpFaceVerifier(
-            settings.face_id_url, settings.face_internal_token, settings.face_timeout_seconds
-        ),
+        face_verifier=face_verifier or face_client,
         led=led_notifier or LogLedNotifier(log),
         challenges=challenges,
         lockouts=lockouts,
+        cooldowns=cooldowns,
         limiter=limiter,
     )
     app.state.challenges = challenges
     app.state.lockouts = lockouts
+    app.state.cooldowns = cooldowns
+    app.state.face_client = face_client
 
     return app
