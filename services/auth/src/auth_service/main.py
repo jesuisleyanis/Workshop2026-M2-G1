@@ -81,6 +81,13 @@ def create_app(
         # Mode dégradé : le mot de passe seul suffit pour un compte privilégié (répétitions de
         # démo uniquement). À ne jamais positionner dans le compose de démo notée.
         log.warning("BACKOFFICE_FACE_REQUIRED=false : facteur visage DÉSACTIVÉ (mode dégradé)")
+    elif not settings.face_internal_token:
+        # face-id exige TOUJOURS un token : sans FACE_INTERNAL_TOKEN côté auth, l'étape visage
+        # renverra 503 (401 de face-id). Le même secret SOPS doit être posé sur auth ET face-id.
+        log.warning(
+            "FACE_INTERNAL_TOKEN absent côté auth : l'étape visage échouera (503). "
+            "Poser le même secret que face-id, ou BACKOFFICE_FACE_REQUIRED=false en dev."
+        )
 
     rate = DynamicRateLimit(settings.login_rate_limit)
     limiter = Limiter(
@@ -259,7 +266,9 @@ def create_app(
         session_factory=session_factory,
         log=log,
         face_verifier=face_verifier
-        or HttpFaceVerifier(settings.face_id_url, settings.face_internal_token),
+        or HttpFaceVerifier(
+            settings.face_id_url, settings.face_internal_token, settings.face_timeout_seconds
+        ),
         led=led_notifier or LogLedNotifier(log),
         challenges=challenges,
         lockouts=lockouts,

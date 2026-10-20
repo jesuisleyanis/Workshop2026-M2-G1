@@ -41,6 +41,7 @@ class Settings:
     # Back-office à étapes (consigne additionnelle 1)
     face_id_url: str = "http://face-id:8006"
     face_internal_token: str = ""  # token envoyé à face-id /verify (défense en profondeur)
+    face_timeout_seconds: float = 2.0  # borne l'appel face-id (protège le threadpool de /login)
     backoffice_max_attempts: int = 2
     backoffice_lockout_seconds: int = 300
     backoffice_challenge_ttl: int = 60
@@ -76,6 +77,7 @@ class Settings:
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
             face_id_url=os.environ.get("FACE_ID_URL", "http://face-id:8006"),
             face_internal_token=_read_face_token(),
+            face_timeout_seconds=float(os.environ.get("BACKOFFICE_FACE_TIMEOUT", "2.0")),
             backoffice_max_attempts=int(os.environ.get("BACKOFFICE_MAX_ATTEMPTS", "2")),
             backoffice_lockout_seconds=int(os.environ.get("BACKOFFICE_LOCKOUT_SECONDS", "300")),
             backoffice_challenge_ttl=int(os.environ.get("BACKOFFICE_CHALLENGE_TTL", "60")),

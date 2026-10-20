@@ -58,6 +58,7 @@ def settings():
     return Settings(
         jwt_secret=JWT_SECRET,
         internal_token="internal-token-for-tests",
+        face_internal_token="face-internal-token-tests-0123",  # config valide (pas de WARNING)
         login_rate_limit="100/minute",
         backoffice_rate_limit="1000/minute",  # on isole la logique de la limite de débit
         run_migrations=False,
@@ -247,11 +248,80 @@ def test_face_service_unavailable_returns_503(client, face):
 # --------------------------------------------------------------------------- contrats / non-régression
 
 
+def test_failure_window_forgets_old_failures(client, clock):
+    # Fenêtre glissante : un échec isolé et ancien ne compte plus (pas de verrou surprise).
+    cid = _identify(client)
+    assert client.post(
+        "/api/v1/auth/face", json={"challenge_id": cid, "image_b64": BAD}
+    ).json()["attempts_left"] == 1
+    clock.advance(901)  # au-delà de la fenêtre glissante par défaut (900 s)
+    cid = _identify(client)
+    r = client.post("/api/v1/auth/face", json={"challenge_id": cid, "image_b64": BAD})
+    assert r.status_code == 200
+    assert r.json()["attempts_left"] == 1  # le compteur est reparti de zéro
+
+
+def test_degraded_mode_skips_face_step(settings, engine, face, led, clock):
+    # BACKOFFICE_FACE_REQUIRED=false : identify va directement au mot de passe (répétitions de démo).
+    import dataclasses
+
+    app = create_app(
+        dataclasses.replace(settings, backoffice_face_required=False),
+        engine,
+        face_verifier=face,
+        led_notifier=led,
+        clock=clock,
+    )
+    c = TestClient(app)
+    body = c.post("/api/v1/auth/identify", json={"username": "op01"}).json()
+    assert body["step"] == "password" and body["camera"] is False
+    r = c.post("/api/v1/auth/password", json={"challenge_id": body["challenge_id"], "password": PASSWORD})
+    assert r.status_code == 200 and r.json()["role"] == "operator"
+
+
 def test_legacy_login_still_works(client):
     # D4 : /login reste la voie des comptes de service (verify_tx, seed) — inchangé.
     r = client.post("/api/v1/login", json={"username": "op01", "password": PASSWORD})
     assert r.status_code == 200
     assert r.json()["token_type"] == "bearer"
+
+
+def test_http_face_verifier_sends_internal_token_and_timeout(monkeypatch):
+    # M-a : auth authentifie son appel à face-id et borne le délai.
+    import httpx
+    from auth_service.backoffice import HttpFaceVerifier
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"match": True}
+
+    def fake_post(url, json, headers, timeout):
+        captured.update(url=url, headers=headers, timeout=timeout)
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    verifier = HttpFaceVerifier("http://face-id:8006", "tok-0123456789abcdef", timeout=1.5)
+    assert verifier.verify("op01", "img") is True
+    assert captured["headers"]["X-Internal-Token"] == "tok-0123456789abcdef"
+    assert captured["timeout"] == 1.5
+
+
+def test_http_face_verifier_raises_on_auth_failure(monkeypatch):
+    # Un 401 de face-id (token absent/incorrect) devient FaceUnavailable -> 503 côté flux.
+    import httpx
+    from auth_service.backoffice import FaceUnavailable, HttpFaceVerifier
+
+    class _Resp:
+        status_code = 401
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    with pytest.raises(FaceUnavailable):
+        HttpFaceVerifier("http://face-id:8006", "", timeout=1.0).verify("op01", "img")
 
 
 def test_all_emitted_events_belong_to_the_contract(settings, engine, face, clock, log_lines):
