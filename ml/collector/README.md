@@ -17,10 +17,10 @@ Service FastAPI (port interne **8004**, réseau `app`) qui construit le vecteur 
 | `req_per_s` | `sum(rate(resilience_http_requests_total[W]))` |
 | `p95_latency_ms` | `1000 * histogram_quantile(0.95, sum by (le)(rate(resilience_http_request_duration_seconds_bucket[W])))` |
 | `ratio_4xx` / `ratio_5xx` | `sum(rate(...{status=~"4.."}[W])) / sum(rate(...[W]))` (idem `5..`) |
-| `auth_failed_per_s` | `sum(rate(resilience_auth_logins_total{result="failed"}[W]))` |
+| `auth_failed_per_s` | `(sum(rate(resilience_auth_logins_total{result="failed"}[W])) or vector(0)) + (sum(rate(resilience_auth_rate_limited_total[W])) or vector(0))` — échecs **et** refus du rate-limit (sinon une force brute retombe à ~0 dès les 429) |
 | `waf_blocked_per_s` | `sum(rate(resilience_waf_blocked_total[W]))` |
-| `cpu_pct_max` | `100 * max(rate(container_cpu_usage_seconds_total{name!=""}[W]))` (cAdvisor) |
-| `mem_pct_max` | `100 * max(container_memory_working_set_bytes / (container_spec_memory_limit_bytes > 0))` |
+| `cpu_pct_max` | `100 * max(rate(container_cpu_usage_seconds_total{P}[W]))` (cAdvisor) ; `P` = `container_label_com_docker_compose_service=~"waf\|front\|payment-api\|auth\|postgres"` : services de la plateforme seulement |
+| `mem_pct_max` | `100 * max(container_memory_working_set_bytes{P} / (container_spec_memory_limit_bytes{P} > 0))` — sans `P`, cAdvisor (92 % de sa limite) tenait la feature à 91-99 % en continu |
 | `db_errors_per_s` | `sum(rate(resilience_db_errors_total[W]))` |
 
 Prérequis : `status` non groupé (`should_group_status_codes=False`, déjà le cas dans `resilience_common.metrics.instrument`).
