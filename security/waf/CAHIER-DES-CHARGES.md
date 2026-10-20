@@ -2,7 +2,7 @@
 
 ## Rôle et exigences couvertes
 
-Pare-feu applicatif en frontal, **seul point exposé** de la plateforme. Couvre :
+Pare-feu applicatif en frontal, **seul point d'entrée HTTP** de la plateforme. Le broker MQTT du profil `iot` est publié séparément sur le PA. Couvre :
 - **R11** — filtrage applicatif par WAF (Nginx + ModSecurity + OWASP CRS).
 - **R19** — publication réseau maîtrisée : seuls 80/443 sont exposés sur le hotspot.
 

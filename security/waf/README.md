@@ -1,6 +1,6 @@
 # WAF — Nginx + ModSecurity + OWASP CRS
 
-> Couvre **R11** (filtrage applicatif, seul point exposé) et **R19** (publication réseau maîtrisée).
+> Couvre **R11** (filtrage applicatif, seul point d'entrée HTTP) et **R19** (publication réseau maîtrisée).
 
 ## Rôle
 
@@ -79,5 +79,5 @@ docker compose -f infra/compose/docker-compose.yml exec waf-exporter \
 python -m pytest security/waf/tests/ -q
 ```
 
-Le WAF est déclaré dans `infra/compose/docker-compose.yml` sur le réseau `edge` (seul service publiant des ports) + `app`.
+Le WAF est déclaré dans `infra/compose/docker-compose.yml` sur `edge` + `app` ; c'est le seul service publiant des ports HTTP. Le profil `iot` publie en plus MQTT sur l'interface du PA.
 La validation complète (build des images, blocage CRS effectif → `resilience_waf_blocked_total` qui monte dans Prometheus, parcours login → virement via le WAF) se fait stack levée (`make up`).

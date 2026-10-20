@@ -74,20 +74,22 @@ else
   pass "aucune clé age dans le dépôt"
 fi
 
-# 5. Exposition réseau : SEUL le WAF publie des ports (R11/R19, point dur jury).
-echo "[5] Exposition réseau (seul le WAF publie des ports)"
+# 5. Exposition réseau : WAF HTTP, et Mosquitto sur l'IP du PA si le profil iot est actif.
+echo "[5] Exposition réseau (WAF HTTP + MQTT sur le PA)"
 COMPOSE="infra/compose/docker-compose.yml"
 if [[ -f "${COMPOSE}" ]]; then
   # Repère les services (indent 2) du bloc `services:` qui déclarent une clé `ports:` (indent 4).
   offenders="$(awk '
     /^[A-Za-z0-9_-]+:/        { in_services = ($0 ~ /^services:/) ; next }
     in_services && /^  [A-Za-z0-9_-]+:/ { svc = $1; sub(/:$/, "", svc) }
-    in_services && /^    ports:/        { if (svc != "waf") print svc }
+    in_services && /^    ports:/        { if (svc != "waf" && svc != "mosquitto") print svc }
   ' "${COMPOSE}" | sort -u)"
   if [[ -n "${offenders}" ]]; then
-    fail "des services autres que le WAF publient des ports : ${offenders}"
+    fail "des services autres que WAF/Mosquitto publient des ports : ${offenders}"
+  elif ! grep -Fq 'ports: ["192.168.137.1:1883:1883"]' "${COMPOSE}"; then
+    fail "Mosquitto doit être lié uniquement à 192.168.137.1:1883"
   else
-    pass "seul le WAF publie des ports (DB/API/obs internes)"
+    pass "WAF HTTP et Mosquitto lié au PA ; DB/API/obs internes"
   fi
 else
   fail "docker-compose.yml introuvable"
