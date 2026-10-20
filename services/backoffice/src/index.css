@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+/* Back-office durci — thème sobre, accents ok/ko/warn, couleurs LED. */
+@theme {
+  --color-page: #e8eaed;
+  --color-frame: #f4f5f7;
+  --color-line: #e1e3e7;
+  --color-ink: #121316;
+  --color-ink-2: #4a4e55;
+  --color-ink-3: #6b6f76;
+  --color-night: #15161a;
+  --color-night-2: #23252b;
+  --color-ok-bg: #e4f3ea;
+  --color-ok-fg: #1b6e47;
+  --color-ko-bg: #fbe8e4;
+  --color-ko-fg: #9c2f1d;
+  --color-warn-bg: #fbf1dc;
+  --color-warn-fg: #7a4d00;
+  --color-led-green: #22c55e;
+  --color-led-red: #ef4444;
+}
+
+@layer components {
+  .field {
+    @apply h-12 w-full rounded-xl border-[1.5px] border-line bg-white px-3.5 text-[15px] outline-none;
+  }
+  .field:focus {
+    @apply border-night;
+  }
+  .btn-primary {
+    @apply inline-flex h-12 w-full cursor-pointer items-center justify-center rounded-xl bg-night font-semibold text-white disabled:opacity-50;
+  }
+}
+
+body {
+  background: var(--color-page);
+  color: var(--color-ink);
+}
