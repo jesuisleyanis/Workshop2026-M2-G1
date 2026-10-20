@@ -13,3 +13,4 @@ slowapi==0.1.10
 limits==5.8.0
 prometheus-client==0.26.0
 prometheus-fastapi-instrumentator==8.1.0
+paho-mqtt==2.1.0

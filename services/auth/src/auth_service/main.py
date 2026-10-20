@@ -31,6 +31,7 @@ from auth_service.backoffice import (
 from auth_service.challenge import ChallengeStore, CooldownStore, LockoutStore
 from auth_service.config import SERVICE_NAME, Settings
 from auth_service.face_client import FaceIdClient
+from auth_service.led_mqtt import MqttLedNotifier
 from auth_service.observability import (
     ApiError,
     RequestContextMiddleware,
@@ -95,11 +96,34 @@ def create_app(
         key_func=lambda request: client_ip_var.get() or "unknown", storage_uri="memory://"
     )
 
+    if led_notifier is None:
+        # MQTT_HOST vide (dev/tests) : la LED est simplement journalisée.
+        led_notifier = (
+            MqttLedNotifier(
+                settings.mqtt_host,
+                settings.mqtt_port,
+                settings.mqtt_username,
+                settings.mqtt_password,
+                log,
+            )
+            if settings.mqtt_host
+            else LogLedNotifier(log)
+        )
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if settings.run_migrations:
             _migrate_with_retry(engine, log)
-        yield
+        # connect_async + loop_start : non bloquant, la reconnexion au broker est automatique.
+        start = getattr(led_notifier, "start", None)
+        if callable(start):
+            start()
+        try:
+            yield
+        finally:
+            stop = getattr(led_notifier, "stop", None)
+            if callable(stop):
+                stop()
 
     docs = "/docs" if settings.enable_docs else None
     app = FastAPI(
@@ -272,7 +296,7 @@ def create_app(
         session_factory=session_factory,
         log=log,
         face_verifier=face_verifier or face_client,
-        led=led_notifier or LogLedNotifier(log),
+        led=led_notifier,
         challenges=challenges,
         lockouts=lockouts,
         cooldowns=cooldowns,
@@ -282,5 +306,6 @@ def create_app(
     app.state.lockouts = lockouts
     app.state.cooldowns = cooldowns
     app.state.face_client = face_client
+    app.state.led = led_notifier
 
     return app

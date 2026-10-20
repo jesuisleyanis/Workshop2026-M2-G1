@@ -50,6 +50,11 @@ class Settings:
     backoffice_face_required: bool = True
     backoffice_reject_cooldown: int = 30  # refroidissement après visage refusé (s)
     backoffice_fail_cooldown: int = 3  # refroidissement après mot de passe refusé (s)
+    # LED MQTT (contrat §5.3) : MQTT_HOST vide => LogLedNotifier (aucun broker requis)
+    mqtt_host: str = ""
+    mqtt_port: int = 1883
+    mqtt_username: str = "auth"
+    mqtt_password: str = ""
 
     def __post_init__(self) -> None:
         if len(self.jwt_secret) < MIN_SECRET_LENGTH:
@@ -88,4 +93,8 @@ class Settings:
             backoffice_face_required=_bool("BACKOFFICE_FACE_REQUIRED", True),
             backoffice_reject_cooldown=int(os.environ.get("BACKOFFICE_REJECT_COOLDOWN", "30")),
             backoffice_fail_cooldown=int(os.environ.get("BACKOFFICE_FAIL_COOLDOWN", "3")),
+            mqtt_host=os.environ.get("MQTT_HOST", ""),
+            mqtt_port=int(os.environ.get("MQTT_PORT", "1883")),
+            mqtt_username=os.environ.get("MQTT_USERNAME", "auth"),
+            mqtt_password=read_secret("MQTT_AUTH_PASSWORD", required=False) or "",
         )

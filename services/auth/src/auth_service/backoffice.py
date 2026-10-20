@@ -71,9 +71,12 @@ class FaceVerifier(Protocol):
 class LedNotifier(Protocol):
     def publish(self, state: str, challenge_id: str | None) -> None: ...
 
+    # Optionnels (absents de LogLedNotifier) : `start()`/`stop()` pilotés par le lifespan,
+    # `online` (bool | None) lu via getattr(led, "online", None).
+
 
 class LogLedNotifier:
-    """Notifieur LED par défaut : journalise l'état (le backend MQTT réel arrive au lot L5-2).
+    """Notifieur LED par défaut : journalise l'état (le backend MQTT réel est `MqttLedNotifier`, utilisé dès que MQTT_HOST est défini).
 
     **Fail-open** : une publication qui échoue n'interrompt jamais l'authentification
     (la LED est un témoin, pas un facteur).
@@ -132,6 +135,12 @@ def add_backoffice_auth(
                 f"Back-office access locked for {username}", user=username,
             )
         return outcome.attempts_left
+
+    @app.get("/api/v1/auth/device")
+    @limiter.limit(rate)
+    def device(request: Request):
+        """État du module LED (dernier statut MQTT reçu ; null si inconnu ou LED simulée)."""
+        return {"led_online": getattr(led, "online", None)}
 
     @app.post("/api/v1/auth/identify", response_model=IdentifyResponse)
     @limiter.limit(rate)
