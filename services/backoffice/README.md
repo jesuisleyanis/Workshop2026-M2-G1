@@ -9,6 +9,7 @@ l'écran d'habilitations. Voir le [cahier des charges](CAHIER-DES-CHARGES.md) et
 
 ```bash
 npm install
+npm run prepare:vision   # modèle face_landmarker (sha256 vérifié) + runtime wasm MediaPipe dans public/
 npm run dev        # http://localhost:5174 (proxy /api -> auth, DEV_AUTH_TARGET)
 npm test           # Vitest (getUserMedia mocké — aucun matériel requis)
 npm run build      # tsc --noEmit + build de production (nginx statique via Docker)
@@ -28,6 +29,18 @@ identifiant ──/auth/identify──► caméra ON (getUserMedia, caméra du P
 - L'ordre des étapes est **imposé par le serveur** (`auth`) ; l'UI en est le reflet, y compris le
   blocage 5 min (`429`) et le miroir LED (contrat §5.3).
 - Aucune image n'est conservée côté client ; la trame JPEG base64 part vers `auth`.
+
+## Scanner de visage (`src/components/scanner/FaceScanner.tsx`)
+
+- Suivi de pose **dans le navigateur** (MediaPipe Face Landmarker, chargé à la demande) : chaque
+  pose demandée par le serveur (`face`, `gauche`, `droite`) est capturée automatiquement après
+  1 s de maintien, un seul visage dans le champ. Repli **manuel** (bouton + 3-2-1) si le
+  détecteur ne charge pas.
+- Rotation calculée sur l'image **non miroir** (même formule que `face-id`) ; seul l'aperçu est
+  affiché en miroir, d'où la flèche « gauche » vers la gauche de l'écran.
+- Assets servis en same-origin (`/models`, `/mediapipe`, ignorés par git, préparés par
+  `npm run prepare:vision`, aussi lancé par le Dockerfile) ; CSP `script-src 'self' 'wasm-unsafe-eval'`.
+- Captures JPEG ≤ 640 px envoyées telles quelles ; rien n'est conservé côté client.
 
 ## État
 

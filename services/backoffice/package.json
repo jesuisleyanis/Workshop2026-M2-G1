@@ -6,6 +6,7 @@
   "description": "Back-office durci RESILIENCE-ALPHA (login à étapes visage + habilitations)",
   "scripts": {
     "dev": "vite",
+    "prepare:vision": "node scripts/fetch-face-model.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 5174",
     "lint": "eslint .",
@@ -16,6 +17,7 @@
   "dependencies": {
     "@fontsource-variable/instrument-sans": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
+    "@mediapipe/tasks-vision": "^0.10.21",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.4"
