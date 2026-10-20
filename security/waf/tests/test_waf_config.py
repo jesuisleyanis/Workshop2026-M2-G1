@@ -40,7 +40,7 @@ def test_api_upstreams_target_service_ports():
 def test_only_public_routes_are_proxied():
     locations = re.findall(r"location\s+(?:=\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
-                              "/api/v1/login", "/api/v1/register"}
+                              "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
 
@@ -98,7 +98,8 @@ def test_compose_publishes_80_443_to_unprivileged_ports_with_valid_healthcheck()
     assert waf["build"] == {"context": "../../security/waf"}
     test = waf["healthcheck"]["test"]
     assert test[0] == "CMD-SHELL" and "8443/healthz" in test[1], "healthcheck exec-form malformé (ticket #10)"
-    assert all("ports" not in svc for name, svc in services.items() if name != "waf"), "seul le WAF publie des ports"
+    assert all("ports" not in svc for name, svc in services.items() if name not in {"waf", "mosquitto"}), "seuls WAF et MQTT publient des ports"
+    assert services["mosquitto"]["ports"] == ["192.168.137.1:1883:1883"]
 
 
 # --------------------------------------------------------------------------- #12 waf-exporter

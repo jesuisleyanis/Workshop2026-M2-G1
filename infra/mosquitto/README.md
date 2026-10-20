@@ -1,8 +1,23 @@
 # mosquitto — broker MQTT du pilotage LED (consigne additionnelle 1)
 
 Broker durci qui transporte les états d'authentification du PC Hôte vers l'objet connecté ESP8266
-(ADR [0006](../../docs/adr/0006-led-mqtt-etats-semantiques.md), contrat §5.3). **Statut : config
-posée ; service Compose à câbler (lot L5/L7).**
+(ADR [0006](../../docs/adr/0006-led-mqtt-etats-semantiques.md), contrat §5.3).
+Le service `mosquitto` est dans `infra/compose/docker-compose.yml`, profil `iot`.
+
+## Démarrer
+
+Ajouter `MQTT_AUTH_PASSWORD` et `MQTT_LED_PASSWORD` au fichier SOPS chiffré à partir du
+[modèle](../../security/sops/secrets.example.env), puis démarrer le PA Windows
+`RESILIENCE-G1` (`192.168.137.1`) et lancer depuis la racine du dépôt :
+
+```bash
+make up-iot
+docker compose -f infra/compose/docker-compose.yml --profile iot ps mosquitto
+```
+
+Le profil `iot` est séparé de `make up` : la publication du port exige que l'adresse
+`192.168.137.1` existe déjà sur l'hôte. Le compte `led` et son mot de passe doivent
+être reportés dans `iot/esp8266-led/include/secrets.h` (fichier non versionné).
 
 ## Durcissement (points sondés)
 
@@ -12,30 +27,20 @@ posée ; service Compose à câbler (lot L5/L7).**
 - **Bind hotspot uniquement** : au niveau Docker, publier le port sur l'IP du PA seulement —
   `ports: ["192.168.137.1:1883:1883"]` (jamais `0.0.0.0`). C'est le seul ingress MQTT, comme le
   WAF est le seul ingress HTTP.
-- Conteneur durci (image épinglée, non-root, `cap_drop: ALL`, `read_only` + volumes config en
-  lecture seule, healthcheck) — parité avec le reste de la stack (`security/hardening`).
-- Secrets : le `password_file` est généré à partir de creds SOPS (`MQTT_USERNAME`/`MQTT_PASSWORD`),
-  jamais commité. TLS (8883) optionnel documenté dans `mosquitto.conf`.
+- Conteneur durci (image épinglée, UID/GID 1883, `cap_drop: ALL`, `read_only`,
+  config en lecture seule, healthcheck du port) — parité avec le reste de la stack.
+- Secrets : `entrypoint.sh` produit `passwd` dans le tmpfs `/run/mosquitto` depuis les
+  deux mots de passe SOPS. L'ACL y est copiée avec les permissions de l'utilisateur
+  Mosquitto. Aucun fichier déchiffré n'est créé dans le dépôt.
+- TLS (8883) reste optionnel en laboratoire ; le trafic MQTT circule sur le PA du groupe.
 
-## Générer le fichier de mots de passe
+## Vérifier les droits
 
 ```bash
-# En recette (image mosquitto), à partir des creds SOPS :
-mosquitto_passwd -b -c passwd auth "$MQTT_AUTH_PASSWORD"
-mosquitto_passwd -b     passwd led  "$MQTT_LED_PASSWORD"
+# Depuis le PC Hôte, avec les secrets chargés dans l'environnement :
+mosquitto_pub -h 192.168.137.1 -u auth -P "$MQTT_AUTH_PASSWORD" \
+  -t resilience/led/cmd -m '{"state":"recognized"}'
 ```
 
-## Esquisse de service Compose (lot L7)
-
-```yaml
-mosquitto:
-  image: eclipse-mosquitto:2.0.18   # épinglée (R5)
-  networks: [app]                   # joignable par auth ; exposition hotspot via ports
-  ports: ["192.168.137.1:1883:1883"]
-  read_only: true
-  cap_drop: ["ALL"]
-  volumes:
-    - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-    - ./infra/mosquitto/aclfile:/mosquitto/config/aclfile:ro
-    - mosquitto-passwd:/mosquitto/config/passwd:ro   # généré depuis SOPS
-```
+`auth` peut publier `cmd` ; `led` peut le lire et publier `status`. Les commandes
+directes HTTP de l'ESP8266 restent indépendantes de ce broker.

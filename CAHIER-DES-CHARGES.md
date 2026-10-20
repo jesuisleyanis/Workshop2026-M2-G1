@@ -31,7 +31,7 @@ Tout le reste sert ce critère. L'**Axe 1 du jury (5 pts)** et la **sanction ND/
 | **R8** | Détection d'anomalies par **ML** (pas de conditions codées en dur), raccordée à la remédiation | `ml/collector`, `ml/training`, `ml/detector` | ✔ | — |
 | **R9** | Assistant local **RAG** (Ollama + LangChain, modèle ≤ 8B), séparé de l'automate | `assistant/` | ✔ | — |
 | **R10** | Au moins un scénario d'attaque **depuis un PC distinct**, effet observable | `attacks/` + PC Attaquant | ✔ | — |
-| **R11** | WAF (filtrage applicatif), seul point exposé | `security/waf/` (Nginx + ModSecurity + CRS) | ✔ | — |
+| **R11** | WAF (filtrage applicatif), seul point d'entrée HTTP | `security/waf/` (Nginx + ModSecurity + CRS) | ✔ | — |
 | **R12** | SIEM **ou** fonction SOC intégrée à la supervision | `infra/loki` + règles Grafana/Loki ruler | ✔ | — |
 | **R13** | Gestion des secrets : Vault **ou** SOPS | `security/sops/` (SOPS + age) | ✔ | — |
 | **R14** | Durcissement des composants et des accès, privilèges maîtrisés | `security/hardening/` + Compose | ✔ | — |
@@ -39,7 +39,7 @@ Tout le reste sert ce critère. L'**Axe 1 du jury (5 pts)** et la **sanction ND/
 | **R16** | Analyse de risques **EBIOS RM** reliée à l'architecture | `docs/ebios-rm.md` | ✔ | **J1** |
 | **R17** | Objectifs de continuité + **PCA/PRA** (RTO/RPO, scénarios, risques résiduels) | `docs/pca-pra.md` | ✔ | — |
 | **R18** | Analyse **NIS2 / DORA** reliée au démonstrateur | `docs/nis2-dora.md` | ✔ | — |
-| **R19** | Réseau : WAF seul exposé, DB/secrets/management internes, hôte `192.168.137.1` sur `RESILIENCE-G1` | `infra/compose` (3 réseaux) + `docs/network.md` | ✔ | — |
+| **R19** | Réseau : WAF seul exposé en HTTP ; broker MQTT publié sur le PA si `iot` actif ; DB/secrets/management internes | `infra/compose` + `docs/network.md` | ✔ | — |
 | **R20** | Démo visible **avant / pendant / après** l'incident | `dashboard/` + `scripts/demo.sh` | ✔ | — |
 
 ### Livrables impératifs (§7 du sujet — nommage strict)
@@ -89,8 +89,8 @@ Et le durcissement du **moteur de remédiation** (point explicitement sondé par
 │  réseau data   : postgres, pg-exporter        (internal: true — jamais exposé)    │
 │  réseau obs    : prometheus, loki, promtail, grafana, alertmanager, cadvisor      │
 │                                                                                    │
-│  Seul le WAF est joignable depuis le hotspot. DB, secrets, API remediation,        │
-│  interfaces de gestion : internes uniquement (jamais 0.0.0.0).                     │
+│  WAF HTTP et, en profil iot, Mosquitto MQTT sont joignables du hotspot.             │
+│  DB, secrets, API remediation et interfaces de gestion restent internes.            │
 └────────────────────────────────────────────────────────────────────────────────────┘
         ▲
         │ attaque (HTTPS vers le WAF uniquement)

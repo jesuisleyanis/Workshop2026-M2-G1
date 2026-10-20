@@ -86,6 +86,7 @@ cd Workshop2026-M2-G1
 # 1. Secrets : chiffrer security/sops/secrets.example.env -> secrets.enc.env (voir security/sops/README.md)
 # 2. Lever la stack (profil démo minimal) puis peupler les données fictives
 make up          # ou `make up-full` pour l'observabilité complète
+make up-iot      # sur le PC Hôte avec le PA actif : ajoute Mosquitto (profil iot)
 make seed        # comptes fictifs demo01..demo05 financés
 
 # Détails des cibles make : `make help` ; procédures scripts : scripts/README.md
@@ -93,7 +94,7 @@ make seed        # comptes fictifs demo01..demo05 financés
 
 ## Vérifier le système
 
-- **WAF (seul point exposé)** : `https://localhost` (80/443) — front « Banque Résilience » ; les API internes ne sont pas publiées.
+- **WAF (seul point HTTP exposé)** : `https://localhost` (80/443) — front « Banque Résilience » ; les API internes ne sont pas publiées. Le profil `iot` expose uniquement MQTT sur `192.168.137.1:1883`.
 - **Comptes de test fictifs** : `demo01` … `demo05`, mot de passe commun `SEED_PASSWORD` (SOPS, cf. `security/sops/secrets.example.env`).
 - **Transaction de contrôle** : `make verify` (code retour `0` = transaction fictive rejouée OK). Démo complète : `make demo` (5 temps). Détails : [`scripts/README.md`](scripts/README.md).
 

@@ -77,15 +77,15 @@ L10 Recette & e2e           [..........]   0%   flux complet + ZTR inchangé + c
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
 | L4-1 | Projet PlatformIO (CLion) : `platformio.ini` (env carte **+ env `native`**), CDC + README + câblage LED | `iot/esp8266-led` | L0-2 | M | ✅ | `platformio.ini` (nodemcuv2 + native) + CDC + README (câblage D1/D2) |
-| L4-2 | **Machine à états LED** §5.2 non bloquante (`millis()`), découplée du transport | `iot/esp8266-led` | L4-1 | ✅ | `lib/led/led_controller.h` (pure) + `test/` Unity : 5 états, timings 30 s / ×10, défaut off, parseur. **`pio test -e native` à jouer sur la machine CLion** (pas de g++ sur le poste de cadrage) |
-| L4-3 | WiFi (PA `RESILIENCE-G<n>`) + client MQTT (subscribe `cmd`, publish `status`/LWT), `secrets.h` depuis template **gitignored** | `iot/esp8266-led` | L4-2, L5-1 | 🟨 | `src/main.cpp` (ESP8266WiFi + PubSubClient + ArduinoJson, LWT) + `secrets.h.example` + `.gitignore` posés ; **recette live** (connexion + réception) à faire |
-| L4-4 | Robustesse : reconnexion WiFi/MQTT, LED off au boot, heartbeat | `iot/esp8266-led` | L4-3 | 🟨 | reconnexion + LED off au boot + heartbeat codés ; **recette coupure/reprise** à faire |
+| L4-2 | **Machine à états LED** §5.2 non bloquante (`millis()`), découplée du transport | `iot/esp8266-led` | L4-1 | ✅ | `lib/led/led_controller.{h,cpp}` (logique pure) + `test/` Unity : 5 états, timings 30 s / ×10, défaut off, parseur ; **6 tests native verts** |
+| L4-3 | WiFi (PA `RESILIENCE-G<n>`) + client MQTT (subscribe `cmd`, publish `status`/LWT), `secrets.h` depuis template **gitignored** | `iot/esp8266-led` | L4-2, L5-1 | 🟨 | modules Wi-Fi/MQTT séparés, 3 routes HTTP directes ; build ESP8266 + 6 tests native verts ; **recette live** (connexion + réception) à faire |
+| L4-4 | Robustesse : reconnexion WiFi/MQTT, LED off au boot, heartbeat | `iot/esp8266-led` | L4-3 | 🟨 | Wi-Fi sans attente active, tentatives Wi-Fi/MQTT espacées, LED off au boot + heartbeat codés ; **recette coupure/reprise** à faire |
 
 ## L5 — Transport MQTT
 
 | ID | Tâche | Composant | Dépend | Effort | Statut | Preuve attendue |
 |---|---|---|---|---|---|---|
-| L5-1 | Broker **Mosquitto** durci : `allow_anonymous false`, user/mdp SOPS, **ACL par topic**, bind interface hotspot, image épinglée | `infra/compose`, `security/*` | L0-1 | 🟨 | `infra/mosquitto/{mosquitto.conf,aclfile,README}` posés (ACL cmd/status, no anonyme, bind hotspot documenté) ; **service Compose + génération passwd SOPS + test contrat** à câbler |
+| L5-1 | Broker **Mosquitto** durci : `allow_anonymous false`, user/mdp SOPS, **ACL par topic**, bind interface hotspot, image épinglée | `infra/compose`, `security/*` | L0-1 | 🟨 | service Compose `iot` + génération passwd en tmpfs + test contrat et smoke auth→led ; **recette sur PA réel** à faire |
 | L5-2 | Client MQTT dans `auth` : publie les états §5.2, **fail-open** (broker down ⇒ auth continue), events `led_*` | `services/auth` | L5-1, L2-3 | M | ⬜ | tests publication (mock) + **cas broker injoignable** + `resilience_led_publish_total` |
 
 ## L6 — Habilitations (rôles + enrôlement)
