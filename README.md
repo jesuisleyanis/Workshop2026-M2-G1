@@ -101,7 +101,8 @@ make seed        # comptes fictifs demo01..demo05 financés
 
 `make test` lance **un process pytest par composant** (`libs`, `services/*`, `ml`, `remediation`,
 `assistant`) puis les répertoires de tests de contrat (`security/waf/tests`, `attacks/tests`,
-`scripts/tests`, `infra/tests`, `tests/e2e`), et enfin Vitest (`services/front`, `dashboard`).
+`scripts/tests`, `infra/tests`, `tests/e2e`), et enfin Vitest (`services/front`, `services/backoffice`,
+`dashboard`). `services/face-id` fait partie des composants Python (backend `stub` : ni dlib ni modèle requis).
 Un seul process pour tout le dépôt n'est pas possible : chaque service déclare ses métriques
 Prometheus à l'import (`DuplicateTimeseries`).
 
@@ -111,14 +112,16 @@ installées, y compris les libs partagées `resilience_common` / `resilience_db`
 ```bash
 uv venv --python 3.12 .venv && source .venv/bin/activate     # ou python3.12 -m venv .venv
 uv pip install -e "libs/python/resilience_common[fastapi,test]" -e "libs/python/resilience_db[test]" \
-  -e services/auth -e services/payment-api \
+  -e services/auth -e services/payment-api -e services/face-id \
   -r remediation/requirements-dev.txt -r assistant/requirements-dev.txt
 ( cd ml && uv pip install -r requirements-dev.txt )   # chemin relatif ../libs dans le fichier
 make test                                             # ou : make test-py PYTHON=.venv/bin/python
 ```
 
-Les tests front exigent leurs dépendances (`npm ci` dans `services/front` et `dashboard`) : sans elles, `make test`
-échoue (c'est voulu : l'agrégat reflète l'état réel). `make test-py` ne lance que la partie Python.
+Les tests front exigent leurs dépendances (`npm ci` dans `services/front`, `services/backoffice` et `dashboard`) :
+sans elles, `make test` échoue (c'est voulu : l'agrégat reflète l'état réel). Le back-office exige **Node ≥ 22.15
+(ou 24)** : la version d'undici embarquée par jsdom ne se charge pas sur Node 20. `make test-py` ne lance que la
+partie Python, `make test-front` que Vitest.
 
 Chaque composant reste testable seul depuis son répertoire (`cd remediation && pytest`), voir son `README.md`.
 
