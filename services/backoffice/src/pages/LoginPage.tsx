@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { AuthError, identify, submitPassword, verifyFace, type TokenResult } from '../api/auth'
+import { AuthError, identify, submitPassword, verifyFace, type Pose, type TokenResult } from '../api/auth'
 import { useCamera, type Camera } from '../hooks/useCamera'
 import { LedIndicator } from '../components/LedIndicator'
 import type { LedState } from '../lib/led'
@@ -16,6 +16,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (t: TokenResul
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [challengeId, setChallengeId] = useState('')
+  const [poses, setPoses] = useState<Pose[]>([])
   const [led, setLed] = useState<LedState>('idle')
   const [notice, setNotice] = useState<Notice>(null)
   const [busy, setBusy] = useState(false)
@@ -26,6 +27,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (t: TokenResul
     setUsername('')
     setPassword('')
     setChallengeId('')
+    setPoses([])
     setNotice(message)
   }, [])
 
@@ -67,6 +69,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (t: TokenResul
     try {
       const res = await identify(username.trim())
       setChallengeId(res.challenge_id)
+      setPoses(res.poses)
       setLed('idle')
       // L'effet [phase] démarre la caméra une fois le <video> monté (évite une course sur le ref).
       setPhase(res.camera && res.step === 'face' ? 'scanning' : 'password')
@@ -87,8 +90,9 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (t: TokenResul
     setBusy(true)
     setNotice(null)
     try {
-      const image = camera.capture()
-      const res = await verifyFace(challengeId, image)
+      // Version transitoire (réécrite en T8 avec le FaceScanner) : une capture par pose demandée.
+      const frames = poses.map((pose) => ({ pose, image_b64: camera.capture() }))
+      const res = await verifyFace(challengeId, frames)
       if (res.recognized) {
         camera.stop()
         setLed('recognized')
@@ -175,7 +179,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (t: TokenResul
               onChange={(ev) => setUsername(ev.target.value)}
             />
           </label>
-          <button type="submit" className="btn-primary" disabled={busy}>
+          <button type="submit" className="btn-primary w-full" disabled={busy}>
             {busy ? 'Vérification…' : 'Continuer'}
           </button>
         </form>
@@ -192,7 +196,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (t: TokenResul
             className="aspect-[4/3] w-full rounded-xl bg-night object-cover"
           />
           <p className="text-sm text-ink-3">Regardez la caméra pour confirmer votre identité.</p>
-          <button type="button" className="btn-primary" onClick={onScan} disabled={busy}>
+          <button type="button" className="btn-primary w-full" onClick={onScan} disabled={busy}>
             {busy ? 'Analyse…' : 'Scanner mon visage'}
           </button>
         </div>
@@ -210,7 +214,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (t: TokenResul
               onChange={(ev) => setPassword(ev.target.value)}
             />
           </label>
-          <button type="submit" className="btn-primary" disabled={busy}>
+          <button type="submit" className="btn-primary w-full" disabled={busy}>
             {busy ? 'Connexion…' : 'Se connecter'}
           </button>
         </form>
