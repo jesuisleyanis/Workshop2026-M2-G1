@@ -100,7 +100,7 @@ Chaque service Python expose `/metrics` via `prometheus-fastapi-instrumentator`.
 | `resilience_waf_blocked_total` | counter | `rule` | waf-exporter | blocages WAF |
 | `resilience_anomaly_score` | gauge | `service` | detector | **score ML temps réel** |
 | `resilience_remediation_actions_total` | counter | `action`, `result` | remediation | — |
-| `resilience_mttd_seconds` | gauge | `incident_id` | remediation | MTTD |
+| `resilience_mttd_seconds` | gauge | `incident_id` | remediation | MTTD (détection → première action) |
 | `resilience_mttr_seconds` | gauge | `incident_id` | remediation | MTTR |
 
 Infrastructure complémentaire scrappée par Prometheus : **cAdvisor** (CPU/RAM par conteneur) et **postgres-exporter** (santé DB).
@@ -139,7 +139,7 @@ Le `detector` émet cet objet JSON vers le moteur de remédiation (HTTP `POST /e
   ],
   "evidence": {
     "prometheus_query": "rate(resilience_http_requests_total[1m])",
-    "loki_query": "{service=\"payment-api\"} |= \"db_error\""
+    "loki_query": "{service=\"payment-api\"} |= \"http_status\""
   }
 }
 ```
@@ -150,7 +150,7 @@ Ces valeurs font le **pont entre la détection et la table de décision**. Class
 
 | `incident_type` | Signal dominant | Action attendue (voir §4) |
 |---|---|---|
-| `service_flood` | `req_per_s`, `ratio_5xx`, `p95_latency` ↑ | rate-limit + redémarrage + blocage IP source |
+| `service_flood` | `req_per_s`, `ratio_5xx`, `p95_latency` ↑ | blocage IP source + redémarrage du service |
 | `auth_abuse` | `auth_failed_per_s` ↑ | blocage IP + durcissement rate-limit |
 | `web_attack` | `waf_blocked_per_s` ↑ | confirmation blocage + blacklist source |
 | `data_corruption` | `db_errors_per_s` ↑ + `verify_tx` KO | restauration dernier dump Postgres |

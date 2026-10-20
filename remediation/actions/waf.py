@@ -15,6 +15,15 @@ from actions.docker_proxy import DockerProxyError
 from actions.runner import PLAYBOOK_WAF_DENY
 
 
+def _canonical_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """IP canonique : replie la notation IPv4-mappée (``::ffff:a.b.c.d``) sur son IPv4,
+    sinon la liste blanche `never_block_ips` serait contournable par cette forme."""
+    ip = ipaddress.ip_address(str(value))
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    return ip
+
+
 def _check_source(params: dict[str, Any]) -> None:
     source = params.get("source", "from_event")
     if source == "from_event":
@@ -31,8 +40,8 @@ def resolve_source_ip(params: dict[str, Any], ctx: ActionContext) -> str:
     raw = (ctx.event.source_ip if ctx.event else None) if source == "from_event" else source
     if not raw:
         raise ActionError("aucune IP source dans l'événement (champ source_ip absent)")
-    ip = ipaddress.ip_address(str(raw))
-    protected = {ipaddress.ip_address(p) for p in ctx.settings.never_block_ips}
+    ip = _canonical_ip(str(raw))
+    protected = {_canonical_ip(p) for p in ctx.settings.never_block_ips}
     if ip in protected or ip.is_loopback or ip.is_unspecified or ip.is_multicast:
         raise ActionError(f"refus de bloquer l'adresse protégée {ip}")
     return str(ip)

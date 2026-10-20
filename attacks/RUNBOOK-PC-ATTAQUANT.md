@@ -74,7 +74,7 @@ Les scénarios et leur contrat Red/Blue sont validés hors-ligne :
 
 ```bash
 python attacks/validate_scenarios.py   # chaque scénario déclare bien le contrat
-python -m pytest attacks/tests/ -q     # 4 tests contrat
+python -m pytest attacks/tests/test_scenarios.py -q   # 4 tests contrat (scénarios)
 ```
 
 ## 7. Ordre conseillé pour la démo notée / le Clip Chrono

@@ -24,7 +24,7 @@ Phase 0  Socle            [#########.]  90%   squelette, contrats, .claude, comp
 Phase 1  Plateforme       [########..]  85%   auth+payment+front livrés et testés
 Phase 2  Infra & observ.  [########..]  85%   configs Prom/Loki/Grafana/Alert/Ansible OK
 Phase 3  Détection ML     [#########.]  90%   collector/training/detector OK (51 tests)
-Phase 4  Remédiation      [#########.]  90%   moteur + plan d'exécution câblés (105 tests) ; validation live à faire
+Phase 4  Remédiation      [#########.]  90%   moteur + plan d'exécution câblés (106 tests) ; validation live à faire
 Phase 5  Dashboard        [#########.]  90%   dashboard branché sur le moteur réel + Prometheus ; validation live à faire
 Phase 6  Cyber & attaques [########..]  85%   WAF, SOPS, durcissement, 4 scénarios OK
 Phase 7  Assistant RAG    [#########.]  90%   RAG livré (98 tests)
@@ -54,7 +54,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 
 | Tâche | Composant | Réf. | Propriétaire | Statut | Preuve |
 |---|---|---|---|---|---|
-| auth : login/register, JWT, bcrypt, rate-limit | `services/auth` | R1 | — | ✅ | 35 tests verts (métriques contrat §2) |
+| auth : login/register, JWT, bcrypt, rate-limit | `services/auth` | R1 | — | ✅ | 36 tests verts (métriques contrat §2) |
 | payment-api : comptes, transactions, health/ready, métriques | `services/payment-api` | R1,R2 | — | ✅ | 54 tests verts (+1 skip Postgres) |
 | front : login, solde, comptes, virement, historique | `services/front` | R1 | — | ✅ | CDC+README+src+tests ; contrat payment-api réaligné (centimes/ids) ; design « Banque Résilience » intégré (44 tests Vitest verts, lint+build OK, vérifié contre auth/payment-api locaux) |
 | seed + verify_tx | `scripts/` | R2 | — | ✅ | **réalignés sur le contrat** (#4/#5) : `verify_tx` résout les ids de comptes via l'API et poste `TransactionIn` (3 entiers) ; seed unique = `resilience_db.seed` (comptes financés, `SEED_PASSWORD` SOPS), `scripts/seed.py` délègue ; 11 tests `scripts/tests` verts ; `scripts/README.md` |
@@ -69,7 +69,7 @@ Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés 
 | Tâche | Composant | Réf. | Propriétaire | Statut | Preuve |
 |---|---|---|---|---|---|
 | detector : score temps réel + émission événement | `ml/detector` | R8 | — | ✅ | detector tests (AnomalyEvent validé) ; **modèle via `make model` + versions sklearn épinglées + garde-fou de dérive (#23)** |
-| Moteur de remédiation + table de décision | `remediation/` | R3,R15 | — | ✅ | 105 tests verts (dont exécution réelle du playbook WAF par ansible-runner) ; boot corrigé (#3) ; **plan d'exécution câblé au conteneur** (#8) : `verify_tx` + playbooks embarqués, exécution in-container (`hosts: localhost`), deny-list WAF en volume partagé + reload SIGHUP via le proxy (5e couple), `pg_restore` en direct sur le réseau `data` (client PG 16, dumps ro), variables alignées, inventaire portable. Reste : validation live `make up` (pas de Docker sur le poste de dev) |
+| Moteur de remédiation + table de décision | `remediation/` | R3,R15 | — | ✅ | 106 tests verts (dont exécution réelle du playbook WAF par ansible-runner) ; boot corrigé (#3) ; **plan d'exécution câblé au conteneur** (#8) : `verify_tx` + playbooks embarqués, exécution in-container (`hosts: localhost`), deny-list WAF en volume partagé + reload SIGHUP via le proxy (5e couple), `pg_restore` en direct sur le réseau `data` (client PG 16, dumps ro), variables alignées, inventaire portable. Reste : validation live `make up` (pas de Docker sur le poste de dev) |
 | docker-socket-proxy + API authentifiée | `remediation/`, `infra/compose` | R15 | — | ✅ | haproxy strict câblé (5 couples, `kill` limité à `signal=HUP`) + Bearer statique (ADR 0002) |
 | Playbooks Ansible (deploy + remédiation) | `infra/ansible` | R6 | — | ✅ | opérateur : deploy, pg_backup, db_corrupt_fake (hôte) ; automate : `playbooks/remediation/{waf_deny_ip,pg_restore}.yml` (in-container) ; `--syntax-check` + run réel en tests ; `infra/ansible/README.md` |
 | Alertmanager → webhook remédiation | `infra/alertmanager`, `infra/prometheus/rules`, `remediation/alertmanager.py` | R7 | — | ✅ | **I6 fermé** (#13) : `POST /events/alertmanager` authentifié + adaptateur (13 tests), règles Prometheus miroir + `rule_files`/`alerting`, token Alertmanager via secret Compose (jamais en clair) ; 11 tests contrat `infra/tests`. Validation live (`make up-full`) à faire |
@@ -146,6 +146,29 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | P3-4 | Commentaires de durcissement trompeurs ou périmés | `:ro` sur un socket Unix ne limite aucun appel d'API (la liste blanche haproxy, si) : commentaires du socket (proxy/promtail/cadvisor) corrigés ; `nginx.conf` WAF : l'audit ModSecurity va dans `/var/log/modsec/audit.json` (pas stdout) ; `hardening.md` : `audit.sh` ne vérifie pas `USER` (→ revue Dockerfile), `cpus` seulement sur les services Python | `docker-compose.yml`, `security/waf/nginx.conf`, `security/hardening/hardening.md` |
 | P3-5 | Hygiène lint (hook pre-commit non joué) | Imports triés (I001, 20 fichiers, via ruff 0.6.9 épinglé) ; import mort `ActionSpec` retiré (`engine.py`) ; `import os`/variable `m` inutilisés retirés ; `l`→`entry` (E741) | `ruff check --select I,F401,F841` vert ; suite complète verte |
 | P3-6 | Compteurs de tests périmés (preuve jury) | Réalignés sur la réalité mesurée : remédiation 91→**105**, assistant 97→**98**, ML 50→**51**, WAF 14→**25** | `ROADMAP.md`, `ml/README.md`, `security/waf/CAHIER-DES-CHARGES.md` |
+
+### Revue P4 — finition (cohérence doc + durcissements mineurs)
+
+> Ronde de sévérité la plus basse, issue de deux revues (transverse + sécurité). Correctifs code testés (remédiation 105→**106**, auth 35→**36**) et alignements doc/config sans changement de contrat. Les points d'architecture non vérifiables hors stack (pas de Docker sur le poste) sont corrigés en doc et portés comme risques résiduels (`docs/ebios-rm.md §5.3`). Suite complète rejouée verte : **12 composants Python** + front (44) + dashboard (121).
+
+| # | Écart | Résolution | Preuve |
+|---|---|---|---|
+| P4-01 | Compteur de tests WAF périmé (5) dans la gouvernance | Réaligné sur 25 | `docs/nis2-dora.md`, `docs/ebios-rm.md`, `docs/cadrage-cyber.md` |
+| P4-02 | Commande `pytest attacks/tests` annoncée « 4 tests » (répertoire = 31) | Commandes ciblées sur `attacks/tests/test_scenarios.py` (4 scénarios) | `docs/nis2-dora.md`, `attacks/RUNBOOK-PC-ATTAQUANT.md` |
+| P4-03 | Table §3 : `service_flood` annonce « rate-limit » absent de la table de décision | Ligne alignée sur le code (`blocage IP source + redémarrage`) | `docs/contracts.md §3` |
+| P4-04 | Métrique `resilience_mttd_seconds` décrite « Mean Time To Detect » alors qu'elle mesure détection→1ʳᵉ action | HELP et description du contrat reformulées (nom de métrique figé, inchangé) | `libs/.../metrics.py`, `docs/contracts.md §1` |
+| P4-05 | README : `architecture.md` marqué « (à venir) » alors qu'il existe | Mention retirée | `README.md` |
+| P4-06 | Exemple JSON §3 : `loki_query` de `service_flood` = `db_error` (signal de corruption) | Aligné sur le détecteur (`http_status`) | `docs/contracts.md §3`, cohérent avec `ml/detector/events.py` |
+| P4-07 | README : sections « Installation » et « Vérifier le système » en placeholder | Remplies (make up/seed/verify/demo, WAF, comptes fictifs) | `README.md` |
+| P4-08 | Format d'IBAN fictif de la doc ≠ code | Aligné sur `seed.py` (`FR76 0000 0000 000N 0000 0000 000`) | `scripts/README.md` |
+| P4S-05 | `never_block_ips` contournable en IPv4-mappée (`::ffff:a.b.c.d`) | Normalisation canonique avant comparaison (IP et liste blanche) + test | `remediation/actions/waf.py`, `test_engine.py` |
+| P4S-09a | Remédiation : `X-Request-ID` entrant accepté tel quel (log-forging) alors qu'auth/payment-api exigent un UUID | Validation UUID à parité + test | `remediation/main.py`, `test_api.py` |
+| P4S-04 | `/register` sans rate-limit (flood de comptes, DoS bcrypt, énumération) | `@limiter.limit` (défaut 10/min, `REGISTER_RATE_LIMIT`) + test | `services/auth/.../{main,config}.py`, `test_auth_ratelimit.py` |
+| P4S-02 | `obs`/`app` annoncés `internal` mais seul `data` l'était | `obs` passé en `internal: true` ; `app` documenté « non interne » (seule sortie, pull d'images/modèles) ; contrôle 7 d'`audit.sh` étendu à `obs` | `docker-compose.yml`, `docs/network.md`, `audit.sh` (exit 0) |
+| P4S-08 | Secrets déchiffrés hors du filet de sécurité | `umask 077` avant `sops --decrypt` ; `.remediation_token`/`*.env.dec` ajoutés à `.gitignore`, aux exclusions et au contrôle final de l'archive ; commentaire compose corrigé | `decrypt-secrets.sh`, `package_deliverables.sh`, `.gitignore`, `docker-compose.yml` |
+| P4S-10 | `audit.sh` [3] filtre chemin inclus (fichiers « test/latest » exemptés) ; `trivy` cible une image inexistante | Filtre sur contenu seul + `.sh/.conf/.json` + `--exclude-dir tests` ; commande `trivy` corrigée | `audit.sh` (exit 0), `hardening.md` |
+| P4S-06/03 | Doc : « aucun secret en image » (clé TLS figée) et audit WAF | Exception de labo documentée (clé TLS), nuance `read_only`, résiduel journal d'audit WAF | `hardening.md`, `docs/ebios-rm.md §5.3` |
+| P4S-01/07 | Résiduels non corrigeables hors stack : passerelle Alertmanager non authentifiée, HTTP clair/TLS | Portés comme risques résiduels + commentaire compose ; génération hex des secrets (évite de casser l'URL du pg-exporter) | `docs/ebios-rm.md §5.3`, `docker-compose.yml`, `security/sops/secrets.example.env` |
 
 ## Risques projet (vivant)
 

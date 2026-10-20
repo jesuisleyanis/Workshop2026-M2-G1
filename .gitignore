@@ -1,7 +1,9 @@
 # Secrets déchiffrés et clés — JAMAIS commités
 .env
 *.decrypted.env
+*.env.dec
 secrets.enc.env.dec
+.remediation_token
 **/age.key
 **/keys.txt
 *.age

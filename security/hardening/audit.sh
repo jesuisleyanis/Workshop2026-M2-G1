@@ -50,15 +50,18 @@ fi
 
 # 3. Secrets potentiels en clair (hors exemples/docs/tests explicitement factices).
 echo "[3] Secrets en clair"
-if grep -RInE '(password|secret|token|api[_-]?key)[[:space:]]*[:=][[:space:]]*["'\''][^"'\'' ]{8,}' \
+# Le filtre d'exclusion s'applique au CONTENU seul (on retire le préfixe `chemin:ligne:` via awk),
+# sinon un fichier dont le CHEMIN contient « test »/« latest »/« contest » échapperait au scan.
+# Les répertoires de tests sont exclus explicitement ; on couvre aussi .sh/.conf/.json.
+secret_hits="$(grep -RInE '(password|secret|token|api[_-]?key)[[:space:]]*[:=][[:space:]]*["'\''][^"'\'' ]{8,}' \
      --include='*.py' --include='*.ts' --include='*.tsx' --include='*.yml' --include='*.yaml' \
-     services/ ml/ remediation/ dashboard/ assistant/ infra/ 2>/dev/null \
-     | grep -viE '(change-me|example|fake|dummy|test|os\.environ|getenv|process\.env|VITE_|env\()' | grep -q .; then
+     --include='*.sh' --include='*.conf' --include='*.json' \
+     --exclude-dir='tests' --exclude-dir='node_modules' --exclude-dir='__pycache__' \
+     services/ ml/ remediation/ dashboard/ assistant/ infra/ scripts/ security/ 2>/dev/null \
+     | awk -F: '{ c=$0; sub(/^[^:]*:[^:]*:/,"",c); if (c !~ /(change-me|example|fake|dummy|test|os\.environ|getenv|process\.env|VITE_|env\()/) print }')"
+if [[ -n "${secret_hits}" ]]; then
   fail "secret potentiel en clair détecté"
-  grep -RInE '(password|secret|token|api[_-]?key)[[:space:]]*[:=][[:space:]]*["'\''][^"'\'' ]{8,}' \
-     --include='*.py' --include='*.ts' --include='*.tsx' --include='*.yml' --include='*.yaml' \
-     services/ ml/ remediation/ dashboard/ assistant/ infra/ 2>/dev/null \
-     | grep -viE '(change-me|example|fake|dummy|test|os\.environ|getenv|process\.env|VITE_|env\()'
+  printf '%s\n' "${secret_hits}"
 else
   pass "aucun secret en clair évident"
 fi
@@ -100,13 +103,20 @@ else
   fail "durcissement manquant : no-new-privileges et/ou cap_drop: ALL absents du compose"
 fi
 
-# 7. Base de données jamais exposée : réseau data en internal.
-echo "[7] Réseau data interne (DB jamais exposée)"
-if awk '/^  data:/{d=1;next} d&&/internal:[[:space:]]*true/{print;found=1} /^  [A-Za-z0-9_-]+:/&&!/^  data:/{d=0} END{exit !found}' \
-     "${COMPOSE}" >/dev/null 2>&1; then
-  pass "réseau data: internal: true (Postgres non joignable depuis l'hôte)"
+# 7. Réseaux sans sortie : data (DB) ET obs (observabilité) en internal (P4S-02).
+echo "[7] Réseaux internes (data + obs sans sortie Internet)"
+net_internal() {  # 1=nom du réseau ; 0 si `internal: true` présent dans son bloc
+  awk -v net="  $1:" '
+    $0==net {d=1;next}
+    d && /internal:[[:space:]]*true/ {found=1}
+    /^  [A-Za-z0-9_-]+:/ && $0!=net {d=0}
+    END{exit !found}' "${COMPOSE}" >/dev/null 2>&1
+}
+if net_internal data && net_internal obs; then
+  pass "réseaux data et obs en internal: true (DB et observabilité non joignables depuis l'hôte)"
 else
-  fail "le réseau data n'est pas internal: true (DB potentiellement exposée)"
+  net_internal data || fail "le réseau data n'est pas internal: true (DB potentiellement exposée)"
+  net_internal obs  || fail "le réseau obs n'est pas internal: true (observabilité avec sortie Internet)"
 fi
 
 echo

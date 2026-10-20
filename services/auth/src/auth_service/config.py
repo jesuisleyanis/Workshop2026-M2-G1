@@ -22,6 +22,7 @@ class Settings:
     jwt_secret: str
     internal_token: str
     login_rate_limit: str = "10/minute"
+    register_rate_limit: str = "10/minute"
     trusted_proxy_hops: int = 1
     run_migrations: bool = True
     enable_docs: bool = False
@@ -35,6 +36,8 @@ class Settings:
             raise RuntimeError("INTERNAL_TOKEN trop court (min 16 caractères)")
         if not _RATE_RE.match(self.login_rate_limit):
             raise RuntimeError("LOGIN_RATE_LIMIT invalide (format attendu : '10/minute')")
+        if not _RATE_RE.match(self.register_rate_limit):
+            raise RuntimeError("REGISTER_RATE_LIMIT invalide (format attendu : '10/minute')")
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -42,6 +45,7 @@ class Settings:
             jwt_secret=read_secret("JWT_SECRET"),
             internal_token=read_secret("INTERNAL_TOKEN"),
             login_rate_limit=os.environ.get("LOGIN_RATE_LIMIT", "10/minute"),
+            register_rate_limit=os.environ.get("REGISTER_RATE_LIMIT", "10/minute"),
             trusted_proxy_hops=int(os.environ.get("TRUSTED_PROXY_HOPS", "1")),
             run_migrations=_bool("RUN_MIGRATIONS", True),
             enable_docs=_bool("ENABLE_DOCS", False),
