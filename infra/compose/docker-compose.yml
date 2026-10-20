@@ -1,8 +1,9 @@
 # RESILIENCE-ALPHA — orchestration Docker Compose
-# Profils : (défaut=demo) chemin critique | full=observabilité complète | attack=banc d'essai | ai=assistant RAG
+# Profils : (défaut=demo) chemin critique | full=observabilité complète | iot=broker MQTT | attack=banc d'essai | ai=assistant RAG
 # Secrets injectés depuis ../../.env (produit par scripts/decrypt-secrets.sh à partir de SOPS).
 # Durcissement : non-root (Dockerfiles), cap_drop ALL, no-new-privileges, limites ressources,
-# seul le WAF publie des ports. Voir ../../security/hardening/hardening.md.
+# seul le WAF publie des ports HTTP ; le profil iot publie MQTT sur le hotspot.
+# Voir ../../security/hardening/hardening.md.
 # Reproductibilité (R5) : toutes les images tierces sont épinglées à une version précise (aucun
 # `:latest`) — un rebuild ultérieur ne doit pas tirer un major différent (Grafana/Loki/Prometheus…).
 
@@ -145,6 +146,34 @@ services:
       timeout: 5s
       retries: 5
 
+  mosquitto:
+    <<: *hardening
+    image: eclipse-mosquitto:2.0.18
+    profiles: [iot]
+    user: "1883:1883"
+    networks: [app]
+    # Seule l'interface du point d'accès est joignable par l'ESP8266.
+    ports: ["1883:1883"]
+    environment:
+      MQTT_AUTH_PASSWORD: ${MQTT_AUTH_PASSWORD:-}
+      MQTT_LED_PASSWORD: ${MQTT_LED_PASSWORD:-}
+    entrypoint: ["/bin/sh", "/mosquitto/config/entrypoint.sh"]
+    volumes:
+      - ../mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../mosquitto/aclfile:/mosquitto/config/aclfile:ro
+      - ../mosquitto/entrypoint.sh:/mosquitto/config/entrypoint.sh:ro
+    # Le fichier de mots de passe est généré au démarrage en RAM, jamais dans le dépôt.
+    tmpfs:
+      - "/run/mosquitto:uid=1883,gid=1883,mode=0700"
+      - "/tmp:uid=1883,gid=1883,mode=0700"  # mosquitto_passwd écrit un fichier temporaire
+    read_only: true
+    mem_limit: 64m
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /run/mosquitto/passwd && nc -z 127.0.0.1 1883"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
   # ---------------------------------------------------------------- data (interne)
   postgres:
     <<: *hardening
@@ -178,6 +207,7 @@ services:
     depends_on: [prometheus]
     read_only: true
     tmpfs: ["/tmp"]
+    profiles: [ml]
 
   detector:
     <<: [*hardening, *pylimits]
@@ -189,6 +219,7 @@ services:
     depends_on: [collector, remediation]
     read_only: true
     tmpfs: ["/tmp"]
+    profiles: [ml]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8003/health').status==200 else 1)"]
       interval: 15s

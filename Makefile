@@ -7,7 +7,7 @@ ROOT    := $(shell pwd)
 # Charge .env (produit par `make decrypt`) dans l'environnement d'une cible : SEED_PASSWORD, tokens...
 LOADENV := set -a; [ -f .env ] && . ./.env; set +a;
 
-.PHONY: help up up-full down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt model
+.PHONY: help up up-full up-iot down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt model
 
 help: ## Affiche cette aide
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -29,8 +29,14 @@ up: decrypt model ## Lève la stack (profil démo minimal)
 up-full: decrypt model ## Lève la stack complète (observabilité + full)
 	$(COMPOSE) --profile demo --profile full up -d --build
 
+up-iot: decrypt ## Lève la stack avec le broker MQTT sur le point d'accès
+	$(COMPOSE) --env-file .env --profile demo --profile iot up -d --build
+
+ps:
+	$(COMPOSE) --env-file .env ps
+
 down: ## Arrête et nettoie la stack
-	$(COMPOSE) --profile demo --profile full --profile attack --profile ai down
+	$(COMPOSE) --profile demo --profile full --profile iot --profile attack --profile ai down
 
 seed: ## Peuple les données fictives (resilience_db.seed, via le conteneur payment-api)
 	@$(LOADENV) python3 scripts/seed.py
