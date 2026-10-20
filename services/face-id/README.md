@@ -35,6 +35,7 @@ Configuration (variables d'environnement / secrets SOPS) :
 | `FACE_DATA_KEY`(`_FILE`) | Clé AES-256 des gabarits et photos : base64 de **32 octets** | **requis** |
 | `RECOGNIZER_BACKEND` | `team` (dlib) \| `insightface` \| `stub` (dev, exige `ALLOW_STUB_RECOGNIZER=1`) | `stub` (`team` dans l'image) |
 | `FACE_MATCH_THRESHOLD` | Distance maximale d'identité (override) | seuil du backend (`team` : 0,6) |
+| `FACE_DETECT_UPSAMPLE` | Backend `team` : suréchantillonnages du détecteur dlib. **Levier de latence en recette** : `0` divise le temps de détection (~×4) et suffit pour un visage proche sur une capture 640 px ; ne change pas les gabarits | `1` (défaut dlib) |
 | `POSTGRES_PASSWORD`(`_FILE`) | Accès DB (réseau `data`) | **requis** |
 | `RUN_MIGRATIONS` | Applique Alembic au démarrage | `1` |
 | `LOG_LEVEL` | Niveau de log | `INFO` |
@@ -49,7 +50,7 @@ Configuration (variables d'environnement / secrets SOPS) :
 | `POST /api/v1/enroll` | `{username, enrolled_by, poses:{face,gauche,droite:<b64>}}` → `200 {enrolled:true, model_version, poses:[…]}` · `422 enrollment_rejected` (+ `details:[{pose, reason}]`, `reason` ∈ `no_face`, `multiple_faces`, `wrong_pose`, `inconsistent`, `invalid_image`, `missing`) · `404 unknown_user` |
 | `POST /api/v1/verify` | `{username, frames:[{pose, image_b64}×3]}` (3 poses distinctes) → `200 {match, model_version}`. Le motif d'un échec n'est **que dans les logs** (`face_verify_nomatch` / `face_verify_error`). Identifiant inconnu ⇒ `match:false` (anti-énumération). |
 | `DELETE /api/v1/enroll/{username}` | `204` · `404 not_enrolled` |
-| `GET /api/v1/enrollments` | `[{username, enrolled_at, enrolled_by, model_version, poses}]` — **aucune biométrie** |
+| `GET /api/v1/enrollments` | `[{username, enrolled_at, enrolled_by, model_version, poses, usable}]` — **aucune biométrie**. `usable` = vérifiable par le modèle chargé (`model_version` identique **et** vignettes chiffrées présentes) ; `false` ⇒ réenrôlement requis (`auth` ne compte pas la ligne comme enrôlée) |
 | `GET /api/v1/enrollments/{username}/photos?viewer=<admin>` | `200 {photos:{face,gauche,droite:<b64 JPEG ≤ 240 px>}}` · `404` ; chaque consultation est journalisée (`face_photos_viewed`, qui regarde qui) |
 | `GET /health` · `/ready` · `/metrics` | sondes et métriques Prometheus |
 
@@ -59,7 +60,11 @@ Codes : `internal_token_invalid` (401), `validation_error` / `invalid_image` (42
 
 Les lignes **v1** (gabarit float32 non chiffré, sans photos) ou enrôlées avec un autre modèle ne
 plantent rien : `verify` répond `match:false` + log `face_verify_error` (**réenrôlement requis**),
-`photos` répond `404`.
+`photos` répond `404`, et `GET /api/v1/enrollments` les marque `usable:false`.
+
+Chaque ligne de log porte un `event` réservé (contrat §1) : `db_error` pour une base injoignable
+(readiness, erreur SQL non gérée), `face_verify_error` pour un traitement impossible (gabarit ou
+photos illisibles, erreur interne du modèle).
 
 ## Tester
 

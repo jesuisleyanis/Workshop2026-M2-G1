@@ -33,6 +33,7 @@ from resilience_common.metrics import (
 from resilience_db.config import make_engine, make_session_factory
 from resilience_db.migrate import upgrade
 from sqlalchemy import Engine, text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from face_id import SERVICE_NAME
@@ -166,7 +167,11 @@ def create_app(
     try:
         face_enrollments.set(store.count())
     except Exception as exc:  # noqa: BLE001 - la métrique ne doit jamais empêcher le démarrage
-        log.debug("initialisation de la jauge d'enrôlements différée: %s", exc)
+        log.debug(
+            "Initialisation de la jauge d'enrôlements différée (%s)",
+            type(exc).__name__,
+            extra={"event": "db_error"},
+        )
 
     # ---------------------------------------------------------------- erreurs (format contrat)
     @app.exception_handler(StarletteHTTPException)
@@ -189,7 +194,9 @@ def create_app(
 
     @app.exception_handler(Exception)
     async def _unhandled(_req: Request, exc: Exception):
-        log.error("Erreur non gérée: %s", type(exc).__name__)  # type seul : pas de contenu d'image
+        # Type seul : jamais de contenu d'image. Tout log porte un `event` réservé (contrat §1).
+        event = "db_error" if isinstance(exc, SQLAlchemyError) else "face_verify_error"
+        log.error("Erreur non gérée: %s", type(exc).__name__, extra={"event": event})
         return JSONResponse(_error_body("internal_error", "Erreur interne"), status_code=500)
 
     def require_internal_token(x_internal_token: str = Header(default="")) -> None:
@@ -211,7 +218,10 @@ def create_app(
             with session_factory() as s:
                 s.execute(text("SELECT 1"))
         except Exception as exc:  # noqa: BLE001
-            log.warning("readiness DB check failed: %s", exc)  # détail seulement dans les logs
+            # Type seul dans le log (une URL de connexion peut figurer dans le message d'erreur).
+            log.warning(
+                "Readiness : base injoignable (%s)", type(exc).__name__, extra={"event": "db_error"}
+            )
             problems.append("db injoignable")
         if problems:
             return JSONResponse(status_code=503, content={"status": "not_ready", "problems": problems})
@@ -342,7 +352,8 @@ def create_app(
 
     @app.get("/api/v1/enrollments", dependencies=[Depends(require_internal_token)])
     def enrollments() -> list[dict]:
-        return store.list()
+        # `usable` = vérifiable par le modèle chargé (auth n'en compte que celles-là comme enrôlées).
+        return store.list(recognizer.model_version)
 
     @app.get(
         "/api/v1/enrollments/{username}/photos", dependencies=[Depends(require_internal_token)]
@@ -354,7 +365,10 @@ def create_app(
         try:
             thumbs = unpack_photos(sealer.open(stored.photos_blob, _photos_aad(username)))
         except _UNREADABLE as exc:
-            log.warning("Photos d'enrôlement illisibles (réenrôlement requis)")
+            log.warning(
+                "Photos d'enrôlement illisibles (réenrôlement requis)",
+                extra={"event": "face_verify_error", "user": username},
+            )
             raise _api_error(404, "photos_unavailable", "Photos illisibles : réenrôler") from exc
         # Piste d'audit RGPD : qui a consulté les photos de qui (jamais le contenu).
         log.info(

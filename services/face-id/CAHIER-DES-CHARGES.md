@@ -27,7 +27,7 @@ Toutes les routes `/api/v1/*` exigent `X-Internal-Token`. Erreurs au format cont
 | `POST /api/v1/enroll` | `{username, enrolled_by, poses:{face,gauche,droite}}` → `{enrolled, model_version, poses}`. `422 enrollment_rejected` + `details:[{pose, reason}]` (`no_face`, `multiple_faces`, `wrong_pose`, `inconsistent`, `invalid_image`, `missing`) ; `404 unknown_user`. Tout ou rien. |
 | `POST /api/v1/verify` | `{username, frames:[{pose, image_b64}×3]}` (3 poses **distinctes** de `face/gauche/droite`) → `{match, model_version}`. Aucun score ni motif dans la réponse (motif dans les logs). Identifiant inconnu/non enrôlé ⇒ `match:false` (anti-énumération). |
 | `DELETE /api/v1/enroll/{username}` | `204` ; `404 not_enrolled`. |
-| `GET /api/v1/enrollments` | `[{username, enrolled_at, enrolled_by, model_version, poses}]` — **aucune biométrie**. |
+| `GET /api/v1/enrollments` | `[{username, enrolled_at, enrolled_by, model_version, poses, usable}]` — **aucune biométrie**. `usable` : vérifiable par le modèle chargé (même `model_version` **et** photos chiffrées présentes) ; `false` ⇒ réenrôlement requis. |
 | `GET /api/v1/enrollments/{username}/photos?viewer=<admin>` | `{photos:{face,gauche,droite:<b64 JPEG ≤ 240 px>}}` ; `404` si non enrôlé / ligne v1. Journalise `face_photos_viewed`. |
 | `GET /health` · `GET /ready` · `GET /metrics` | `/ready` = recognizer chargé + DB joignable. |
 
@@ -74,13 +74,14 @@ Toutes les routes `/api/v1/*` exigent `X-Internal-Token`. Erreurs au format cont
 | F15 | Ligne v1 : réenrôlement requis, jamais de plantage | `test_legacy_v1_row_requires_reenrolment_and_never_crashes` |
 | F16 | `FACE_DATA_KEY` requise et valide | `test_settings_require_face_data_key` |
 | F17 | Aucun log ne contient image, gabarit, clé ou token | `test_logs_never_contain_image_or_embedding` |
-| F18 | Tous les `event` émis ∈ contrat §1 | `test_all_emitted_events_belong_to_the_contract` |
+| F18 | Tous les `event` émis ∈ contrat §1, y compris sur les chemins d'erreur (photos illisibles, readiness KO, erreur non gérée) | `test_all_emitted_events_belong_to_the_contract`, `test_every_log_line_carries_a_reserved_event` |
+| F20 | `usable` : `false` pour une ligne d'un autre modèle ou v1, `true` sinon (clés exactes, aucune biométrie) | `test_enrollments_list_exposes_no_biometric_data`, `test_model_version_mismatch_is_nomatch_with_error_log`, `test_legacy_v1_row_requires_reenrolment_and_never_crashes` |
 | F19 | Vignette Pillow : JPEG, ≤ 240 px, jamais d'agrandissement, non-image refusée | `test_thumbnail_*` (`tests/test_enrollment.py`) |
 
 ## 6. Hors périmètre / limites assumées
 
 - Reconnaissance **1:1** (vérification), pas d'identification 1:N.
-- **Pas de liveness / anti-spoofing** avancé : la séquence de poses aléatoire est un premier rempart contre la photo fixe, pas contre une vidéo rejouée — porté en risque résiduel (cadrage §7).
+- **Pas de liveness / anti-spoofing** avancé : la séquence de poses aléatoire est un premier rempart contre la photo fixe et la vidéo à ordre fixe, pas contre 3 poses rejouées (trames ou photos) dans l'ordre affiché — porté en risque résiduel (cadrage §7, EBIOS SO7).
 - Le **StubRecognizer** sert les tests (plumbing déterministe) ; la **qualité réelle** de reconnaissance et les seuils sont calibrés en recette avec `RECOGNIZER_BACKEND=team`.
 - Un seul enrôlement par utilisateur (unicité DB) ; un réenrôlement remplace gabarits et photos.
 - L'image Docker `team` n'a pas pu être construite dans l'environnement de développement (pas de démon Docker) : à valider à la première construction sur le PC Hôte.

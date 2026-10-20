@@ -99,8 +99,13 @@ class EnrollmentStore:
             s.commit()
             return True
 
-    def list(self) -> list[dict]:
-        """Métadonnées d'enrôlement — jamais de gabarit ni de photo."""
+    def list(self, current_model_version: str) -> list[dict]:
+        """Métadonnées d'enrôlement — jamais de gabarit ni de photo.
+
+        `usable` : la ligne est vérifiable par le modèle chargé (`model_version` identique ET
+        vignettes chiffrées présentes, donc format v2). Sinon (changement de modèle, ligne v1),
+        toute vérification échoue : la ligne existe mais un réenrôlement est requis.
+        """
         with self._session_factory() as s:
             rows = s.execute(
                 select(
@@ -109,6 +114,7 @@ class EnrollmentStore:
                     FaceEnrollment.enrolled_by,
                     FaceEnrollment.model_version,
                     FaceEnrollment.poses,
+                    FaceEnrollment.photos.is_not(None),  # présence seule : le blob n'est pas lu
                 ).join(User, User.id == FaceEnrollment.user_id)
             ).all()
             return [
@@ -118,8 +124,9 @@ class EnrollmentStore:
                     "enrolled_by": by,
                     "model_version": mv,
                     "poses": [p for p in poses.split(",") if p],
+                    "usable": bool(has_photos) and mv == current_model_version,
                 }
-                for (u, at, by, mv, poses) in rows
+                for (u, at, by, mv, poses, has_photos) in rows
             ]
 
     def count(self) -> int:

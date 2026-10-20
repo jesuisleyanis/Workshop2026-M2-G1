@@ -244,6 +244,9 @@ def test_model_version_mismatch_is_nomatch_with_error_log(settings, engine, seed
     assert r.status_code == 200
     assert r.json() == {"match": False, "model_version": "stub-9.9"}
     assert log_lines("face_verify_error")
+    # La liste signale la ligne comme inutilisable par le modèle chargé (réenrôlement requis).
+    assert [row["usable"] for row in old.get("/api/v1/enrollments", headers=AUTH_HEADER).json()] == [True]
+    assert [row["usable"] for row in new.get("/api/v1/enrollments", headers=AUTH_HEADER).json()] == [False]
 
 
 @pytest.mark.parametrize("model_version", ["stub-1.0", "stub-2.0"])
@@ -270,6 +273,8 @@ def test_legacy_v1_row_requires_reenrolment_and_never_crashes(
     assert log_lines("face_verify_error")
     rows = client.get("/api/v1/enrollments", headers=AUTH_HEADER).json()
     assert rows[0]["username"] == "alice" and rows[0]["poses"] == ["face"]
+    # Ligne v1 (pas de photos) : jamais vérifiable, même si model_version coïncide.
+    assert rows[0]["usable"] is False
     # Pas de photos pour une ligne v1 : 404, jamais de 500.
     assert _photos(client, headers=AUTH_HEADER).status_code == 404
 
@@ -317,7 +322,8 @@ def test_enrollments_list_exposes_no_biometric_data(client, seed_user):
     assert row["model_version"] == "stub-2.0"
     assert row["poses"] == ["face", "gauche", "droite"]
     assert row["enrolled_at"]
-    assert set(row) == {"username", "enrolled_at", "enrolled_by", "model_version", "poses"}
+    assert row["usable"] is True
+    assert set(row) == {"username", "enrolled_at", "enrolled_by", "model_version", "poses", "usable"}
 
 
 def test_revoke_deletes_enrollment(client, seed_user):
@@ -404,3 +410,43 @@ def test_all_emitted_events_belong_to_the_contract(client, seed_user, log_lines)
         "face_photos_viewed",
         "face_enrollment_revoked",
     } <= emitted
+
+
+def test_every_log_line_carries_a_reserved_event(settings, engine, seed_user, session_factory, log_lines):
+    """Y compris les chemins d'erreur : photos illisibles, readiness KO, erreur non gérée."""
+    from dataclasses import replace
+
+    from sqlalchemy import create_engine
+
+    class Exploding(StubRecognizer):
+        def analyze(self, image: bytes, *, precise: bool = False):
+            raise RuntimeError("panne du modèle")
+
+    client = TestClient(create_app(settings, engine, recognizer=StubRecognizer(), thumbnailer=lambda b: b))
+    assert _enroll(client).status_code == 200
+    # Photos altérées en base (même modèle) : 404 photos_unavailable + face_verify_error.
+    with session_factory() as s:
+        s.scalar(select(FaceEnrollment)).photos = b"v1-corrompu"
+        s.commit()
+    r = _photos(client, headers=AUTH_HEADER)
+    assert r.status_code == 404 and _error(r)["code"] == "photos_unavailable"
+    unreadable = log_lines("face_verify_error")
+    assert unreadable and unreadable[-1]["user"] == "alice"
+    # Erreur non gérée (le modèle plante) : 500 au format contrat, journalisée avec un event.
+    boom = TestClient(
+        create_app(settings, engine, recognizer=Exploding(), thumbnailer=lambda b: b),
+        raise_server_exceptions=False,
+    )
+    r = _verify(boom)
+    assert r.status_code == 500 and _error(r)["code"] == "internal_error"
+    # Base injoignable : readiness 503 (+ jauge initiale différée, journalisée en DEBUG).
+    dead = create_engine("sqlite:///Z:/inexistant/x/y/face.db")
+    down = TestClient(create_app(replace(settings, log_level="DEBUG"), dead, recognizer=StubRecognizer()))
+    assert down.get("/ready").status_code == 503
+    rows = log_lines()
+    assert rows
+    events = [row["event"] for row in rows]
+    assert "log" not in events, "ligne de log sans `event`"
+    assert set(events) <= set(RESERVED_EVENTS), set(events) - set(RESERVED_EVENTS)
+    assert {"face_verify_error", "db_error"} <= set(events)
+    assert "panne du modèle" not in log_lines.raw()  # type d'exception seul, jamais le message

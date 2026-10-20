@@ -49,6 +49,8 @@ cd services/face-id && python -m pytest tests/test_recognizer_contract.py -q
 #    3 poses d'une personne DIFFÉRENTE -> verify match:false (face_mismatch dans les logs)
 #    tête tournée du mauvais côté -> 422 wrong_pose (enrôlement) / match:false (verify)
 #    -> calibrer FACE_MATCH_THRESHOLD sur ces mesures. Recette pas à pas : README.md.
+#    Latence : mesurer verify (3 images 640 px) ; si elle approche BACKOFFICE_FACE_TIMEOUT (8 s
+#    dans le compose), poser FACE_DETECT_UPSAMPLE=0 (détecteur dlib sans suréchantillonnage).
 ```
 
 ## Ce que ça ne change pas

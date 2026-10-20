@@ -7,6 +7,7 @@ Mode d'emploi : services/face-id/INTEGRATION-ML.md.
 
 from __future__ import annotations
 
+import os
 from io import BytesIO
 
 from face_id.poses import pose_from_rotation, rotation_from_points
@@ -18,8 +19,14 @@ class TeamRecognizer:  # pragma: no cover - validé en recette, dlib non install
 
     model_version = "team-dlib-face_recognition-1.3.0"
 
-    def __init__(self, threshold: float = 0.6) -> None:
+    def __init__(self, threshold: float = 0.6, upsample: int | None = None) -> None:
         self.threshold = threshold
+        # Levier de recette (latence) : nombre de suréchantillonnages du détecteur HOG de dlib.
+        # 1 = défaut dlib ; 0 suffit pour un visage proche sur une capture 640 px et divise le
+        # temps de détection (~x4). Variable FACE_DETECT_UPSAMPLE ; ne change pas les gabarits.
+        if upsample is None:
+            upsample = int(os.getenv("FACE_DETECT_UPSAMPLE", "1"))
+        self.upsample = max(0, upsample)
         import face_recognition  # échoue tôt si la dépendance manque
 
         self._fr = face_recognition
@@ -30,7 +37,7 @@ class TeamRecognizer:  # pragma: no cover - validé en recette, dlib non install
             img = fr.load_image_file(BytesIO(image))
         except Exception as exc:  # image illisible = pas de visage exploitable
             raise NoFaceError("image illisible") from exc
-        locations = fr.face_locations(img)
+        locations = fr.face_locations(img, number_of_times_to_upsample=self.upsample)
         if not locations:
             raise NoFaceError("aucun visage détecté")
         if len(locations) > 1:
