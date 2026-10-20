@@ -35,6 +35,41 @@ class TokenOut(BaseModel):
     expires_in: int
 
 
+# --- Authentification à étapes du back-office (consigne additionnelle 1, contrat §5.2) ---
+
+
+class IdentifyRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+
+
+class IdentifyResponse(BaseModel):
+    challenge_id: str
+    step: str
+    expires_in: int
+    camera: bool
+
+
+class FaceRequest(BaseModel):
+    challenge_id: str = Field(min_length=1, max_length=64)
+    # Plafond anti-DoS (~1 Mo d'image en base64) : une trame webcam JPEG est bien en deçà.
+    image_b64: str = Field(min_length=1, max_length=1_500_000)
+
+
+class FaceResponse(BaseModel):
+    recognized: bool
+    step: str
+    attempts_left: int
+
+
+class PasswordRequest(BaseModel):
+    challenge_id: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class SteppedTokenOut(TokenOut):
+    role: str
+
+
 class TightenRequest(BaseModel):
     factor: float = Field(gt=0, le=1, description="Multiplicateur de la limite courante.")
 
