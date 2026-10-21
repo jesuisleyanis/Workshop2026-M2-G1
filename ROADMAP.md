@@ -213,7 +213,27 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | L3 / C4 | `up` entraînait le modèle sur l'hôte (sklearn local requis) alors que le build detector ré-entraîne | `model` retiré de `up*`, passe par l'image `ml-tools` ; cibles `build`, `start`, `start-full`, `retrain-detector` | ✅ test |
 | L4 / C6 | `depends_on` sans attente de santé | `condition: service_healthy` vers toute dépendance qui a un healthcheck | ✅ test + `docker compose config` |
 | L4 / C7 | Dashboard/Grafana publiés nulle part : visibilité du temps 5 de la démo | **Décision équipe** : `127.0.0.1:<port>` ou route WAF authentifiée | ⬜ à trancher |
-| — | `test_mosquitto_is_limited_to_iot_profile_and_hotspot` rouge (`1883:1883` au lieu de `192.168.137.1:1883:1883`) | Préexistant sur `main`, hors de ce lot | 🔴 à corriger (profil `iot`) |
+| — | `test_mosquitto_is_limited_to_iot_profile_and_hotspot` rouge (`1883:1883` au lieu de `192.168.137.1:1883:1883`) | Mosquitto publié sur l'IP du hotspot uniquement (lot 5 ci-dessous) | ✅ tests verts |
+
+### Détection rapide et corrections de la chaîne de reprise
+
+> Plan : [`docs/plan-amelioration-detection.md`](docs/plan-amelioration-detection.md). Mesure : `make bench` (`scripts/bench_detection.py`).
+> **Référence avant (21/10, 3 passages, trafic normal en fond)** — attaque → `AnomalyEvent` : flood p50 35,5 s / p95 37,6 s ;
+> auth_abuse p50 25,9 s / p95 34,1 s ; web_attack p50 33,8 s / p95 36,7 s ; 0 faux positif / 120 s. Flood mal routé 3/3
+> (`data_corruption` ×2 → **restauration de dump sur un flood**, `unknown` ×1). Objectif : **p95 ≤ 5 s**.
+
+| Lot | Écart | Résolution | Statut / preuve |
+|---|---|---|---|
+| 0 | Latence de détection non mesurée | Banc `make bench` : p50/p95/max attaque → détection → 1re action, faux positifs, décalage d'horloge VM corrigé | ✅ `scripts/tests/test_bench_detection.py` ; mesure de référence ci-dessus |
+| 1 | **IP source jamais transmise** : `waf_block_ip`/`waf_blacklist_ip` échouaient (« aucune IP source »), l'attaquant n'était jamais bloqué | `AnomalyEvent.source_ip` (additif, validé) ; le detector retient l'IP qui domine les logs WAF (Loki, ≥ 60 %, ≥ 5 lignes, filtre par type) | ✅ `ml/detector/tests/test_source_ip.py`, `test_contracts.py`, `docs/contracts.md §3` |
+| 1 | `confirm_waf_block` ne pouvait pas lire Loki (remédiation hors `obs`) et visait `{service="waf"}` au lieu de `waf-exporter` | remédiation sur `obs` (interne) ; sélecteur `{service="waf-exporter", event="waf_blocked"}` | ✅ `test_actions.py`, `infra/tests/test_detection_pipeline.py` |
+| 1 | auth : `httpx` hors runtime ; WAF : scripts 93/96 de l'image de base ; tag de base republié | dépendance runtime ; scripts retirés ; base épinglée par digest | ✅ `test_runtime_requirements.py`, `test_waf_config.py` |
+| 1 | Trafic « normal » et flood avec mots de passe en dur périmés (`demo-pass-0N`) : baseline polluée de 401 (= signal auth_abuse), flood jamais lancé | `SEED_PASSWORD` partout, refus explicite s'il manque | ✅ `test_gen_normal_traffic.py`, `test_run_flood.py` |
+| 2 | Chaîne lente (scrape 10 s, `rate[30s]`, collecte 15 s, relève 15 s non synchronisée) | scrape 1 s (services), `rate[5s]`, collecte 1 s, attente longue collector → detector (`?after=<seq>`), confirmation 2 fenêtres ou seuil haut calibré | ✅ tests collector/detector/calibrate + `test_detection_pipeline.py` ; 🟨 mesure après ré-entraînement |
+| 3 | Modèle calibré sur 1 passage/scénario, sans data_corruption, fenêtres 30 s | recapture 60 min + 3 passages × 4 scénarios (`attacks/db_corrupt_local.sh` pour data_corruption) ; Alertmanager suspendu pendant les captures | 🟨 en cours |
+| 4 | `.env` périmé non détecté ; rotation de `SEED_PASSWORD` ; Grafana en boucle ; `python3` absent sous Windows ; `reset.sh` sans `--env-file` (deny-list jamais vidée) | `check-env` compare les clés ; `make seed RESET_PASSWORDS=1` ; `make reset-grafana` ; `PY_HOST` ; `down --remove-orphans` ; `reset.sh` corrigé | ✅ `test_db.py` (reset), vérif. manuelle `check-env` |
+| 5 | Mosquitto sur `0.0.0.0` ; tests face-id hors `make test` | bind `192.168.137.1` ; face-id dans `PY_COMPONENTS` | ✅ `test_compose_hardening.py`, `test_makefile.py` |
+| 6 | Chemin SOC lent (`rate[1m]`, `for: 30s`, `group_wait: 5s`) | `rate[30s]`, `for: 10s`, évaluation 5 s, `group_wait: 1s` (Grafana ⇔ Prometheus miroir) | ✅ `test_soc_rules.py`, `promtool check rules` |
 
 ## Risques projet (vivant)
 

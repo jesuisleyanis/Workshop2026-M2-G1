@@ -61,6 +61,8 @@ COMPOSE="docker compose -f infra/compose/docker-compose.yml --env-file .env"
 | Construire les images sans rien lancer | `make build` | oui |
 | + assistant RAG | `$COMPOSE --profile ai up -d --build` | oui |
 | Données fictives | `make seed` (demo01…demo05, 1 000 € chacun, idempotent) | — |
+| Après rotation de `SEED_PASSWORD` | `make seed RESET_PASSWORDS=1` (réaligne les comptes existants, soldes intacts) | — |
+| Vérifier `.env` (toutes les clés de `secrets.example.env`) | `make check-env` | — |
 | État des conteneurs (tous profils) | `make ps` | — |
 | Logs d'un service | `$COMPOSE logs -f detector` | — |
 | Arrêter / nettoyer (tous profils) | `make down` | — |
@@ -86,6 +88,7 @@ publication `127.0.0.1` en dev).
 | Remettre la cible « avant » | `make reset` | |
 | Audit de durcissement | `make audit` | |
 | Archive du rendu | `make package` | `Workshop2026-M2-G1-Code.zip` sans secrets |
+| **Latence de détection** (preuve chiffrée) | `make bench` (`BENCH_ARGS="--runs 5 --quiet 600"`) | p50/p95/max attaque → détection → 1re action, faux positifs ; JSON `bench-detection.json` |
 
 En démo notée, l'attaque part du **PC Attaquant** : [`attacks/RUNBOOK-PC-ATTAQUANT.md`](../attacks/RUNBOOK-PC-ATTAQUANT.md).
 
@@ -158,3 +161,8 @@ Codes retour de `calibrate` : `0` OK · `1` non séparable · `2` MTTD > 20 s. D
 | `make verify` KO juste après `up` | services pas encore *healthy* ou base non seedée | attendre `ps` healthy, `make seed` |
 | Build du detector échoue (code 3) | calibration périmée pour ce modèle | `make calibrate` |
 | Attaque sans effet en capture | cible = IP du hotspot inactif | `ATTACK_TARGET=https://localhost` (défaut des captures) |
+| Grafana redémarre en boucle (`UNIQUE constraint failed: alert_rule_version`) | état interne périmé dans le volume | `make reset-grafana` (tout est reprovisionné) |
+| `password authentication failed for user "resilience"` | volume Postgres initialisé avec un ancien `POSTGRES_PASSWORD` | réaligner sans perdre les données : `docker exec -i resilience-g1-postgres-1 psql -U resilience -d resilience -v pw="$POSTGRES_PASSWORD"` puis `ALTER USER resilience PASSWORD :'pw';` |
+| Login `demo01` refusé (401) | comptes créés avec un ancien `SEED_PASSWORD` | `make seed RESET_PASSWORDS=1` |
+| `make up-iot` : `cannot assign requested address` sur 1883 | hotspot `RESILIENCE-G1` inactif (Mosquitto n'écoute que sur `192.168.137.1`) | activer le point d'accès mobile |
+| `make up` : `network … has active endpoints` | conteneurs d'une ancienne version de la stack | `make down` (inclut `--remove-orphans`) puis relancer |
