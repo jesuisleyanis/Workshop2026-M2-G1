@@ -18,7 +18,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from resilience_common.logging import get_logger
 from resilience_common.metrics import db_errors_total, instrument, transactions_total
 from resilience_db.config import make_engine, make_session_factory
-from resilience_db.migrate import upgrade
+from resilience_db.migrate import upgrade_with_retry
 from resilience_db.models import Account, Transaction, TransactionStatus, User
 from sqlalchemy import Engine, and_, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -63,19 +63,6 @@ from payment_api.schemas import (
 )
 from payment_api.security import claims_from_token, missing_token
 from payment_api.status import StatusCache
-
-
-def _migrate_with_retry(engine: Engine, log: logging.Logger, attempts: int = 5) -> None:
-    for attempt in range(1, attempts + 1):
-        try:
-            upgrade(engine)
-            return
-        except SQLAlchemyError:
-            if attempt == attempts:
-                raise
-            log.warning("DB not ready for migrations (attempt %d/%d)", attempt, attempts)
-            time.sleep(2)
-
 
 # Identifiant en chemin borné à l'INTEGER Postgres : au-delà, la BDD lèverait une DataError,
 # traduite en 503 db_unavailable + db_errors_total, soit un faux signal d'incident pour le ML.
@@ -126,7 +113,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if settings.run_migrations:
-            _migrate_with_retry(engine, log)
+            upgrade_with_retry(engine, log)
         task = asyncio.create_task(_scheduler_loop()) if settings.scheduler_enabled else None
         yield
         if task is not None:
