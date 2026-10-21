@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createApiClient } from './client'
 import { createEndpoints } from './index'
 import { decodeJwtClaims, decodeJwtExp } from './tokenStore'
-import { parseAccounts, parseLogin, parseTransaction } from './parsers'
+import { parseAccounts, parseLimits, parseLogin, parseTransaction } from './parsers'
 import { fakeJwt, jsonResponse } from '../test/helpers'
 
 function endpointsWith(handler: (url: string, init?: RequestInit) => Response) {
@@ -82,6 +82,18 @@ describe('endpoints /api/v1', () => {
       byDay: [{ date: '2026-10-19', amount: 12.5 }],
     })
     expect((f.mock.calls[0] as unknown as [string])[0]).toBe('/api/v1/stats/spending?period=week&offset=-1')
+  })
+
+  it('plafonds : centimes -> euros, null (sans plafond) préservé', () => {
+    expect(
+      parseLimits([
+        { account_id: 1, monthly_limit_cents: 200000, used_cents: 1050, remaining_cents: 198950, period_end: '2026-11-01' },
+        { account_id: 2, monthly_limit_cents: null, used_cents: 0, remaining_cents: null, period_end: '2026-11-01' },
+      ]),
+    ).toEqual([
+      { accountId: '1', limit: 2000, used: 10.5, remaining: 1989.5, periodEnd: '2026-11-01' },
+      { accountId: '2', limit: null, used: 0, remaining: null, periodEnd: '2026-11-01' },
+    ])
   })
 
   it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {

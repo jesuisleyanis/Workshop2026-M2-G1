@@ -3,6 +3,7 @@ import { Layout } from './components/Layout'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { BeneficiariesPage } from './pages/BeneficiariesPage'
 import { HistoryPage } from './pages/HistoryPage'
+import { LimitsPage } from './pages/LimitsPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
 import { ProfilePage } from './pages/ProfilePage'
@@ -24,6 +25,7 @@ export function App() {
           <Route path="operations/:id" element={<TxDetailPage />} />
           <Route path="rib" element={<RibPage />} />
           <Route path="beneficiaries" element={<BeneficiariesPage />} />
+          <Route path="limits" element={<LimitsPage />} />
           <Route path="profile" element={<ProfilePage />} />
           {/* Anciennes routes (liens existants, scripts de démo). */}
           <Route path="transfer" element={<Navigate to="/send" replace />} />

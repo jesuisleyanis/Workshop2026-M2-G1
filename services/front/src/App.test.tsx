@@ -661,3 +661,73 @@ describe('Front - détail d’opération (#45)', () => {
     expect(screen.queryByText('Opération introuvable')).not.toBeInTheDocument()
   })
 })
+
+describe('Front - plafonds (#46)', () => {
+  const LIMITED = { account_id: 1, monthly_limit_cents: 200000, used_cents: 92000, remaining_cents: 108000, period_end: '2026-11-01' }
+  const UNLIMITED = { account_id: 1, monthly_limit_cents: null, used_cents: 5000, remaining_cents: null, period_end: '2026-11-01' }
+  const base = (limits: unknown, extra: Record<string, () => Response> = {}) => ({
+    'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+    'GET /api/v1/transactions': () => jsonResponse([]),
+    'GET /api/v1/limits': () => jsonResponse(limits),
+    ...extra,
+  })
+
+  it('accueil : barre « Plafond restant » en % du plafond, ou « Sans plafond » pour un compte de service', async () => {
+    loginAsStored()
+    stubFetch(base([LIMITED]))
+    const { unmount } = renderApp('/')
+    const bar = await screen.findByTestId('limit-bar')
+    expect(bar).toHaveTextContent('54 %')
+    expect(within(bar).getByRole('meter', { name: 'Plafond restant' })).toHaveAttribute('aria-valuenow', '54')
+    expect(bar).toHaveTextContent(/1\s?080,00\s€.*sur 2\s?000,00\s€.*1 novembre/)
+    unmount()
+    stubFetch(base([UNLIMITED]))
+    renderApp('/')
+    expect(await screen.findByTestId('limit-bar')).toHaveTextContent('Sans plafond')
+    expect(screen.queryByRole('meter')).not.toBeInTheDocument()
+  })
+
+  it('accueil : plafonds indisponibles (erreur) => aucune barre, pas de crash', async () => {
+    loginAsStored()
+    stubFetch(base({ error: { code: 'db_unavailable', message: 'x' } }))
+    renderApp('/')
+    await screen.findByTestId('balance')
+    expect(screen.queryByTestId('limit-bar')).not.toBeInTheDocument()
+  })
+
+  it('écran Plafonds : plafond, consommé, restant, remise à zéro', async () => {
+    loginAsStored()
+    stubFetch(base([LIMITED]))
+    renderApp('/limits')
+    const card = await screen.findByRole('region', { name: 'Plafond du Compte n°1' })
+    expect(card).toHaveTextContent(/Plafond mensuel\s*2\s?000,00\s€/)
+    expect(card).toHaveTextContent(/Consommé\s*920,00\s€/)
+    expect(card).toHaveTextContent(/Restant\s*1\s?080,00\s€/)
+    expect(card).toHaveTextContent('le 1 novembre')
+  })
+
+  it('envoi : avertissement non bloquant au-delà du plafond restant, puis refus 409 limit_exceeded explicite', async () => {
+    loginAsStored()
+    const f = stubFetch(
+      base([{ ...LIMITED, remaining_cents: 500 }], {
+        'POST /api/v1/transactions': () => jsonResponse({ error: { code: 'limit_exceeded', message: 'Monthly limit exceeded', request_id: 'rid-lim' } }, 409),
+      }),
+    )
+    renderApp('/send')
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '10')
+    expect(await screen.findByText(/dépasse votre plafond mensuel restant \(5,00\s€\)/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^Envoyer 10,00/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Virement refusé — plafond mensuel atteint')
+    expect(alert).toHaveTextContent('rid-lim')
+    expect(posts(f)).toHaveLength(1)
+    // Plafonds rechargés après le refus.
+    await waitFor(() => expect(f.mock.calls.filter(([u]) => String(u).endsWith('/api/v1/limits')).length).toBeGreaterThan(1))
+  })
+})

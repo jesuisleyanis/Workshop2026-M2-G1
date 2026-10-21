@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { BankDataContext, type BankData } from '../hooks/bank-data-context'
 import { useAccounts } from '../hooks/useAccounts'
 import { useBeneficiaries } from '../hooks/useBeneficiaries'
+import { useLimits } from '../hooks/useLimits'
 import { useTransactions } from '../hooks/useTransactions'
 import { labelStore } from '../lib/labels'
 
@@ -13,9 +14,11 @@ export function BankDataProvider({ children }: { children: ReactNode }) {
   const accounts = useAccounts()
   const transactions = useTransactions()
   const beneficiaries = useBeneficiaries()
+  const limits = useLimits()
   const { reload: reloadAccounts } = accounts
   const { reload: reloadTransactions } = transactions
   const { reload: reloadBeneficiaries, error: beneficiariesError } = beneficiaries
+  const { reload: reloadLimits, error: limitsError } = limits
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -24,15 +27,16 @@ export function BankDataProvider({ children }: { children: ReactNode }) {
       reloadTransactions()
       // Rarement modifiés : rechargés seulement s'ils ont échoué (ex. pendant un incident).
       if (beneficiariesError) reloadBeneficiaries()
+      if (limitsError) reloadLimits()
     }, REFRESH_MS)
     return () => clearInterval(id)
-  }, [reloadAccounts, reloadTransactions, reloadBeneficiaries, beneficiariesError])
+  }, [reloadAccounts, reloadTransactions, reloadBeneficiaries, beneficiariesError, reloadLimits, limitsError])
   const [labels, setLabels] = useState(labelStore.all)
   const saveLabel = useCallback((txId: string, label: string) => setLabels(labelStore.save(txId, label)), [])
 
   const value = useMemo<BankData>(
-    () => ({ accounts, transactions, beneficiaries, labels, saveLabel }),
-    [accounts, transactions, beneficiaries, labels, saveLabel],
+    () => ({ accounts, transactions, beneficiaries, limits, labels, saveLabel }),
+    [accounts, transactions, beneficiaries, limits, labels, saveLabel],
   )
   return <BankDataContext.Provider value={value}>{children}</BankDataContext.Provider>
 }

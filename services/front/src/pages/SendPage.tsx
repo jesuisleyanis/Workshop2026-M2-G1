@@ -10,6 +10,7 @@ import { useBankData } from '../hooks/useBankData'
 import { useTxViews } from '../hooks/useTxViews'
 import { accountBadge, accountName, last4, recipients, type Recipient } from '../lib/bank'
 import { categoryLabel } from '../lib/categories'
+import { exceedsLimit } from '../lib/limits'
 import { copyText } from '../lib/clipboard'
 import { userMessage } from '../lib/errorMessages'
 import { formatMoney } from '../lib/format'
@@ -39,7 +40,7 @@ export function SendPage() {
 }
 
 function SendFlow({ accounts }: { accounts: Account[] }) {
-  const { accounts: accountsRes, transactions, beneficiaries: beneficiariesRes, saveLabel } = useBankData()
+  const { accounts: accountsRes, transactions, beneficiaries: beneficiariesRes, limits, saveLabel } = useBankData()
   const beneficiaries = useMemo(() => beneficiariesRes.data ?? [], [beneficiariesRes.data])
   const { views } = useTxViews()
   const { isDesktop, toast } = useShell()
@@ -132,6 +133,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
     setStep('result')
     accountsRes.reload()
     transactions.reload()
+    limits.reload()
   }
 
   function reset() {
@@ -143,6 +145,13 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
     goStep(1)
   }
 
+  const srcLimit = limits.data?.find((l) => l.accountId === src.id)
+  // Avertissement seulement : le plafond affiché peut être périmé, payment-api reste l'autorité (409 limit_exceeded).
+  const limitWarn = exceedsLimit(srcLimit, amount) && srcLimit?.remaining != null && (
+    <Alert tone="warn">
+      Ce montant dépasse votre plafond mensuel restant ({formatMoney(srcLimit.remaining, src.currency)}) : la banque risque de refuser le virement.
+    </Alert>
+  )
   const cta = `Envoyer ${formatMoney(amount, src.currency)}`
   const avail = `Disponible : ${formatMoney(src.balance, src.currency)}`
   const recapRows: [string, string][] = [
@@ -232,6 +241,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
           </button>
         ))}
       </div>
+      {limitWarn}
     </>
   )
 
@@ -660,8 +670,13 @@ function ResultCard({
       view = {
         icon: 'x',
         tone: 'bg-ko-bg text-ko-fg',
-        title: outcome.kind === 'limit' ? 'Virement refusé — plafond dépassé' : 'Virement refusé',
-        text: outcome.error ? userMessage(outcome.error) : 'La banque a refusé ce virement.',
+        title: outcome.kind === 'limit' ? 'Virement refusé — plafond mensuel atteint' : 'Virement refusé',
+        text:
+          outcome.kind === 'limit'
+            ? `Le montant de ${money} dépasse le plafond mensuel restant du ${accountName(src.id).toLowerCase()}. Il se réinitialise le 1er du mois.`
+            : outcome.error
+              ? userMessage(outcome.error)
+              : 'La banque a refusé ce virement.',
         a: ['Modifier le montant', onEditAmount],
         b: ['Retour à l’accueil', onHome],
       }

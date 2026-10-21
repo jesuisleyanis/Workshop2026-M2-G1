@@ -10,7 +10,7 @@ import { avatarTone, initials } from '../lib/bank'
 
 export function ProfilePage() {
   const { username, expiresAt, logout } = useAuth()
-  const { accounts, beneficiaries } = useBankData()
+  const { accounts, beneficiaries, limits } = useBankData()
   const navigate = useNavigate()
   const left = useSecondsLeft(expiresAt)
   const [confirm, setConfirm] = useState(false)
@@ -19,6 +19,7 @@ export function ProfilePage() {
   const subs: Record<string, string> = {
     '/rib': plural(accounts.data?.length ?? 0, 'compte'),
     '/beneficiaries': plural(beneficiaries.data?.length ?? 0, 'bénéficiaire'),
+    '/limits': limits.data ? (limits.data.some((l) => l.limit !== null) ? 'Plafond mensuel' : 'Sans plafond') : '',
   }
 
   return (

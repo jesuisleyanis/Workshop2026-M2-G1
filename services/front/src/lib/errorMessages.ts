@@ -2,6 +2,7 @@ import { ApiError } from '../api/errors'
 
 const BY_CODE: Record<string, string> = {
   insufficient_funds: 'Solde insuffisant pour ce virement.',
+  limit_exceeded: 'Plafond mensuel de virement atteint.',
   invalid_credentials: 'Identifiant ou mot de passe incorrect.',
   validation_error: 'Les informations saisies sont invalides.',
   rate_limited: 'Trop de tentatives. Patientez un instant avant de réessayer.',

@@ -93,3 +93,13 @@ export interface NewBeneficiary {
   name: string
   iban: string
 }
+
+/** GET /api/v1/limits (#46) : plafond mensuel de virement par compte, en euros. `limit` null = sans plafond. */
+export interface AccountLimit {
+  accountId: string
+  limit: number | null
+  used: number
+  remaining: number | null
+  /** YYYY-MM-DD, exclusif : date de remise à zéro (1er du mois suivant, UTC). */
+  periodEnd: string
+}

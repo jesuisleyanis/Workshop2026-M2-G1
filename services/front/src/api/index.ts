@@ -1,9 +1,9 @@
 import { API_BASE } from '../config'
 import { createApiClient, type ApiClient } from './client'
-import { parseAccounts, parseBeneficiaries, parseBeneficiary, parseLogin, parseServiceHealth, parseSpending, parseTransaction, parseTransactions } from './parsers'
+import { parseAccounts, parseLimits, parseBeneficiaries, parseBeneficiary, parseLogin, parseServiceHealth, parseSpending, parseTransaction, parseTransactions } from './parsers'
 import { tokenStore } from './tokenStore'
 import { serviceStatus } from '../lib/serviceStatus'
-import type { Account, Beneficiary, LoginRequest, LoginResponse, NewBeneficiary, ServiceHealth, Spending, Transaction, TransferRequest } from '../types/api'
+import type { Account, AccountLimit, Beneficiary, LoginRequest, LoginResponse, NewBeneficiary, ServiceHealth, Spending, Transaction, TransferRequest } from '../types/api'
 
 /** Endpoints métier /api/v1 (docs/contracts.md : préfixe /api/v1, JWT Bearer). */
 export function createEndpoints(client: ApiClient) {
@@ -27,6 +27,8 @@ export function createEndpoints(client: ApiClient) {
     },
     getTransaction: async (id: string, signal?: AbortSignal): Promise<Transaction> =>
       parseTransaction(await client.request(`/api/v1/transactions/${encodeURIComponent(id)}`, { signal })),
+    getLimits: async (signal?: AbortSignal): Promise<AccountLimit[]> =>
+      parseLimits(await client.request('/api/v1/limits', { signal })),
     listTransactions: async (signal?: AbortSignal): Promise<Transaction[]> =>
       parseTransactions(await client.request('/api/v1/transactions', { signal })),
     createTransaction: async (req: TransferRequest): Promise<Transaction> =>
