@@ -8,7 +8,7 @@ import logging
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Path, Query, Request, Response
@@ -20,7 +20,7 @@ from resilience_common.metrics import db_errors_total, instrument, transactions_
 from resilience_db.config import make_engine, make_session_factory
 from resilience_db.migrate import upgrade_with_retry
 from resilience_db.models import Account, Transaction, TransactionStatus, User
-from sqlalchemy import Engine, and_, or_, select, text
+from sqlalchemy import Engine, and_, func, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -72,7 +72,11 @@ DbId = Annotated[int, Path(ge=1, le=2**31 - 1)]
 def _as_seen_by(tx: Transaction, own_ids: set[int]) -> TransactionOut:
     # La catégorie est celle de l'émetteur : jamais divulguée au destinataire (#44).
     out = TransactionOut.model_validate(tx)
-    return out if tx.src_account in own_ids else out.model_copy(update={"category": None})
+    if tx.src_account in own_ids:
+        return out
+    # Catégorie et référence (ex. « sched-12-2026-10-21 » : programmation, périodicité) de
+    # l'émetteur : jamais divulguées au destinataire.
+    return out.model_copy(update={"category": None, "request_id": None})
 
 
 def _db_reachable(session) -> bool:
@@ -156,11 +160,31 @@ def create_app(
             raise ApiError(401, "invalid_token", "Invalid token", {"WWW-Authenticate": "Bearer"})
         return user
 
-    def require_recent_auth(amount_cents: int, request: Request, user: User) -> None:
+    def require_recent_auth(
+        amount_cents: int, request: Request, user: User, src: Account | None = None, session=None
+    ) -> None:
         """Step-up (#51) : gros montant -> mot de passe vérifié il y a moins de N secondes.
 
-        `auth_time` vient du JWT déjà vérifié par current_user (pas de second décodage)."""
-        if amount_cents <= settings.step_up_threshold_cents:
+        `auth_time` vient du JWT déjà vérifié par current_user (pas de second décodage). Anti-
+        fractionnement : sur un compte plafonné, le seuil porte sur le montant PLUS les virements
+        vers des tiers des dernières 24 h (plusieurs 499 € avec un jeton volé ne passent pas).
+        Comptes de service (sans plafond : verify_tx, trafic normal) : montant seul, aucune requête.
+        """
+        total = amount_cents
+        if (
+            amount_cents <= settings.step_up_threshold_cents
+            and src is not None
+            and src.user_id == user.id
+            and src.monthly_limit_cents is not None
+        ):
+            t = now()
+            total += session.scalar(
+                select(func.coalesce(func.sum(Transaction.amount_cents), 0)).where(
+                    Transaction.src_account == src.id,
+                    *stats.spend_scope(user.id, t - timedelta(hours=24), t + timedelta(seconds=1)),
+                )
+            )
+        if total <= settings.step_up_threshold_cents:
             return
         auth_time = getattr(request.state, "auth_time", None)
         age = now().timestamp() - auth_time if isinstance(auth_time, int | float) else None
@@ -251,7 +275,9 @@ def create_app(
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
-        require_recent_auth(body.amount_cents, request, user)
+        require_recent_auth(
+            body.amount_cents, request, user, session.get(Account, body.src_account), session
+        )
         try:
             tx = transfer(
                 session,

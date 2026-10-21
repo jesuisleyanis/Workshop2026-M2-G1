@@ -100,3 +100,52 @@ def test_third_party_refusals_cannot_inflate_a_statement(client, alice, db, monk
         params={"account_id": 1, "from": "2026-10-01", "to": "2026-10-31", "format": "json"},
     )
     assert r.status_code == 200 and len(r.json()["rows"]) == 1
+
+
+@pytest.mark.parametrize("iban", ["FR76\u0000B1", "FR76\tB1", "FR76-B1", "FR76 B1;"])
+def test_control_or_odd_characters_in_iban_are_422_not_db_errors(client, alice, iban):
+    r = client.post(
+        "/api/v1/beneficiaries", headers=alice, json={"display_name": "x", "iban_fake": iban}
+    )
+    assert r.status_code == 422 and r.json()["error"]["code"] == "validation_error"
+
+
+def test_sender_reference_is_hidden_from_the_recipient(client, alice, bob):
+    sent = client.post(
+        TX,
+        headers={**alice, "X-Request-ID": "11111111-1111-4111-8111-111111111111"},
+        json={"src_account": 1, "dst_account": 3, "amount_cents": 1},
+    ).json()
+    (theirs,) = client.get(TX, headers=bob).json()
+    assert theirs["request_id"] is None and sent["request_id"] is not None
+    assert client.get(f"{TX}/{sent['id']}", headers=bob).json()["request_id"] is None
+
+
+def test_api_responses_are_never_cached(client, alice):
+    assert client.get("/api/v1/accounts", headers=alice).headers["cache-control"] == "no-store"
+
+
+def test_splitting_under_the_threshold_still_requires_step_up_on_a_capped_account(
+    client, db, world
+):
+    acc = db.get(Account, 1)
+    acc.balance_cents, acc.monthly_limit_cents = 10_000_000, 10_000_000
+    db.commit()
+    stale = bearer(make_token("alice", auth_time=int(time.time()) - 3600))
+    body = {"src_account": 1, "dst_account": 3, "amount_cents": 40_000}
+    assert client.post(TX, headers=stale, json=body).status_code == 201
+    r = client.post(TX, headers=stale, json=body)  # 800 € en 24 h > 500 €
+    assert r.status_code == 403 and r.json()["error"]["code"] == "step_up_required"
+    fresh = bearer(make_token("alice", auth_time=int(time.time())))
+    assert client.post(TX, headers=fresh, json=body).status_code == 201
+
+
+def test_uncapped_service_accounts_keep_the_per_transfer_rule(client, db, world):
+    db.get(Account, 1).balance_cents = 10_000_000  # monthly_limit_cents NULL (service)
+    db.commit()
+    stale = bearer(make_token("alice", auth_time=int(time.time()) - 3600))
+    for _ in range(3):
+        r = client.post(
+            TX, headers=stale, json={"src_account": 1, "dst_account": 3, "amount_cents": 40_000}
+        )
+        assert r.status_code == 201, "verify_tx / trafic normal jamais bloqués par le cumul"

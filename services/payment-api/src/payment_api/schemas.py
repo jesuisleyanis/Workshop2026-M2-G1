@@ -62,7 +62,9 @@ class ServiceStatusOut(BaseModel):
 class BeneficiaryIn(BaseModel):
     display_name: str = Field(min_length=1, max_length=64)
     # IBAN fictif tel qu'affiché (espaces tolérés) ; résolu vers un compte existant.
-    iban_fake: str = Field(min_length=4, max_length=42)
+    # Lettres, chiffres, espaces : un NUL ou un caractère de contrôle ferait lever un DataError
+    # psycopg (faux 503 db_error, signal ML exploitable par n'importe quel client).
+    iban_fake: str = Field(min_length=4, max_length=42, pattern=r"^[A-Za-z0-9 ]+$")
 
     @field_validator("display_name")
     @classmethod

@@ -194,6 +194,7 @@ def create_app(
                 iban_fake=new_fake_iban(),
                 balance_cents=settings.register_initial_balance_cents,
                 currency="EUR",
+                monthly_limit_cents=settings.register_monthly_limit_cents,
             )
         )
         session.add(user)

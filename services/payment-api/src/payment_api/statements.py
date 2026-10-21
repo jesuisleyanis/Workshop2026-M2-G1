@@ -84,7 +84,8 @@ def build(session: Session, user: User, account_id: int, start: date, end: date)
                 "created_at": t.created_at
                 if t.created_at.tzinfo
                 else t.created_at.replace(tzinfo=UTC),
-                "reference": t.request_id or f"#{t.id}",
+                # Référence de l'émetteur masquée sur un crédit (id de programmation, périodicité).
+                "reference": (t.request_id if out else None) or f"#{t.id}",
                 "direction": "debit" if out else "credit",
                 "counterparty_account": t.dst_account if out else t.src_account,
                 # Catégorie de l'émetteur : jamais divulguée au destinataire (#44).
