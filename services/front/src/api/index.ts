@@ -10,10 +10,10 @@ export function createEndpoints(client: ApiClient) {
   return {
     login: async (creds: LoginRequest): Promise<LoginResponse> =>
       parseLogin(await client.request('/api/v1/login', { method: 'POST', body: creds, auth: false })),
-    // Public et mis en cache côté serveur : sonde légère de reprise (un 503 « degraded » passe
-    // par onAvailability comme tout 5xx).
+    // Public et mis en cache côté serveur. Un 503 « degraded » signale la panne ; un 200 ne prouve
+    // que l'accès BDD de payment-api, pas la reprise des routes métier (reportRecovery: false).
     getStatus: async (signal?: AbortSignal): Promise<ServiceHealth> =>
-      parseServiceHealth(await client.request('/api/v1/status', { auth: false, signal })),
+      parseServiceHealth(await client.request('/api/v1/status', { auth: false, signal, reportRecovery: false })),
     getAccounts: async (signal?: AbortSignal): Promise<Account[]> =>
       parseAccounts(await client.request('/api/v1/accounts', { signal })),
     listTransactions: async (signal?: AbortSignal): Promise<Transaction[]> =>

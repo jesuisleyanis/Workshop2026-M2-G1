@@ -26,7 +26,7 @@ Le front est un **site statique** (build Vite) servi par nginx **derrière le WA
 | F12 | Libellé de virement (absent de l'API) conservé localement | `lib/labels.ts` (localStorage, par id de transaction) |
 | F13 | Shell responsive : barre latérale ≥ 1024 px, barre d'onglets en dessous | `Layout`, `hooks/useMediaQuery.ts` |
 | F14 | Statistiques : dépenses par jour (semaine/mois, navigation), opérations de la période | `StatsPage`, `lib/bank.ts` |
-| F15 | Bandeau d'état du service (#42) : « perturbé » sur réseau/timeout/5xx de **n'importe quel** appel (dont le rafraîchissement 15 s des données), puis sonde `GET /api/v1/status` (public, sans jeton) toutes les 5 s tant que le service est perturbé ; « rétabli » à la première réponse saine, auto-masqué. Aucune sonde en régime normal (pas de trafic ajouté à la baseline ML) | `lib/serviceStatus.ts`, `Layout`, `BankDataProvider`, `api.getStatus` |
+| F15 | Bandeau d'état du service (#42) : « perturbé » sur réseau/timeout/5xx de **n'importe quel** appel (dont le rafraîchissement 15 s des données), puis sonde `GET /api/v1/status` (public, sans jeton) toutes les 5 s tant que le service est perturbé ; « rétabli » seulement quand `GET /api/v1/accounts` répond aussi (un 200 de la sonde, ou un 429 du WAF, ne vaut pas reprise : `reportRecovery: false`), puis rechargement des données et auto-masquage. Aucune sonde en régime normal (pas de trafic ajouté à la baseline ML) | `lib/serviceStatus.ts`, `Layout`, `BankDataProvider`, `api.getStatus` |
 
 ### Design
 

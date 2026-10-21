@@ -211,7 +211,8 @@ function Sidebar({ pathname, activeTab, expiresAt }: { pathname: string; activeT
 /**
  * Bandeau D6 : visible pendant l'incident, « Service rétabli » à la reprise. La détection vient du
  * rafraîchissement 15 s des données (BankDataProvider) ; la reprise est sondée toutes les 5 s sur
- * GET /api/v1/status (public, en cache 2 s côté serveur) plutôt que sur une route métier.
+ * GET /api/v1/status (public, en cache 2 s), puis confirmée par GET /api/v1/accounts avant
+ * d'afficher « rétabli » (la BDD joignable ne prouve pas que les routes métier répondent).
  */
 function ServiceBanner({ isDesktop }: { isDesktop: boolean }) {
   const status = useServiceStatus()
@@ -220,7 +221,11 @@ function ServiceBanner({ isDesktop }: { isDesktop: boolean }) {
 
   useEffect(() => {
     if (status !== 'degraded') return
-    const id = setInterval(() => void api.getStatus().catch(() => {}), 5000)
+    // Sonde légère d'abord ; la reprise n'est déclarée que si une vraie route métier répond.
+    const probe = async () => {
+      if ((await api.getStatus()).status === 'ok') await api.getAccounts()
+    }
+    const id = setInterval(() => void probe().catch(() => {}), 5000)
     return () => clearInterval(id)
   }, [status])
 

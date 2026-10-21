@@ -20,6 +20,11 @@ export interface RequestOptions {
   /** false pour login (pas de Bearer, pas de déconnexion sur 401). */
   auth?: boolean
   signal?: AbortSignal
+  /**
+   * false : une réponse saine ne vaut PAS reprise (seuls les échecs sont signalés). Pour les
+   * sondes qui ne prouvent pas que les routes métier répondent (GET /api/v1/status, un 429 du WAF).
+   */
+  reportRecovery?: boolean
 }
 
 export interface ApiClient {
@@ -31,7 +36,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   const { baseUrl, getToken, onUnauthorized, onAvailability, timeoutMs = 10_000 } = opts
 
   async function request<T = unknown>(path: string, o: RequestOptions = {}): Promise<T> {
-    const { method = 'GET', body, auth = true, signal } = o
+    const { method = 'GET', body, auth = true, signal, reportRecovery = true } = o
     const doFetch = opts.fetchImpl ?? fetch
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (body !== undefined) headers['Content-Type'] = 'application/json'
@@ -68,7 +73,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       signal?.removeEventListener('abort', onAbort)
     }
 
-    onAvailability?.(res.status < 500, startedAt)
+    if (res.status >= 500 || reportRecovery) onAvailability?.(res.status < 500, startedAt)
     const parsed = await readJson(res)
     if (!res.ok) {
       const error = errorFromResponse(res.status, parsed)

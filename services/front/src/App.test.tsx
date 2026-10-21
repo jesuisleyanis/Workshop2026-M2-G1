@@ -178,17 +178,18 @@ describe('Front - espace client', () => {
     let down = false
     const fail = () => jsonResponse({ error: { code: 'upstream', message: 'x' } }, 503)
     const degraded = () => jsonResponse({ status: 'degraded', checked_at: '2026-10-21T10:00:00Z' }, 503)
+    let dbDown = false
     const f = stubFetch({
       'GET /api/v1/accounts': () => (down ? fail() : jsonResponse(ACCOUNTS)),
       'GET /api/v1/transactions': () => (down ? fail() : jsonResponse(TXS)),
-      'GET /api/v1/status': () => (down ? degraded() : jsonResponse({ status: 'ok', checked_at: '2026-10-21T10:00:05Z' })),
+      'GET /api/v1/status': () => (dbDown ? degraded() : jsonResponse({ status: 'ok', checked_at: '2026-10-21T10:00:05Z' })),
     })
     const statusCalls = () => f.mock.calls.filter(([u]) => String(u).endsWith('/api/v1/status'))
     try {
       renderApp('/')
       await screen.findByTestId('balance')
       expect(statusCalls()).toHaveLength(0) // pas de sonde tant que tout va bien
-      down = true
+      down = dbDown = true
       act(() => vi.advanceTimersByTime(15_000))
       expect(await screen.findByText('Service perturbé — reprise automatique en cours')).toBeInTheDocument()
       // Les données déjà affichées restent visibles pendant l'incident.
@@ -198,8 +199,13 @@ describe('Front - espace client', () => {
       expect(screen.getByText('Service perturbé — reprise automatique en cours')).toBeInTheDocument()
       const [, init] = statusCalls()[0] as unknown as [string, RequestInit]
       expect((init.headers as Record<string, string>).Authorization).toBeUndefined() // route publique
+      dbDown = false // BDD revenue, mais les routes métier échouent encore : pas de faux « rétabli »
+      act(() => vi.advanceTimersByTime(5_000))
+      await waitFor(() => expect(statusCalls()).toHaveLength(2))
+      await waitFor(() => expect(f.mock.calls.filter(([u]) => String(u).endsWith('/api/v1/accounts')).length).toBeGreaterThan(1))
+      expect(screen.getByText('Service perturbé — reprise automatique en cours')).toBeInTheDocument()
       down = false
-      act(() => vi.advanceTimersByTime(5_000)) // sonde de reprise : ok
+      act(() => vi.advanceTimersByTime(5_000)) // sonde ok puis /accounts ok : reprise confirmée
       expect(await screen.findByText('Service rétabli')).toBeInTheDocument()
     } finally {
       vi.useRealTimers()

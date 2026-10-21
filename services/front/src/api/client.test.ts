@@ -16,6 +16,20 @@ function make(fetchImpl: typeof fetch, extra: Partial<Parameters<typeof createAp
 }
 
 describe('client API centralisé', () => {
+  it('reportRecovery:false : un 429 ou un 200 ne vaut pas reprise, un 5xx reste signalé', async () => {
+    const onAvailability = vi.fn()
+    let status = 429
+    const f = vi.fn(async () => jsonResponse({ status: 'ok', checked_at: 'x' }, status))
+    const { client } = make(f as unknown as typeof fetch, { onAvailability })
+    await client.request('/api/v1/status', { auth: false, reportRecovery: false }).catch(() => {})
+    status = 200
+    await client.request('/api/v1/status', { auth: false, reportRecovery: false })
+    expect(onAvailability).not.toHaveBeenCalled()
+    status = 503
+    await client.request('/api/v1/status', { auth: false, reportRecovery: false }).catch(() => {})
+    expect(onAvailability).toHaveBeenCalledWith(false, expect.any(Number))
+  })
+
   it('préfixe la base, envoie le Bearer et parse le JSON', async () => {
     const f = vi.fn(async () => jsonResponse([{ id: 'a' }]))
     const { client } = make(f as unknown as typeof fetch)
