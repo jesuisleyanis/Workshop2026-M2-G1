@@ -17,6 +17,7 @@ from resilience_db.models import (
     Beneficiary,
     FaceEnrollment,
     Transaction,
+    TransactionCategory,
     TransactionStatus,
     User,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "Beneficiary",
     "FaceEnrollment",
     "Transaction",
+    "TransactionCategory",
     "TransactionStatus",
     "User",
     "build_database_url",

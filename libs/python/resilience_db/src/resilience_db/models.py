@@ -32,6 +32,23 @@ class TransactionStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class TransactionCategory(str, Enum):
+    """Catégorie de dépense (#44). Pas un label de métrique : cardinalité figée par le contrat."""
+
+    FOOD = "food"
+    SHOPPING = "shopping"
+    TRANSPORT = "transport"
+    SUBSCRIPTIONS = "subscriptions"
+    HEALTH = "health"
+    LEISURE = "leisure"
+    HOUSING = "housing"
+    TRANSFER = "transfer"
+    OTHER = "other"
+
+
+CATEGORY_CHECK = "category IN ({})".format(", ".join(f"'{c.value}'" for c in TransactionCategory))
+
+
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
@@ -103,7 +120,10 @@ class FaceEnrollment(Base):
 
 class Transaction(Base):
     __tablename__ = "transactions"
-    __table_args__ = (CheckConstraint("amount_cents > 0", name="ck_transactions_amount_positive"),)
+    __table_args__ = (
+        CheckConstraint("amount_cents > 0", name="ck_transactions_amount_positive"),
+        CheckConstraint(CATEGORY_CHECK, name="ck_transactions_category_valid"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     src_account: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False, index=True)
@@ -117,6 +137,12 @@ class Transaction(Base):
         nullable=False,
     )
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    category: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=TransactionCategory.TRANSFER.value,
+        server_default=TransactionCategory.TRANSFER.value,
+    )
 
 
 class Beneficiary(Base):

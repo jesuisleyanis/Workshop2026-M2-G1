@@ -3,10 +3,17 @@
 import pytest
 from resilience_db import Base, build_database_url, make_engine, make_session_factory
 from resilience_db.migrate import upgrade
-from resilience_db.models import Account, Beneficiary, FaceEnrollment, User
+from resilience_db.models import (
+    Account,
+    Beneficiary,
+    FaceEnrollment,
+    Transaction,
+    TransactionCategory,
+    User,
+)
 from resilience_db.passwords import hash_password, verify_password
 from resilience_db.seed import PAYEES, demo_iban, payee_iban, seed_demo_data
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
 
@@ -160,3 +167,38 @@ def test_password_from_file(monkeypatch, tmp_path):
 def test_payee_ibans_never_collide_with_demo_ibans():
     demo = {demo_iban(n) for n in range(1, 10_000)}
     assert not demo & {payee_iban(i) for i in range(1, len(PAYEES) + 1)}
+
+
+def test_transaction_category_defaults_to_transfer_and_is_bounded(tmp_path):
+    # Via la migration (pas create_all) : défaut serveur + CHECK réellement posés en base.
+    engine = make_engine(f"sqlite:///{tmp_path}/m.db")
+    upgrade(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "s3cret-pass", users=2)
+        a, b = s.query(Account).order_by(Account.id).limit(2).all()
+        tx = Transaction(src_account=a.id, dst_account=b.id, amount_cents=1, status="created")
+        s.add(tx)
+        s.commit()
+        assert tx.category == "transfer"
+        s.execute(
+            text(
+                "INSERT INTO transactions (src_account, dst_account, amount_cents, status) "
+                "VALUES (:a, :b, 1, 'created')"
+            ),
+            {"a": a.id, "b": b.id},
+        )
+        s.commit()
+        assert s.execute(text("SELECT category FROM transactions ORDER BY id DESC")).scalar() == (
+            "transfer"
+        ), "défaut serveur : un INSERT sans catégorie reste valide"
+        s.add(
+            Transaction(
+                src_account=a.id, dst_account=b.id, amount_cents=1, status="created", category="x"
+            )
+        )
+        with pytest.raises(IntegrityError):
+            s.commit()
+    from importlib import import_module
+
+    mig = import_module("resilience_db.migrations.versions.0004_transaction_category")
+    assert set(mig.CATEGORIES) == {c.value for c in TransactionCategory}, "migration = modèle"

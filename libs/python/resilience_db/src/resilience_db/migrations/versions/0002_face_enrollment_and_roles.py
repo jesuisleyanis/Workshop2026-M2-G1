@@ -49,9 +49,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
         ),
     )
-    op.create_index(
-        "ix_face_enrollments_user_id", "face_enrollments", ["user_id"], unique=True
-    )
+    op.create_index("ix_face_enrollments_user_id", "face_enrollments", ["user_id"], unique=True)
 
 
 def downgrade() -> None:
