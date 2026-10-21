@@ -133,15 +133,40 @@ def test_idor_other_users_notification_is_404(client, alice, bob):
     assert client.get(N, headers=alice).json()[0]["read_at"] is None, "read-all cloisonné"
 
 
-def test_retention_is_bounded_per_user(db, world):
-    alice = world["alice"]
-    for i in range(notifications.RETENTION + 3 * notifications.PRUNE_EVERY):
-        notifications.notify(db, alice.id, "transfer_sent", "t", f"b{i}")
+def test_retention_is_applied_off_the_hot_path(db, world, client, alice):
+    alice_id = world["alice"].id
+    for i in range(notifications.RETENTION + 30):
+        notifications.notify(db, alice_id, "transfer_sent", "t", f"b{i}")
     db.commit()
-    kept = db.query(Notification).filter_by(user_id=alice.id).count()
-    assert notifications.RETENTION <= kept <= notifications.RETENTION + notifications.PRUNE_EVERY
-    newest = db.query(Notification).order_by(Notification.id.desc()).first()
-    assert newest.body == f"b{notifications.RETENTION + 3 * notifications.PRUNE_EVERY - 1}"
+    assert (
+        db.query(Notification).filter_by(user_id=alice_id).count() == notifications.RETENTION + 30
+    )
+    notifications.prune_all(db)  # tâche de fond
+    kept = db.query(Notification).filter_by(user_id=alice_id).order_by(Notification.id).all()
+    assert len(kept) == notifications.RETENTION
+    assert kept[-1].body == f"b{notifications.RETENTION + 29}", "les plus récentes gardées"
+    for i in range(5):
+        notifications.notify(db, alice_id, "transfer_sent", "t", f"x{i}")
+    db.commit()
+    assert len(client.get(N, headers=alice).json()) == notifications.RETENTION, "et à la lecture"
+
+
+def test_notify_rejects_unknown_types_before_reaching_the_database(db, world):
+    with pytest.raises(ValueError):
+        notifications.notify(db, world["alice"].id, "trasfer_sent", "t", "b")
+
+
+def test_unread_count_for_the_bell(client, alice):
+    for _ in range(3):
+        _send(client, alice, 1)
+    assert client.get(f"{N}/unread-count", headers=alice).json() == {"count": 3}
+    client.post(f"{N}/read-all", headers=alice)
+    assert client.get(f"{N}/unread-count", headers=alice).json() == {"count": 0}
+
+
+def test_rejected_internal_transfer_does_not_notify(client, alice):
+    _send(client, alice, 99_999, src=2, dst=1)
+    assert _types(client, alice) == []
 
 
 def test_bearer_required(client):

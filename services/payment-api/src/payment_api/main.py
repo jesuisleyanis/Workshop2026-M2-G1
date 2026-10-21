@@ -101,11 +101,16 @@ def create_app(
         get_logger(SERVICE_NAME, getattr(logging, settings.log_level, logging.INFO))
     )
 
+    def _prune_notifications() -> None:
+        with session_factory() as session:
+            notifications.prune_all(session)
+
     async def _scheduler_loop() -> None:
         # Hors du thread de l'event loop : le ledger est synchrone (SQLAlchemy).
         while True:
             try:
                 await asyncio.to_thread(schedules.run_due, session_factory, log, now)
+                await asyncio.to_thread(_prune_notifications)
             except Exception:  # BDD indisponible pendant un incident : on retente au tour suivant
                 log.warning("Scheduler pass failed", exc_info=True)
             await asyncio.sleep(settings.scheduler_interval_s)
@@ -321,6 +326,13 @@ def create_app(
         session=Depends(get_session),
     ):
         return notifications.list_for(session, user.id, unread)
+
+    @app.get("/api/v1/notifications/unread-count")
+    def notifications_unread_count(
+        user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        # Badge de la cloche : un COUNT, pas 100 lignes à chaque sondage de 30 s.
+        return {"count": notifications.unread_count(session, user.id)}
 
     @app.post("/api/v1/notifications/read-all")
     def read_all_notifications(user: User = Depends(current_user), session=Depends(get_session)):

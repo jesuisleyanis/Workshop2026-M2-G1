@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from resilience_db.models import Account, Transaction, TransactionStatus, User
@@ -20,6 +21,27 @@ class Rejection(Exception):
     def __init__(self, status: int, code: str, message: str) -> None:
         self.status, self.code, self.message = status, code, message
         super().__init__(message)
+
+
+SenderNotice = Callable[[str], tuple[str, str, str]]  # outcome -> (type, titre, corps)
+
+
+def _default_notice(amount_cents: int, dst_id: int) -> SenderNotice:
+    def notice(outcome: str) -> tuple[str, str, str]:
+        if outcome == "sent":
+            return (
+                "transfer_sent",
+                "Virement émis",
+                f"{euros(amount_cents)} vers le compte n°{dst_id}.",
+            )
+        reason = "plafond mensuel atteint" if outcome == "limit_exceeded" else "solde insuffisant"
+        return (
+            "transfer_rejected",
+            "Virement refusé",
+            f"{euros(amount_cents)} vers le compte n°{dst_id} : {reason}.",
+        )
+
+    return notice
 
 
 def check_amount_and_accounts(src_id: int, dst_id: int, amount_cents: int) -> None:
@@ -41,13 +63,15 @@ def transfer(
     request_id: str | None,
     category: str = "transfer",
     now: datetime | None = None,
-    notify_sender: bool = True,
+    sender_notice: SenderNotice | None = None,
 ) -> Transaction:
     """Débite `src_id` (qui doit appartenir à `user`) et crédite `dst_id`, atomiquement.
 
-    Notifications (#49) écrites dans la même transaction. `notify_sender=False` : l'appelant
-    (exécuteur des virements programmés) notifie l'émetteur lui-même.
+    Notifications (#49) écrites dans la même transaction. `sender_notice(outcome)` remplace le
+    message de l'émetteur (`outcome` = "sent" ou le code de refus) : l'exécuteur des virements
+    programmés s'en sert, l'avis reste dans la transaction du virement.
     """
+    notice = sender_notice or _default_notice(amount_cents, dst_id)
     check_amount_and_accounts(src_id, dst_id, amount_cents)
 
     # Verrou de ligne dans l'ordre des id : pas de deadlock entre deux virements croisés,
@@ -81,15 +105,8 @@ def transfer(
                 category=category,
             )
         )
-        if notify_sender:
-            reason = "plafond mensuel atteint" if code == "limit_exceeded" else "solde insuffisant"
-            notify(
-                session,
-                src.user_id,
-                "transfer_rejected",
-                "Virement refusé",
-                f"{euros(amount_cents)} vers le compte n°{dst.id} : {reason}.",
-            )
+        if dst.user_id != src.user_id:  # entre ses propres comptes : pas de notification
+            notify(session, src.user_id, *notice(code))
         session.commit()
         return Rejection(status, code, message)
 
@@ -117,14 +134,7 @@ def transfer(
     )
     session.add(tx)
     if dst.user_id != src.user_id:  # virement interne : pas de notification
-        if notify_sender:
-            notify(
-                session,
-                src.user_id,
-                "transfer_sent",
-                "Virement émis",
-                f"{euros(amount_cents)} vers le compte n°{dst.id}.",
-            )
+        notify(session, src.user_id, *notice("sent"))
         notify(
             session,
             dst.user_id,
