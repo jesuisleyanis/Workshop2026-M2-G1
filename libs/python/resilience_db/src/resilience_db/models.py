@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import Enum, StrEnum
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -211,6 +212,68 @@ class Card(Base):
     online_payments: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=true()
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class ScheduledTransfer(Base):
+    """Virement programmé (#48), exécuté par la tâche de fond de payment-api via le ledger."""
+
+    __tablename__ = "scheduled_transfers"
+    __table_args__ = (
+        CheckConstraint("frequency IN ('once', 'weekly', 'monthly')", name="ck_sched_frequency"),
+        CheckConstraint(
+            "status IN ('active', 'paused', 'cancelled', 'completed')", name="ck_sched_status"
+        ),
+        CheckConstraint("amount_cents > 0", name="ck_sched_amount_positive"),
+        CheckConstraint(CATEGORY_CHECK, name="ck_sched_category_valid"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    src_account: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    dst_account: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    category: Mapped[str] = mapped_column(String(16), nullable=False, default="transfer")
+    frequency: Mapped[str] = mapped_column(String(8), nullable=False)
+    start_on: Mapped[date] = mapped_column(Date, nullable=False)
+    # NULL quand plus rien n'est dû (annulée / terminée).
+    next_run_on: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    end_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class ScheduledRun(Base):
+    """Exécution d'une échéance. UNIQUE (scheduled_id, run_on) = clé d'idempotence : la ligne est
+    réservée AVANT le virement, donc un redémarrage par la remédiation ou une seconde réplique ne
+    peut jamais exécuter deux fois la même échéance (au plus une fois)."""
+
+    __tablename__ = "scheduled_runs"
+    __table_args__ = (
+        UniqueConstraint("scheduled_id", "run_on", name="uq_scheduled_runs_once"),
+        CheckConstraint(
+            "status IN ('pending', 'executed', 'failed')", name="ck_scheduled_runs_status"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scheduled_id: Mapped[int] = mapped_column(
+        ForeignKey("scheduled_transfers.id"), nullable=False, index=True
+    )
+    run_on: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="pending")
+    error_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    transaction_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utcnow,
