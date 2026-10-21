@@ -12,7 +12,7 @@ from resilience_db.models import (
     User,
 )
 from resilience_db.passwords import hash_password, verify_password
-from resilience_db.seed import PAYEES, demo_iban, payee_iban, seed_demo_data
+from resilience_db.seed import HISTORY, PAYEES, demo_iban, payee_iban, seed_demo_data
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
@@ -202,3 +202,17 @@ def test_transaction_category_defaults_to_transfer_and_is_bounded(tmp_path):
 
     mig = import_module("resilience_db.migrations.versions.0004_transaction_category")
     assert set(mig.CATEGORIES) == {c.value for c in TransactionCategory}, "migration = modèle"
+
+
+def test_seed_history_is_categorised_and_only_for_new_clients():
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "s3cret-pass", users=2)
+        assert s.query(Transaction).count() == 2 * len(HISTORY)
+        seed_demo_data(s, "s3cret-pass", users=3)  # demo03 nouveau, demo01/02 inchangés
+        assert s.query(Transaction).count() == 3 * len(HISTORY)
+        cats = {t.category for t in s.query(Transaction)}
+        assert len(cats) >= 6 and cats <= {c.value for c in TransactionCategory}
+        demo = s.query(User).filter_by(username="demo01").one()
+        assert demo.accounts[0].balance_cents == 100_000, "solde de démo inchangé (verify_tx)"

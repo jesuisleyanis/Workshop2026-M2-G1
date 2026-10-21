@@ -11,12 +11,13 @@ from __future__ import annotations
 import os
 import secrets
 import sys
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from resilience_db.config import make_engine, make_session_factory, read_secret
-from resilience_db.models import Account, Beneficiary, User
+from resilience_db.models import Account, Beneficiary, Transaction, User
 from resilience_db.passwords import hash_password
 
 DEFAULT_USERS = 5
@@ -30,6 +31,18 @@ PAYEES = (
     ("tiers02", "Boulangerie du Port"),
     ("tiers03", "SCI Horizon — loyer"),
     ("tiers04", "Club de sport Atlas"),
+)
+# Historique de dépenses catégorisées (#44) pour un client de démo NOUVELLEMENT créé :
+# (il y a N jours, index du tiers, catégorie, centimes). Écran Statistiques non vide en démo.
+HISTORY = (
+    (1, 1, "food", 1250),
+    (2, 0, "leisure", 2400),
+    (3, 1, "food", 860),
+    (5, 3, "subscriptions", 2999),
+    (8, 1, "shopping", 4590),
+    (11, 0, "transport", 1800),
+    (15, 3, "health", 2500),
+    (19, 2, "housing", 5000),
 )
 DEMO_NAMES = ("Camille Durand", "Nathan Petit", "Inès Moreau", "Lucas Girard", "Chloé Fontaine")
 
@@ -79,7 +92,40 @@ def seed_demo_data(
         created.append(username)
     session.commit()
     seed_beneficiaries(session, users=users)
+    seed_history(session, created)
     return created
+
+
+def seed_history(session: Session, usernames: list[str], now: datetime | None = None) -> int:
+    """Dépenses passées vers les tiers fictifs, UNIQUEMENT pour les clients créés à cet appel.
+
+    Le solde du client reste celui du seed (l'historique précède son dépôt initial, qui n'est
+    pas une transaction) ; les tiers sont crédités. Idempotent par construction : un client
+    déjà existant n'est jamais re-rempli.
+    """
+    now = now or datetime.now(UTC)
+    payees = [account for _, account in _ensure_payees(session)]
+    count = 0
+    for username in usernames:
+        user = session.scalar(select(User).where(User.username == username))
+        if user is None or not user.accounts:
+            continue
+        for days_ago, payee, category, amount in HISTORY:
+            dst = payees[payee % len(payees)]
+            dst.balance_cents += amount
+            session.add(
+                Transaction(
+                    src_account=user.accounts[0].id,
+                    dst_account=dst.id,
+                    amount_cents=amount,
+                    status="created",
+                    category=category,
+                    created_at=now - timedelta(days=days_ago, hours=3),
+                )
+            )
+            count += 1
+    session.commit()
+    return count
 
 
 def _ensure_payees(session: Session) -> list[tuple[str, Account]]:
