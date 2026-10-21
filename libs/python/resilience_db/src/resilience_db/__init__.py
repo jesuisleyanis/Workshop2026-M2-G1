@@ -14,6 +14,7 @@ from resilience_db.config import (
 from resilience_db.models import (
     Account,
     Base,
+    Beneficiary,
     FaceEnrollment,
     Transaction,
     TransactionStatus,
@@ -23,6 +24,7 @@ from resilience_db.models import (
 __all__ = [
     "Account",
     "Base",
+    "Beneficiary",
     "FaceEnrollment",
     "Transaction",
     "TransactionStatus",

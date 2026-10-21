@@ -1,4 +1,4 @@
-"""Modèles SQLAlchemy 2.0 : users, accounts, transactions (schéma de la mission)."""
+"""Modèles SQLAlchemy 2.0 : users, accounts, transactions (schéma de la mission) + app bancaire."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     String,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -36,9 +37,7 @@ class User(Base):
     __table_args__ = (
         # Habilitations du back-office (consigne additionnelle 1) : seuls operator/admin
         # accèdent au back-office durci. Garde-fou DB sur les valeurs autorisées.
-        CheckConstraint(
-            "role IN ('customer', 'operator', 'admin')", name="ck_users_role_valid"
-        ),
+        CheckConstraint("role IN ('customer', 'operator', 'admin')", name="ck_users_role_valid"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -68,9 +67,7 @@ class Account(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"), nullable=False, index=True
-    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     iban_fake: Mapped[str] = mapped_column(String(34), unique=True, nullable=False)
     balance_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="EUR")
@@ -106,17 +103,11 @@ class FaceEnrollment(Base):
 
 class Transaction(Base):
     __tablename__ = "transactions"
-    __table_args__ = (
-        CheckConstraint("amount_cents > 0", name="ck_transactions_amount_positive"),
-    )
+    __table_args__ = (CheckConstraint("amount_cents > 0", name="ck_transactions_amount_positive"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    src_account: Mapped[int] = mapped_column(
-        ForeignKey("accounts.id"), nullable=False, index=True
-    )
-    dst_account: Mapped[int] = mapped_column(
-        ForeignKey("accounts.id"), nullable=False, index=True
-    )
+    src_account: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False, index=True)
+    dst_account: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False, index=True)
     amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -126,3 +117,28 @@ class Transaction(Base):
         nullable=False,
     )
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class Beneficiary(Base):
+    """Bénéficiaire enregistré par un client (#43) : virer sans ressaisir l'IBAN.
+
+    Pointe vers un compte existant (résolu depuis l'IBAN fictif à l'ajout). Un même compte
+    n'est enregistré qu'une fois par client ; on ne s'enregistre pas soi-même (règle API).
+    """
+
+    __tablename__ = "beneficiaries"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "account_id", name="uq_beneficiaries_owner_account"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    iban_fake: Mapped[str] = mapped_column(String(34), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        server_default=func.now(),
+        nullable=False,
+    )
