@@ -18,6 +18,10 @@ class DynamicRateLimit:
         self._baseline = self._parse(baseline)
         self._current = self._baseline
         self._lock = threading.Lock()
+        # Budget en « unités » divisible par toute limite courante possible (1..baseline) :
+        # ppcm(1..baseline), calculé UNE fois (la baseline ne change jamais). Coût exact.
+        count = self._baseline[0]
+        self._units_value = math.lcm(*range(1, count + 1)) if count <= 60 else count * 1000
 
     @staticmethod
     def _parse(value: str) -> tuple[int, str]:
@@ -39,24 +43,15 @@ class DynamicRateLimit:
         return self.value
 
     @property
-    def _units(self) -> int:
-        # Budget en « unités » divisible par toute limite courante possible (1..baseline) :
-        # ppcm(1..baseline). Le coût d'un essai est alors exact, jamais un arrondi.
-        count = self._baseline[0]
-        if count <= 60:  # ppcm(1..60) ~ 1e25 : entier Python, stockage mémoire de slowapi
-            return math.lcm(*range(1, count + 1))
-        return count * 1000  # au-delà : au plus 1 essai de moins que la limite courante
-
-    @property
     def baseline_value(self) -> str:
         """Chaîne de limite FIXE passée à slowapi : la clé du compteur (qui inclut le montant de
         la limite) ne change donc jamais, et un resserrement ne remet aucun compteur à zéro."""
-        return f"{self._units}/{self._baseline[1]}"
+        return f"{self._units_value}/{self._baseline[1]}"
 
     def cost(self, _request=None) -> int:
         """Coût d'un essai : budget / limite courante, entier exact -> exactement `current` essais
         par période (resserrer augmente le coût au lieu de changer la clé du compteur)."""
-        return -(-self._units // self._current[0])  # plafond entier (pas de float à 1e25)
+        return -(-self._units_value // self._current[0])  # plafond entier (pas de float à 1e25)
 
     def tighten(self, factor: float) -> tuple[str, str]:
         """Multiplie la limite par `factor` (0 < factor <= 1), plancher FLOOR. Renvoie (avant, après)."""

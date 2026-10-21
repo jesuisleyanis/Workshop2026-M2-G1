@@ -190,8 +190,9 @@ def create_app(
             raise ApiError(409, "username_taken", "Username already exists")
         # IBAN fictif aléatoire : une collision (UNIQUE) est un aléa métier, pas un incident BDD.
         # On retente avec un nouvel IBAN plutôt que de renvoyer un 503 db_error (faux signal ML).
+        password_hash = hash_password(body.password)  # bcrypt : une seule fois, pas par essai
         for attempt in range(1, 4):
-            user = User(username=body.username, password_hash=hash_password(body.password))
+            user = User(username=body.username, password_hash=password_hash)
             user.accounts.append(
                 Account(
                     iban_fake=new_fake_iban(),
