@@ -128,3 +128,38 @@ def test_category_is_not_a_metric_label(client, alice):
     )
     labels = {k for m in REGISTRY.collect() for s in m.samples for k in s.labels}
     assert "category" not in labels, "contrat §2 figé : pas de label category (cardinalité)"
+
+
+def test_offset_steps_back_whole_periods(stats_client, alice):
+    body = stats_client.get(SP, headers=alice, params={"period": "month", "offset": -1}).json()
+    assert (body["offset"], body["start"], body["end"]) == (-1, "2026-09-01", "2026-10-01")
+    assert body["total_cents"] == 600 and body["by_category"][0]["category"] == "shopping"
+    week = stats_client.get(SP, headers=alice, params={"period": "week", "offset": -1}).json()
+    assert (week["start"], week["end"]) == ("2026-10-12", "2026-10-19")
+    for bad in (1, -25):
+        r = stats_client.get(SP, headers=alice, params={"offset": bad})
+        assert r.status_code == 422, "pas de futur, recul borné"
+
+
+def test_month_offset_crosses_the_year():
+    from payment_api.stats import period_bounds
+
+    jan = datetime(2026, 1, 15, tzinfo=UTC)
+    assert period_bounds("month", jan, -1) == (
+        datetime(2025, 12, 1).date(),
+        datetime(2026, 1, 1).date(),
+    )
+
+
+def test_sender_category_is_hidden_from_the_recipient(client, alice):
+    from paykit import bearer, make_token
+
+    client.post(
+        TX,
+        headers=alice,
+        json={"src_account": 1, "dst_account": 3, "amount_cents": 1, "category": "health"},
+    )
+    (mine,) = client.get(TX, headers=alice).json()
+    (theirs,) = client.get(TX, headers=bearer(make_token("bob"))).json()
+    assert mine["category"] == "health"
+    assert theirs["category"] is None, "le destinataire ne voit pas la catégorie de l'émetteur"

@@ -6,18 +6,7 @@ from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
-
-Category = Literal[
-    "food",
-    "shopping",
-    "transport",
-    "subscriptions",
-    "health",
-    "leisure",
-    "housing",
-    "transfer",
-    "other",
-]
+from resilience_db.models import TransactionCategory
 
 
 class AccountOut(BaseModel):
@@ -37,7 +26,7 @@ class TransactionIn(BaseModel):
     dst_account: StrictInt
     amount_cents: StrictInt
     # Facultatif (#44) : verify_tx et le trafic normal historique n'en envoient pas.
-    category: Category = "transfer"
+    category: TransactionCategory = TransactionCategory.TRANSFER
 
 
 class TransactionOut(BaseModel):
@@ -50,7 +39,8 @@ class TransactionOut(BaseModel):
     status: str
     created_at: datetime
     request_id: str | None
-    category: str
+    # Catégorie choisie par l'ÉMETTEUR : masquée (None) pour le destinataire d'un virement.
+    category: TransactionCategory | None
 
 
 class ServiceStatusOut(BaseModel):
@@ -84,7 +74,7 @@ class BeneficiaryOut(BaseModel):
 
 
 class CategoryShare(BaseModel):
-    category: str
+    category: TransactionCategory
     amount_cents: int
     share: float
 
@@ -96,6 +86,7 @@ class DaySpending(BaseModel):
 
 class SpendingOut(BaseModel):
     period: Literal["week", "month"]
+    offset: int
     start: date
     end: date  # exclusif
     total_cents: int

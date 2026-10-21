@@ -228,21 +228,29 @@ def create_app(
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
-        own = select(Account.id).where(Account.user_id == user.id)
-        return session.scalars(
+        own_ids = set(session.scalars(select(Account.id).where(Account.user_id == user.id)))
+        rows = session.scalars(
             select(Transaction)
-            .where(or_(Transaction.src_account.in_(own), Transaction.dst_account.in_(own)))
+            .where(or_(Transaction.src_account.in_(own_ids), Transaction.dst_account.in_(own_ids)))
             .order_by(Transaction.id.desc())
             .limit(limit)
         ).all()
+        # La catégorie est celle de l'émetteur : jamais divulguée au destinataire (#44).
+        return [
+            TransactionOut.model_validate(t).model_copy(
+                update={} if t.src_account in own_ids else {"category": None}
+            )
+            for t in rows
+        ]
 
     @app.get("/api/v1/stats/spending", response_model=SpendingOut)
     def spending_stats(
         period: Literal["week", "month"] = Query("month"),
+        offset: int = Query(0, ge=-24, le=0),
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
-        return stats.spending(session, user, period, now())
+        return stats.spending(session, user, period, now(), offset)
 
     # ---------------------------------------------------------------- bénéficiaires (#43)
     @app.get("/api/v1/beneficiaries", response_model=list[BeneficiaryOut])
