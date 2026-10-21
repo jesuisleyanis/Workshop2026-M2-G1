@@ -95,7 +95,7 @@ pytest services/auth
 
 ## Écarts et points d'attention
 
-- **Step-up (#51)** : `POST /api/v1/auth/step-up` ré-émet un jeton à `auth_time` frais pour la session courante (mot de passe re-vérifié). Ses échecs ne comptent pas dans `resilience_auth_logins_total` : la détection de force brute (`credential_stuffing`) reste calibrée sur `/login` seul ; ils restent visibles via l'event `auth_step_up_failed`.
+- **Step-up (#51)** : `POST /api/v1/auth/step-up` ré-émet la même session (`sub`, `role`, `exp` conservés : aucune prolongation possible) avec un `auth_time` frais. Ses échecs comptent comme des logins ratés (`resilience_auth_logins_total{failed}`) et partagent le quota par IP de `/login` (`shared_limit`, scope `password_attempts`) : une force brute par cette porte reste visible du détecteur et freinée par le même budget.
 
 - Métriques HTTP conformes : `resilience_common.metrics.instrument(app, "auth")` produit désormais exactement `resilience_http_requests_total{service,method,path,status}` et `resilience_http_request_duration_seconds{service,method,path}` (contrat §2). Le test `test_http_metrics_follow_contract_names_and_labels` est **actif et vert** (plus de `xfail`).
 - Le contrat §1 évoque un middleware qui injecte `request_id`/`client_ip`/`http_*` ; `resilience_common` ne le fournit pas, il est donc dans `observability.py` (copie identique dans payment-api, à remonter dans la lib).

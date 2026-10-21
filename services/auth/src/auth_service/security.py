@@ -36,15 +36,25 @@ def internal_token_matches(provided: str | None, expected: str) -> bool:
     return provided is not None and hmac.compare_digest(provided.encode(), expected.encode())
 
 
-def username_from_bearer(authorization: str | None, secret: str) -> str | None:
-    """`sub` d'un JWT valide (HS256 épinglé, exp/sub obligatoires), sinon None."""
+def claims_from_bearer(authorization: str | None, secret: str) -> dict | None:
+    """Claims d'un JWT valide (HS256 épinglé, exp/sub obligatoires), sinon None."""
     if not authorization or not authorization.startswith("Bearer "):
         return None
     try:
-        claims = jwt.decode(
+        return jwt.decode(
             authorization[7:], secret, algorithms=[ALGORITHM], options={"require": ["exp", "sub"]}
         )
     except jwt.InvalidTokenError:
         return None
-    sub = claims.get("sub")
-    return sub if isinstance(sub, str) and sub else None
+
+
+def reissue_with_fresh_auth_time(
+    claims: dict, secret: str, now: datetime | None = None
+) -> tuple[str, int]:
+    """Même session (sub, role, exp conservés), seul `auth_time` est rafraîchi (#51)."""
+    now = now or datetime.now(UTC)
+    payload = {k: claims[k] for k in ("sub", "exp", "role") if k in claims}
+    payload |= {"iat": now, "auth_time": int(now.timestamp())}
+    return jwt.encode(payload, secret, algorithm=ALGORITHM), max(
+        0, int(claims["exp"] - now.timestamp())
+    )

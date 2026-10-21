@@ -40,12 +40,14 @@ def test_step_up_reissues_a_token_with_fresh_auth_time(client, registered, log_l
     assert e["user"] == "alice"
 
 
-def test_wrong_password_is_401_traced_outside_login_metrics(client, registered, log_lines):
+def test_wrong_password_is_a_failed_login_for_detection(client, registered, log_lines):
     token = _login(client).json()["access_token"]
     before = sample("resilience_auth_logins_total", result="failed")
     r = client.post(SU, headers={"Authorization": f"Bearer {token}"}, json={"password": "nope"})
     assert r.status_code == 401 and r.json()["error"]["code"] == "invalid_credentials"
-    assert sample("resilience_auth_logins_total", result="failed") == before
+    assert sample("resilience_auth_logins_total", result="failed") == before + 1, (
+        "force brute visible"
+    )
     assert len(log_lines("auth_step_up_failed")) == 1
 
 
@@ -59,12 +61,21 @@ def test_step_up_requires_a_valid_session(client, registered):
     assert r.status_code == 401
 
 
-def test_step_up_is_rate_limited_like_login(client, registered):
-    token = _login(client).json()["access_token"]
-    codes = [
-        client.post(
-            SU, headers={"Authorization": f"Bearer {token}"}, json={"password": "x"}
-        ).status_code
-        for _ in range(5)
-    ]
-    assert 429 in codes, "quota de /login (3/minute en test)"
+def test_step_up_shares_the_login_budget(client, registered):
+    token = _login(client).json()["access_token"]  # 1 essai sur 3 (quota de test)
+    h = {"Authorization": f"Bearer {token}"}
+    codes = [client.post(SU, headers=h, json={"password": "x"}).status_code for _ in range(2)]
+    assert codes == [401, 401]
+    assert client.post(SU, headers=h, json={"password": PASSWORD}).status_code == 429
+    assert _login(client).status_code == 429, "un seul budget pour /login et /step-up"
+
+
+def test_step_up_keeps_expiry_and_role_never_extends_the_session(client, registered):
+    exp = datetime.now(UTC) + timedelta(minutes=3)
+    token = jwt.encode(
+        {"sub": "alice", "exp": exp, "role": "operator"}, JWT_SECRET, algorithm="HS256"
+    )
+    r = client.post(SU, headers={"Authorization": f"Bearer {token}"}, json={"password": PASSWORD})
+    fresh = _claims(r.json()["access_token"])
+    assert fresh["exp"] == int(exp.timestamp()) and fresh["role"] == "operator"
+    assert r.json()["expires_in"] <= 180
