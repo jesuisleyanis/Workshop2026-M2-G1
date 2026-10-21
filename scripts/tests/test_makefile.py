@@ -45,3 +45,12 @@ def test_one_pytest_process_per_component_and_failures_propagate() -> None:
     assert "|| echo" not in recipe, "un échec de tests ne doit pas être masqué"
     assert "exit 1" in recipe and "pipefail" in recipe
     assert re.search(r"^SHELL\s*:=\s*/bin/bash", MAKEFILE, re.M), "pipefail exige bash"
+
+
+def test_every_vitest_app_is_covered_by_test_front() -> None:
+    recipe = _recipe("test-front")
+    for pkg in ROOT.glob("*/**/package.json"):
+        rel = pkg.parent.relative_to(ROOT).as_posix()
+        if "node_modules" in rel or '"vitest' not in pkg.read_text(encoding="utf-8"):
+            continue
+        assert re.search(rf"for app in [^;]*\b{re.escape(rel)}\b", recipe), f"{rel} non couvert par make test-front"
