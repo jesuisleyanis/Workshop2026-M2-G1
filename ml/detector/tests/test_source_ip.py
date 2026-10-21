@@ -39,6 +39,16 @@ def test_dominant_ip_needs_share_and_volume():
     assert dominant_ip([], 0.6, 5) is None
 
 
+def test_internal_networks_are_never_candidates():
+    # Trafic verify_tx de la remédiation (réseau app) + passerelle Docker : jamais désignés.
+    from ml.detector.source_ip import parse_networks
+
+    internal = parse_networks("172.30.0.0/24, 172.31.0.0/24")
+    result = [sample("172.31.0.9", 80), sample("172.31.0.1", 50), sample("192.168.137.42", 30)]
+    assert dominant_ip(result, 0.6, 5, internal) == "192.168.137.42"
+    assert dominant_ip([sample("172.31.0.9", 80)], 0.6, 5, internal) is None
+
+
 def test_dominant_ip_never_returns_a_non_ip_value():
     # Une valeur de log forgée ne doit jamais devenir une cible (elle finirait dans la conf Nginx).
     assert dominant_ip([sample("1.2.3.4; deny all", 99), sample("", 50)], 0.6, 5) is None

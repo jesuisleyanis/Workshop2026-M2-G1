@@ -140,7 +140,9 @@ def classify_incident(z: Mapping[str, float]) -> IncidentType:
       * web_attack      : waf_blocked_per_s ↑
       * service_flood   : req_per_s ↑, ou (p95_latency_ms ↑ ET ratio_5xx ↑ sans
                           erreurs DB dominantes — sinon c'est de la corruption,
-                          pas un problème de disponibilité)
+                          pas un problème de disponibilité), ou ratio_4xx ↑ SANS échecs
+                          de login ni blocages WAF (flood non authentifié : requêtes
+                          rejetées en 401 avant la base — vu en démo le 21/10)
       * unknown         : aucun groupe n'atteint le seuil (anomalie sans signature claire)
 
     Limite assumée : un attaquant qui combine plusieurs vecteurs est étiqueté par
@@ -153,6 +155,10 @@ def classify_incident(z: Mapping[str, float]) -> IncidentType:
     flood = pos["req_per_s"]
     if pos["db_errors_per_s"] < SIGNAL_Z_MIN:
         flood = max(flood, min(pos["p95_latency_ms"], pos["ratio_5xx"]))
+    # Rafale de 4xx sans signature auth/WAF : flood non authentifié (disponibilité). Si les échecs de
+    # login ou les blocages WAF montent aussi, ce sont eux qui expliquent les 4xx (auth_abuse, web_attack).
+    if pos["auth_failed_per_s"] < SIGNAL_Z_MIN and pos["waf_blocked_per_s"] < SIGNAL_Z_MIN:
+        flood = max(flood, pos["ratio_4xx"])
 
     scores: dict[IncidentType, float] = {
         IncidentType.DATA_CORRUPTION: pos["db_errors_per_s"],

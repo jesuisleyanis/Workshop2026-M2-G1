@@ -20,6 +20,7 @@ Configuration (variables d'environnement) :
   LOKI_URL                http://loki:3100 — IP source dominante des logs WAF ("" = désactivé)
   SOURCE_IP_WINDOW_SECONDS 30   fenêtre de recherche de l'IP source
   SOURCE_IP_MIN_SHARE     0.6  part minimale des lignes WAF pour retenir une IP
+  SOURCE_IP_EXCLUDE       réseaux jamais candidats (CIDR, virgules) : réseaux Docker internes
 """
 
 from __future__ import annotations
@@ -110,6 +111,7 @@ def create_app(runtime: Runtime | None = None, start_loop: bool = True) -> FastA
             loki_url,
             window_s=int(os.getenv("SOURCE_IP_WINDOW_SECONDS", "30")),
             min_share=float(os.getenv("SOURCE_IP_MIN_SHARE", "0.6")),
+            exclude=os.getenv("SOURCE_IP_EXCLUDE", ""),
         ) if loki_url else None
         try:
             model = load_model(os.getenv("MODEL_DIR", "/app/artifacts"))

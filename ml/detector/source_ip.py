@@ -44,16 +44,28 @@ def build_query(incident_type: IncidentType, window_s: int) -> str | None:
     )
 
 
-def dominant_ip(result: list[dict], min_share: float, min_count: int) -> str | None:
-    """IP dominante d'un résultat Loki `vector` ; None si aucune ne domine assez."""
+def parse_networks(spec: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """'172.30.0.0/24,172.31.0.0/24' -> réseaux (IP seule acceptée : /32)."""
+    return tuple(ipaddress.ip_network(s.strip(), strict=False) for s in spec.split(",") if s.strip())
+
+
+def dominant_ip(result: list[dict], min_share: float, min_count: int,
+                exclude: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = ()) -> str | None:
+    """IP dominante d'un résultat Loki `vector` ; None si aucune ne domine assez.
+
+    `exclude` : réseaux Docker internes, jamais candidats (le trafic verify_tx de la remédiation y
+    passe — constaté le 21/10 : sans ce filtre, la remédiation a été désignée puis bloquée)."""
     counts: dict[str, float] = {}
     for sample in result:
         raw = sample.get("metric", {}).get("client_ip")
         try:
-            ip = str(ipaddress.ip_address(str(raw)))
+            addr = ipaddress.ip_address(str(raw))
             n = float(sample["value"][1])
         except (ValueError, KeyError, IndexError, TypeError):
             continue  # ligne sans IP littérale valide : jamais de cible fabriquée
+        if any(addr.version == net.version and addr in net for net in exclude):
+            continue
+        ip = str(addr)
         counts[ip] = counts.get(ip, 0.0) + n
     total = sum(counts.values())
     if not total:
@@ -72,11 +84,13 @@ class LokiSourceResolver:
         window_s: int = 30,
         min_share: float = 0.6,
         min_count: int = 5,
+        exclude: str = "",
         timeout: float = 2.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.url = url.rstrip("/")
         self.window_s, self.min_share, self.min_count = window_s, min_share, min_count
+        self.exclude = parse_networks(exclude)
         self._client = httpx.AsyncClient(timeout=timeout, transport=transport)
 
     async def resolve(self, incident_type: IncidentType) -> str | None:
@@ -92,7 +106,7 @@ class LokiSourceResolver:
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             log.warning(f"IP source non résolue (Loki : {type(exc).__name__})")
             return None
-        return dominant_ip(result, self.min_share, self.min_count)
+        return dominant_ip(result, self.min_share, self.min_count, self.exclude)
 
     async def aclose(self) -> None:
         await self._client.aclose()
