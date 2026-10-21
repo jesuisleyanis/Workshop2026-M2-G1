@@ -171,7 +171,8 @@ def test_balance_check_uses_the_locked_row_not_a_stale_identity_map(engine, worl
 
 
 def test_splitting_scheduled_transfers_still_requires_step_up(client, db, world):
-    db.get(Account, 1).balance_cents = 10_000_000
+    acc = db.get(Account, 1)
+    acc.balance_cents, acc.monthly_limit_cents = 10_000_000, 10_000_000
     db.commit()
     stale = bearer(make_token("alice", auth_time=int(time.time()) - 3600))
     body = {
@@ -185,3 +186,37 @@ def test_splitting_scheduled_transfers_still_requires_step_up(client, db, world)
     assert client.post(S, headers=stale, json=body).status_code == 201
     r = client.post(S, headers=stale, json=body)  # 2 × 300 € ouverts > 500 €
     assert r.status_code == 403 and r.json()["error"]["code"] == "step_up_required"
+
+
+def test_internal_transfers_are_exempt_from_the_24h_rule(client, db, world):
+    acc = db.get(Account, 1)
+    acc.balance_cents, acc.monthly_limit_cents = 10_000_000, 10_000_000
+    db.commit()
+    stale = bearer(make_token("alice", auth_time=int(time.time()) - 3600))
+    assert (
+        client.post(
+            TX, headers=stale, json={"src_account": 1, "dst_account": 3, "amount_cents": 40_000}
+        ).status_code
+        == 201
+    )
+    r = client.post(
+        TX, headers=stale, json={"src_account": 1, "dst_account": 2, "amount_cents": 20_000}
+    )
+    assert r.status_code == 201, "vers mon propre compte : hors cumul, comme le plafond"
+
+
+def test_uncapped_accounts_are_exempt_from_the_schedule_sum(client, db, world):
+    db.get(Account, 1).balance_cents = 10_000_000  # sans plafond : compte de service
+    db.commit()
+    stale = bearer(make_token("alice", auth_time=int(time.time()) - 3600))
+    body = {
+        "src_account": 1,
+        "dst_account": 3,
+        "amount_cents": 30_000,
+        "frequency": "monthly",
+        "start_on": datetime.now(UTC).date().isoformat(),
+    }
+    for _ in range(2):
+        assert (
+            client.post("/api/v1/scheduled-transfers", headers=stale, json=body).status_code == 201
+        )

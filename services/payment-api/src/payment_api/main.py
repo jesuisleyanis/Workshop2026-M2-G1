@@ -169,6 +169,12 @@ def create_app(
             )
         )
 
+    def auth_is_recent(request: Request) -> bool:
+        auth_time = getattr(request.state, "auth_time", None)
+        age = now().timestamp() - auth_time if isinstance(auth_time, int | float) else None
+        # Absent, trop ancien, ou dans le futur au-delà d'une dérive d'horloge raisonnable.
+        return age is not None and -60 <= age <= settings.step_up_max_age_s
+
     def require_recent_auth(
         amount_cents: int, request: Request, user: User, already_cents: int = 0
     ) -> None:
@@ -176,10 +182,7 @@ def create_app(
         il y a moins de N secondes. `auth_time` vient du JWT déjà vérifié par current_user."""
         if amount_cents + already_cents <= settings.step_up_threshold_cents:
             return
-        auth_time = getattr(request.state, "auth_time", None)
-        age = now().timestamp() - auth_time if isinstance(auth_time, int | float) else None
-        # Absent, trop ancien, ou dans le futur au-delà d'une dérive d'horloge raisonnable.
-        if age is None or age > settings.step_up_max_age_s or age < -60:
+        if not auth_is_recent(request):
             log_event(
                 log,
                 logging.WARNING,
@@ -267,11 +270,13 @@ def create_app(
     ):
         require_recent_auth(body.amount_cents, request, user)
 
-        def anti_splitting(src: Account) -> None:
+        def anti_splitting(src: Account, dst: Account) -> None:
             # Appelé par le ledger SOUS le verrou de la source : des virements concurrents de 499 €
-            # se sérialisent, chacun voit les précédents. Comptes de service (sans plafond :
-            # verify_tx, trafic normal) : montant seul, aucune requête ajoutée.
-            if src.monthly_limit_cents is not None:
+            # se sérialisent, chacun voit les précédents. Exemptés (aucune requête) : comptes de
+            # service sans plafond (verify_tx, trafic normal), virement vers mes propres comptes
+            # (comme le plafond), session déjà ré-authentifiée.
+            external = dst.user_id != src.user_id
+            if src.monthly_limit_cents is not None and external and not auth_is_recent(request):
                 already = spent_last_24h(session, src, user)
                 require_recent_auth(body.amount_cents, request, user, already)
 
@@ -457,9 +462,13 @@ def create_app(
         session=Depends(get_session),
     ):
         # Un virement permanent au-delà du seuil est aussi sensible qu'un virement immédiat ; les
-        # programmations déjà ouvertes sur ce compte comptent (pas de fractionnement en N × 499 €).
+        # programmations déjà ouvertes vers des tiers comptent (pas de fractionnement en N × 499 €).
+        # Verrou du compte source jusqu'au commit : deux créations concurrentes se sérialisent.
         require_recent_auth(
-            body.amount_cents, request, user, schedules.open_amount(session, user, body.src_account)
+            body.amount_cents,
+            request,
+            user,
+            schedules.open_amount(session, user, body.src_account, lock=True),
         )
         try:
             s = schedules.create(session, user, body, now().astimezone(UTC).date())

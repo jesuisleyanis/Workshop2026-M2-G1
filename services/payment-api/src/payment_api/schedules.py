@@ -90,11 +90,28 @@ def create(session: Session, user: User, body, today: date) -> ScheduledTransfer
     return s
 
 
-def open_amount(session: Session, user: User, src_account: int, exclude: int | None = None) -> int:
-    """Somme des programmations actives d'un compte (anti-fractionnement du step-up, #51)."""
+def open_amount(
+    session: Session,
+    user: User,
+    src_account: int,
+    exclude: int | None = None,
+    lock: bool = False,
+) -> int:
+    """Programmations actives d'un compte PLAFONNÉ vers des tiers (anti-fractionnement du step-up,
+    #51) — même périmètre que pour les virements immédiats. `lock` : verrou du compte source
+    jusqu'au commit, pour sérialiser deux créations concurrentes."""
+    q_src = select(Account.monthly_limit_cents).where(
+        Account.id == src_account, Account.user_id == user.id
+    )
+    if lock:
+        q_src = q_src.with_for_update()
+    if session.execute(q_src).scalar() is None:  # inconnu, d'autrui ou sans plafond (service)
+        return 0
+    own = select(Account.id).where(Account.user_id == user.id)
     q = select(func.coalesce(func.sum(ScheduledTransfer.amount_cents), 0)).where(
         ScheduledTransfer.owner_user_id == user.id,
         ScheduledTransfer.src_account == src_account,
+        ScheduledTransfer.dst_account.not_in(own),
         ScheduledTransfer.status == "active",
     )
     if exclude is not None:

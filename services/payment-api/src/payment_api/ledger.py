@@ -64,7 +64,7 @@ def transfer(
     category: str = "transfer",
     now: datetime | None = None,
     sender_notice: SenderNotice | None = None,
-    guard: Callable[[Account], None] | None = None,
+    guard: Callable[[Account, Account], None] | None = None,
 ) -> Transaction:
     """Débite `src_id` (qui doit appartenir à `user`) et crédite `dst_id`, atomiquement.
 
@@ -97,7 +97,7 @@ def transfer(
     if src.currency != dst.currency:
         raise Rejection(422, "currency_mismatch", "Accounts use different currencies")
     if guard is not None:
-        guard(src)  # sous verrou : contrôle de l'appelant (anti-fractionnement du step-up)
+        guard(src, dst)  # sous verrou : contrôle de l'appelant (anti-fractionnement du step-up)
 
     def reject(status: int, code: str, message: str) -> Rejection:
         # Tentative traçable : on persiste la transaction refusée (R2), sans toucher aux soldes.
