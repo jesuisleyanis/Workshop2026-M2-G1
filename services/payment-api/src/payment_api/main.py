@@ -321,11 +321,32 @@ def create_app(
     def list_schedules(user: User = Depends(current_user), session=Depends(get_session)):
         return [_schedule_out(s, run) for s, run in schedules.list_for(session, user)]
 
+    def _audit(event: str, message: str, status: int, user: User, level=logging.INFO):
+        log_event(log, level, event, message, http_status=status, user=user.username)
+
     @app.post("/api/v1/scheduled-transfers", response_model=ScheduleOut, status_code=201)
     def create_schedule(
         body: ScheduleIn, user: User = Depends(current_user), session=Depends(get_session)
     ):
-        return _schedule_out(schedules.create(session, user, body, now().astimezone(UTC).date()))
+        try:
+            s = schedules.create(session, user, body, now().astimezone(UTC).date())
+        except Rejection as rej:
+            # Piste d'audit (vol de session -> virement permanent vers un compte mule).
+            _audit(
+                "scheduled_transfer_rejected",
+                f"Schedule rejected ({rej.code})",
+                rej.status,
+                user,
+                logging.WARNING,
+            )
+            raise
+        _audit(
+            "scheduled_transfer_created",
+            f"Schedule {s.id} created ({s.frequency}, account {s.dst_account})",
+            201,
+            user,
+        )
+        return _schedule_out(s)
 
     @app.patch("/api/v1/scheduled-transfers/{schedule_id}", response_model=ScheduleOut)
     def set_schedule_status(
@@ -334,13 +355,18 @@ def create_app(
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
-        return _schedule_out(schedules.set_status(session, user, schedule_id, body.status))
+        s = schedules.set_status(
+            session, user, schedule_id, body.status, now().astimezone(UTC).date()
+        )
+        _audit("scheduled_transfer_changed", f"Schedule {s.id} {s.status}", 200, user)
+        return _schedule_out(s)
 
     @app.delete("/api/v1/scheduled-transfers/{schedule_id}", status_code=204)
     def cancel_schedule(
         schedule_id: DbId, user: User = Depends(current_user), session=Depends(get_session)
     ):
         schedules.cancel(session, user, schedule_id)
+        _audit("scheduled_transfer_changed", f"Schedule {schedule_id} cancelled", 204, user)
         return Response(status_code=204)
 
     # ---------------------------------------------------------------- cartes (#47)

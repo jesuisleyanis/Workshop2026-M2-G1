@@ -145,8 +145,9 @@ class CardPatch(BaseModel):
 
 
 class ScheduleIn(BaseModel):
-    src_account: StrictInt
-    dst_account: StrictInt
+    # Bornés à l'INTEGER Postgres : au-delà, un DataError deviendrait un faux db_error pour le ML.
+    src_account: StrictInt = Field(ge=1, le=2**31 - 1)
+    dst_account: StrictInt = Field(ge=1, le=2**31 - 1)
     amount_cents: StrictInt
     category: TransactionCategory = TransactionCategory.TRANSFER
     frequency: Literal["once", "weekly", "monthly"]

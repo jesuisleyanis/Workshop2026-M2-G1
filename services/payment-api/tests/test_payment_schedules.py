@@ -246,3 +246,76 @@ def test_background_executor_runs_in_the_app_lifespan(engine, world, db, clock):
                 break
             time.sleep(0.05)
     assert row["status"] == "completed" and row["last_run"]["status"] == "executed"
+
+
+def test_resume_skips_occurrences_missed_during_the_pause(api, alice, engine, clock, db):
+    sid = api.post(S, headers=alice, json=_body(frequency="weekly", amount_cents=100)).json()["id"]
+    api.patch(f"{S}/{sid}", headers=alice, json={"status": "paused"})
+    clock.at = datetime(2026, 12, 2, 9, 0, tzinfo=UTC)  # 6 semaines plus tard
+    row = api.patch(f"{S}/{sid}", headers=alice, json={"status": "active"}).json()
+    assert row["next_run_on"] == "2026-12-02", "première échéance à venir, pas celles manquées"
+    assert _run(engine, clock) == 1
+
+
+def test_very_old_occurrences_are_skipped_not_debited(api, alice, engine, clock, db):
+    api.post(S, headers=alice, json=_body(frequency="weekly", amount_cents=100))
+    clock.at = datetime(2027, 6, 1, 9, 0, tzinfo=UTC)  # ~32 semaines d'arrêt
+    executed = _run(engine, clock)
+    assert executed <= 5, "rattrapage borné à 31 jours"
+    assert db.query(Transaction).count() == executed
+
+
+def test_db_failure_after_claim_is_recorded_and_other_schedules_continue(
+    api, alice, engine, clock, db, monkeypatch, log_lines
+):
+    from sqlalchemy.exc import OperationalError
+
+    api.post(S, headers=alice, json=_body(frequency="once", amount_cents=100))
+    api.post(S, headers=alice, json=_body(frequency="once", amount_cents=200, dst_account=2))
+    real = schedules.transfer
+    calls = []
+
+    def flaky(session, user, src, dst, *a, **kw):
+        calls.append(dst)
+        if len(calls) == 1:
+            raise OperationalError("UPDATE", {}, Exception("db down"))
+        return real(session, user, src, dst, *a, **kw)
+
+    monkeypatch.setattr(schedules, "transfer", flaky)
+    assert _run(engine, clock) == 1, "l'échec isolé n'arrête pas la passe"
+    runs = {r["id"]: r["last_run"] for r in api.get(S, headers=alice).json()}
+    assert sorted((r["status"], r["error_code"]) for r in runs.values()) == [
+        ("executed", None),
+        ("failed", "internal_error"),
+    ]
+    assert any("internal_error" in e["message"] for e in log_lines("scheduled_transfer_failed"))
+
+
+def test_out_of_range_account_ids_are_422_not_db_errors(api, alice):
+    r = api.post(S, headers=alice, json=_body(src_account=2**31))
+    assert r.status_code == 422
+
+
+def test_schedule_audit_trail(api, alice, log_lines):
+    sid = api.post(S, headers=alice, json=_body()).json()["id"]
+    api.post(S, headers=alice, json=_body(dst_account=999))
+    api.patch(f"{S}/{sid}", headers=alice, json={"status": "paused"})
+    api.delete(f"{S}/{sid}", headers=alice)
+    assert len(log_lines("scheduled_transfer_created")) == 1
+    (rej,) = log_lines("scheduled_transfer_rejected")
+    assert "destination_not_found" in rej["message"]
+    assert len(log_lines("scheduled_transfer_changed")) == 2
+
+
+def test_claim_locks_the_schedule_row():
+    from sqlalchemy.orm import Session
+
+    stmt = {}
+
+    class Spy(Session):
+        def get(self, entity, ident, **kw):
+            stmt["for_update"] = kw.get("with_for_update")
+
+    with Spy() as s:
+        assert schedules._claim(s, 1, date(2026, 10, 21)) is None
+    assert stmt["for_update"] is True, "SELECT ... FOR UPDATE"

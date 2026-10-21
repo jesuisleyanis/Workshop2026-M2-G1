@@ -11,22 +11,24 @@ la ligne en `pending` (au plus une fois, jamais deux), visible à l'écran.
 from __future__ import annotations
 
 import calendar
+import contextlib
 import logging
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 
 from resilience_common.metrics import transactions_total
 from resilience_db.models import Account, ScheduledRun, ScheduledTransfer, User
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from payment_api.ledger import MAX_AMOUNT_CENTS, Rejection, transfer
+from payment_api.ledger import Rejection, check_amount_and_accounts, transfer
 from payment_api.observability import log_event
 
 MAX_ACTIVE_PER_USER = 20
 MAX_HORIZON = timedelta(days=366)
-MAX_CATCH_UP = 31  # échéances rattrapées au plus par programmation et par passage
+MAX_CATCH_UP = 31  # échéances exécutées au plus par programmation et par passage
+CATCH_UP_WINDOW = timedelta(days=31)  # une échéance plus ancienne est sautée, jamais débitée
 
 
 def _add_month(anchor_day: int, d: date) -> date:
@@ -52,12 +54,7 @@ def following(s: ScheduledTransfer, current: date) -> date | None:
 
 # ------------------------------------------------------------------------------ API métier
 def create(session: Session, user: User, body, today: date) -> ScheduledTransfer:
-    if body.amount_cents <= 0:
-        raise Rejection(422, "invalid_amount", "Amount must be strictly positive")
-    if body.amount_cents > MAX_AMOUNT_CENTS:
-        raise Rejection(422, "amount_too_large", "Amount exceeds the maximum allowed")
-    if body.src_account == body.dst_account:
-        raise Rejection(422, "same_account", "Source and destination must differ")
+    check_amount_and_accounts(body.src_account, body.dst_account, body.amount_cents)
     if not today <= body.start_on <= today + MAX_HORIZON or (
         body.end_on is not None and body.end_on < body.start_on
     ):
@@ -67,13 +64,13 @@ def create(session: Session, user: User, body, today: date) -> ScheduledTransfer
         raise Rejection(404, "account_not_found", "Source account not found")
     if session.get(Account, body.dst_account) is None:
         raise Rejection(404, "destination_not_found", "Destination account not found")
-    active = session.scalars(
-        select(ScheduledTransfer.id).where(
+    active = session.scalar(
+        select(func.count(ScheduledTransfer.id)).where(
             ScheduledTransfer.owner_user_id == user.id,
             ScheduledTransfer.status.in_(("active", "paused")),
         )
-    ).all()
-    if len(active) >= MAX_ACTIVE_PER_USER:
+    )
+    if active >= MAX_ACTIVE_PER_USER:
         raise Rejection(409, "schedule_limit", "Too many scheduled transfers")
     s = ScheduledTransfer(
         owner_user_id=user.id,
@@ -99,10 +96,24 @@ def owned(session: Session, user: User, schedule_id: int) -> ScheduledTransfer:
     return s
 
 
-def set_status(session: Session, user: User, schedule_id: int, status: str) -> ScheduledTransfer:
+def _first_on_or_after(s: ScheduledTransfer, day: date) -> date | None:
+    current = s.next_run_on
+    while current is not None and current < day:
+        current = following(s, current)
+    return current
+
+
+def set_status(
+    session: Session, user: User, schedule_id: int, status: str, today: date
+) -> ScheduledTransfer:
     s = owned(session, user, schedule_id)
     if s.status in ("cancelled", "completed"):
         raise Rejection(409, "schedule_closed", "This scheduled transfer is closed")
+    if status == "active" and s.status == "paused":
+        # Reprise : seules les échéances À VENIR comptent, jamais celles manquées pendant la pause.
+        s.next_run_on = _first_on_or_after(s, today)
+        if s.next_run_on is None:
+            status = "completed"
     s.status = status
     session.commit()
     return s
@@ -123,12 +134,14 @@ def list_for(session: Session, user: User) -> list[tuple[ScheduledTransfer, Sche
     ).all()
     last = {}
     if rows:
-        for run in session.scalars(
-            select(ScheduledRun)
+        # Une ligne par programmation (la dernière exécution), pas tout l'historique.
+        latest = (
+            select(func.max(ScheduledRun.id))
             .where(ScheduledRun.scheduled_id.in_([s.id for s in rows]))
-            .order_by(ScheduledRun.run_on, ScheduledRun.id)
-        ):
-            last[run.scheduled_id] = run  # le dernier par date l'emporte
+            .group_by(ScheduledRun.scheduled_id)
+        )
+        for run in session.scalars(select(ScheduledRun).where(ScheduledRun.id.in_(latest))):
+            last[run.scheduled_id] = run
     return [(s, last.get(s.id)) for s in rows]
 
 
@@ -136,9 +149,18 @@ def list_for(session: Session, user: User) -> list[tuple[ScheduledTransfer, Sche
 def _claim(session: Session, schedule_id: int, today: date) -> tuple[ScheduledRun, int] | None:
     """Réserve l'échéance due et avance la programmation, atomiquement. None si rien à faire
     (ou déjà réservée par une autre réplique : la contrainte UNIQUE tranche)."""
-    s = session.get(ScheduledTransfer, schedule_id)
+    # Verrou de ligne : une annulation ou une pause concurrente ne peut pas être écrasée.
+    s = session.get(ScheduledTransfer, schedule_id, with_for_update=True)
     if s is None or s.status != "active" or s.next_run_on is None or s.next_run_on > today:
+        session.rollback()
         return None
+    stale = today - CATCH_UP_WINDOW
+    if s.next_run_on < stale:  # arrêt très long : on saute, on ne débite pas des mois d'un coup
+        s.next_run_on = _first_on_or_after(s, stale)
+        if s.next_run_on is None or s.next_run_on > today:
+            s.status = "completed" if s.next_run_on is None else s.status
+            session.commit()
+            return None
     run = ScheduledRun(scheduled_id=s.id, run_on=s.next_run_on, status="pending")
     session.add(run)
     nxt = following(s, s.next_run_on)
@@ -170,18 +192,40 @@ def run_due(
     for schedule_id in due:
         for _ in range(MAX_CATCH_UP):
             with session_factory() as session:
-                claimed = _claim(session, schedule_id, today)
-                if claimed is None:
+                try:
+                    claimed = _claim(session, schedule_id, today)
+                    if claimed is None:
+                        break
+                    run, owner_id = claimed
+                    _execute(session, run, owner_id, log, now)
+                except Exception:  # isolée : les autres programmations de la passe continuent
+                    log.warning("Scheduled transfer %s pass failed", schedule_id, exc_info=True)
                     break
-                run, owner_id = claimed
-                _execute(session, run, owner_id, log, now)
                 done += 1
     return done
+
+
+def _fail(session: Session, run_id: int, code: str, s, username: str | None, log) -> None:
+    session.rollback()
+    run = session.get(ScheduledRun, run_id)
+    run.status, run.error_code = "failed", code
+    session.commit()
+    transactions_total.labels(result="rejected").inc()
+    log_event(
+        log,
+        logging.WARNING,
+        "scheduled_transfer_failed",
+        f"Scheduled transfer {s.id} run {run.run_on} failed ({code})",
+        user=username,
+    )
 
 
 def _execute(session: Session, run: ScheduledRun, owner_id: int, log, now) -> None:
     s = session.get(ScheduledTransfer, run.scheduled_id)
     owner = session.get(User, owner_id)
+    if owner is None:
+        _fail(session, run.id, "account_not_found", s, None, log)
+        return
     try:
         tx = transfer(
             session,
@@ -194,19 +238,14 @@ def _execute(session: Session, run: ScheduledRun, owner_id: int, log, now) -> No
             now(),
         )
     except Rejection as rej:
-        session.rollback()
-        run = session.get(ScheduledRun, run.id)
-        run.status, run.error_code = "failed", rej.code
-        session.commit()
-        transactions_total.labels(result="rejected").inc()
-        log_event(
-            log,
-            logging.WARNING,
-            "scheduled_transfer_failed",
-            f"Scheduled transfer {s.id} run {run.run_on} failed ({rej.code})",
-            user=owner.username,
-        )
+        _fail(session, run.id, rej.code, s, owner.username, log)
         return
+    except SQLAlchemyError:
+        # BDD en incident après la réservation : échec enregistré si elle répond encore,
+        # puis l'erreur remonte (journalisée par run_due) — jamais silencieux.
+        with contextlib.suppress(SQLAlchemyError):
+            _fail(session, run.id, "internal_error", s, owner.username, log)
+        raise
     run = session.get(ScheduledRun, run.id)
     run.status, run.transaction_id = "executed", tx.id
     session.commit()
