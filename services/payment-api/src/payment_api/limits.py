@@ -10,40 +10,33 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time
 
-from resilience_db.models import Account, Transaction, TransactionStatus, User
+from resilience_db.models import Account, Transaction, User
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from payment_api.stats import period_bounds
+from payment_api.stats import period_bounds, spend_scope
 
 
-def month_window(now: datetime) -> tuple[datetime, date]:
+def month_window(now: datetime) -> tuple[datetime, datetime, date]:
     start, end = period_bounds("month", now)
-    return datetime.combine(start, time.min, tzinfo=UTC), end
-
-
-def _external_spend(owner_id: int, since: datetime):
-    others = select(Account.id).where(Account.user_id != owner_id)
-    return (
-        Transaction.status == TransactionStatus.CREATED.value,
-        Transaction.created_at >= since,
-        Transaction.dst_account.in_(others),
-    )
+    since = datetime.combine(start, time.min, tzinfo=UTC)
+    return since, datetime.combine(end, time.min, tzinfo=UTC), end
 
 
 def used_cents(session: Session, account: Account, now: datetime) -> int:
-    since, _ = month_window(now)
+    since, until, _ = month_window(now)
     return int(
         session.scalar(
             select(func.coalesce(func.sum(Transaction.amount_cents), 0)).where(
-                Transaction.src_account == account.id, *_external_spend(account.user_id, since)
+                Transaction.src_account == account.id,
+                *spend_scope(account.user_id, since, until),
             )
         )
     )
 
 
 def limits_for(session: Session, user: User, now: datetime) -> list[dict]:
-    since, period_end = month_window(now)
+    since, until, period_end = month_window(now)
     accounts = session.scalars(
         select(Account).where(Account.user_id == user.id).order_by(Account.id)
     ).all()
@@ -52,7 +45,7 @@ def limits_for(session: Session, user: User, now: datetime) -> list[dict]:
             select(Transaction.src_account, func.sum(Transaction.amount_cents))
             .where(
                 Transaction.src_account.in_([a.id for a in accounts]),
-                *_external_spend(user.id, since),
+                *spend_scope(user.id, since, until),
             )
             .group_by(Transaction.src_account)
         ).all()

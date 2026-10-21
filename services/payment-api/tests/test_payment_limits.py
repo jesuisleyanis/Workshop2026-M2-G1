@@ -58,11 +58,31 @@ def test_under_the_limit_ok_then_exceeding_is_409_traced(capped, alice, db, log_
     assert db.get(Account, 1).balance_cents == 10_000 - 5_000, "solde intact sur refus"
 
 
-def test_limit_resets_at_month_change(capped, alice, clock):
-    assert _send(capped, alice, 5_000).status_code == 201
+def test_limit_resets_at_month_change(capped, alice, clock, db):
+    # Dépense datée explicitement (pas l'horloge murale) : le test ne dépend pas du jour réel.
+    db.add(
+        Transaction(
+            src_account=1, dst_account=3, amount_cents=5_000, status="created", created_at=clock.at
+        )
+    )
+    db.commit()
     assert _send(capped, alice, 1).status_code == 409
     clock.at = datetime(2026, 11, 1, 0, 0, tzinfo=UTC)
     assert _send(capped, alice, 1).status_code == 201, "nouveau mois : plafond remis à zéro"
+
+
+def test_future_dated_rows_do_not_count_in_a_past_window(capped, alice, db, clock):
+    db.add(
+        Transaction(
+            src_account=1,
+            dst_account=3,
+            amount_cents=5_000,
+            status="created",
+            created_at=datetime(2026, 11, 3, tzinfo=UTC),
+        )
+    )
+    db.commit()
+    assert _send(capped, alice, 5_000).status_code == 201, "fenêtre bornée à [1er, 1er suivant)"
 
 
 def test_internal_transfers_and_uncapped_accounts_are_not_limited(capped, alice):
