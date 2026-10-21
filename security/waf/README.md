@@ -2,6 +2,11 @@
 
 > Couvre **R11** (filtrage applicatif, seul point d'entrée HTTP) et **R19** (publication réseau maîtrisée).
 
+## Revue sécurité (21/10)
+
+- **HTTP clair (:80 → 8080)** : seulement `/healthz` et une redirection `301` vers HTTPS ; l'API n'est plus jamais servie en clair. `Strict-Transport-Security` (1 an, sans preload : certificat auto-signé). Tous les clients de la chaîne (`verify_tx`, `demo.sh`, `attacks/run.sh`) utilisent déjà `https://`.
+- **Journal d'audit ModSecurity** : `MODSEC_AUDIT_LOG_PARTS=ABFHZ` — jamais les corps de requête (un `/login` bloqué y laisserait le mot de passe). Reste l'en-tête `Authorization` (partie B, lue par `waf-exporter` pour l'URI) : JWT de 15 min dans un volume interne.
+
 ## Rôle
 
 Reverse-proxy unique en frontal de la plateforme. **Seul composant exposé** sur le hotspot (80/443, TLS auto-signé). Protège le front et les API métier via ModSecurity + le jeu de règles OWASP CRS, et porte la **liste de blocage IP** pilotée par la remédiation.
