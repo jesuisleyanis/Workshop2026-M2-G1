@@ -142,8 +142,13 @@ class Env:
     """Banc d'essai complet autour d'un moteur réel et de dépendances factices."""
 
     def __init__(self, *, table: DecisionTable | None = None, verify: list[bool] | None = None,
-                 settings: Settings | None = None, runner_ok: bool = True, verify_cost_s: float = 0.0) -> None:
+                 settings: Settings | None = None, runner_ok: bool = True, verify_cost_s: float = 0.0,
+                 precheck_ok: bool = False) -> None:
         import asyncio
+
+        # Règles `verify_first` : résultat du pré-contrôle (avant toute action). Par défaut le service
+        # est DÉGRADÉ (False) : les tests de séquence d'actions démarrent d'un incident réel.
+        self.precheck_ok = precheck_ok
 
         self.clock = FakeClock()
         self.net = FakeNetwork()
@@ -173,6 +178,9 @@ class Env:
     async def run(self, event: IncomingEvent):
         sub = await self.engine.handle_event(event)
         if sub.decision == "started":
+            rule = self.engine.table.rule_for(event.incident_type)
+            if rule.verify_first and not self.engine.dry_run:
+                self.verifier.results.insert(self.verifier.calls, self.precheck_ok)
             await self.engine.wait(sub.incident_id)
         return sub
 

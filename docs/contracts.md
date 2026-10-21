@@ -243,6 +243,12 @@ rules:
     escalation: notify_operator
 ```
 
+**`verify_first` (booléen optionnel, défaut `false`)** : `verify_tx` est joué AVANT toute action ; s'il passe,
+l'attaque est contenue par les protections préventives (limitation de débit et ModSecurity du WAF) et
+l'incident est clos sans action modifiante. Activé pour `service_flood` et `web_attack` (sinon : redémarrages
+en boucle pendant un flood déjà écrêté — 12 en 20 min le 21/10 — et `web_attack` jamais clos). Jamais pour
+`data_corruption` : une corruption ne se « contient » pas.
+
 ### Catalogue d'actions (implémentées dans `remediation/actions/`)
 
 | `type` | Mécanisme | Privilège requis |

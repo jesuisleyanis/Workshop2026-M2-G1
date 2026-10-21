@@ -84,8 +84,27 @@ async def test_verify_ko_moves_to_next_action_then_stops_when_ok(make_env):
     env = make_env(verify=[False, True])
     sub = await env.run(make_event("service_flood"))
     assert env.action_types(sub.incident_id) == ["waf_block_ip", "restart_service"]
-    assert env.verifier.calls == 2
+    assert env.verifier.calls == 3  # pré-contrôle (KO) + après chaque action modifiante
     assert env.incident(sub.incident_id)["status"] == "closed"
+
+
+async def test_contained_attack_is_closed_without_any_action(make_env):
+    # Flood déjà écrêté par le WAF (service disponible) : aucun restart de payment-api.
+    # Constaté le 21/10 sans ce pré-contrôle : 12 redémarrages en 20 min pendant un flood continu.
+    for incident_type in ("service_flood", "web_attack"):
+        env = make_env(precheck_ok=True)
+        sub = await env.run(make_event(incident_type))
+        inc = env.incident(sub.incident_id)
+        assert inc["status"] == "closed", incident_type
+        assert env.action_types(sub.incident_id) == [], incident_type
+        assert env.verifier.calls == 1 and env.net.docker_calls() == []
+
+
+async def test_types_without_verify_first_always_act(make_env):
+    # auth_abuse / data_corruption : une corruption ne se « contient » pas toute seule -> toujours agir.
+    env = make_env(verify=[True], precheck_ok=True)
+    sub = await env.run(make_event("data_corruption"))
+    assert env.action_types(sub.incident_id) == ["restore_pg_dump"]
 
 
 async def test_verify_ok_after_first_action_skips_remaining_actions(make_env):

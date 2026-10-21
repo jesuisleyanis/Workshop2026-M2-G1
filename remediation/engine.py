@@ -187,6 +187,12 @@ class RemediationEngine:
     async def _remediate(self, inc: _Incident) -> None:
         max_attempts = self.table.defaults.max_attempts
         cooldown = self.table.defaults.cooldown_seconds
+        if inc.rule.verify_first and not inc.dry_run:
+            if await self._verify(inc, 0, after="pré-contrôle (avant toute action)"):
+                self._emit_inc(inc, "decision", "info",
+                               "Service disponible : attaque contenue par les protections du WAF, aucune action",
+                               {"verify_first": True})
+                return self._close(inc)
         for attempt in range(1, max_attempts + 1):
             if attempt > 1 and inc.last_action_at is not None:
                 wait = cooldown - (self.clock() - inc.last_action_at).total_seconds()
