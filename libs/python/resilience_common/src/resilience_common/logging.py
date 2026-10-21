@@ -25,6 +25,7 @@ NORMALIZED_EVENTS = frozenset(
         "beneficiary_added",
         "beneficiary_removed",
         "beneficiary_rejected",
+        "transaction_access_denied",
         "waf_blocked",
         "anomaly_detected",
         "remediation_started",

@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -21,6 +21,7 @@ from resilience_db.migrate import upgrade
 from resilience_db.models import Account, Transaction, User
 from sqlalchemy import Engine, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from payment_api import beneficiaries, stats
@@ -61,7 +62,13 @@ def _migrate_with_retry(engine: Engine, log: logging.Logger, attempts: int = 5) 
 
 # Identifiant en chemin borné à l'INTEGER Postgres : au-delà, la BDD lèverait une DataError,
 # traduite en 503 db_unavailable + db_errors_total, soit un faux signal d'incident pour le ML.
-DbId = Path(ge=1, le=2**31 - 1)
+DbId = Annotated[int, Path(ge=1, le=2**31 - 1)]
+
+
+def _as_seen_by(tx: Transaction, own_ids: set[int]) -> TransactionOut:
+    # La catégorie est celle de l'émetteur : jamais divulguée au destinataire (#44).
+    out = TransactionOut.model_validate(tx)
+    return out if tx.src_account in own_ids else out.model_copy(update={"category": None})
 
 
 def _db_reachable(session) -> bool:
@@ -235,13 +242,36 @@ def create_app(
             .order_by(Transaction.id.desc())
             .limit(limit)
         ).all()
-        # La catégorie est celle de l'émetteur : jamais divulguée au destinataire (#44).
-        return [
-            TransactionOut.model_validate(t).model_copy(
-                update={} if t.src_account in own_ids else {"category": None}
+        return [_as_seen_by(t, own_ids) for t in rows]
+
+    @app.get("/api/v1/transactions/{transaction_id}", response_model=TransactionOut)
+    def get_transaction(
+        transaction_id: DbId,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        src, dst = aliased(Account), aliased(Account)
+        row = session.execute(
+            select(Transaction, src.user_id, dst.user_id)
+            .join(src, src.id == Transaction.src_account)
+            .join(dst, dst.id == Transaction.dst_account)
+            .where(Transaction.id == transaction_id)
+        ).first()  # une seule requête : l'opération et ses deux titulaires
+        if row is None or user.id not in (row[1], row[2]):
+            # Ni émetteur ni destinataire : même 404 qu'un id inconnu (pas 403, anti-énumération),
+            # mais tracé côté SOC (balayage d'ids = tentative d'IDOR).
+            log_event(
+                log,
+                logging.WARNING,
+                "transaction_access_denied",
+                f"Transaction lookup denied ({'unknown' if row is None else 'foreign'})",
+                http_status=404,
+                user=user.username,
             )
-            for t in rows
-        ]
+            raise ApiError(404, "transaction_not_found", "Transaction not found")
+        tx, sender, _ = row
+        own = {tx.src_account} if sender == user.id else set()
+        return _as_seen_by(tx, own)
 
     @app.get("/api/v1/stats/spending", response_model=SpendingOut)
     def spending_stats(
@@ -286,7 +316,7 @@ def create_app(
 
     @app.delete("/api/v1/beneficiaries/{beneficiary_id}", status_code=204)
     def delete_beneficiary(
-        beneficiary_id: int = DbId,
+        beneficiary_id: DbId,
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):

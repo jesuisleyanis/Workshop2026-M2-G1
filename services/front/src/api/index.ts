@@ -25,6 +25,8 @@ export function createEndpoints(client: ApiClient) {
     deleteBeneficiary: async (id: string): Promise<void> => {
       await client.request(`/api/v1/beneficiaries/${encodeURIComponent(id)}`, { method: 'DELETE' })
     },
+    getTransaction: async (id: string, signal?: AbortSignal): Promise<Transaction> =>
+      parseTransaction(await client.request(`/api/v1/transactions/${encodeURIComponent(id)}`, { signal })),
     listTransactions: async (signal?: AbortSignal): Promise<Transaction[]> =>
       parseTransactions(await client.request('/api/v1/transactions', { signal })),
     createTransaction: async (req: TransferRequest): Promise<Transaction> =>

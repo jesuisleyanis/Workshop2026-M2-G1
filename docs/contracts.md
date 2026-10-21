@@ -69,6 +69,7 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `db_error` | payment-api | Erreur base de données |
 | `beneficiary_added` | payment-api | Bénéficiaire enregistré (#43) — piste d'audit d'un ajout de compte mule après vol de session |
 | `beneficiary_removed` | payment-api | Bénéficiaire supprimé (#43) |
+| `transaction_access_denied` | payment-api | Lecture refusée d'une opération (#45 : id inconnu ou d'un tiers, message `unknown`/`foreign`) — une rafale = balayage d'ids (IDOR) |
 | `beneficiary_rejected` | payment-api | Ajout refusé (IBAN inconnu, doublon, soi-même, quota) — une rafale = énumération d'IBAN |
 | `waf_blocked` | waf (via log Nginx/ModSec) | Requête bloquée par le CRS |
 | `anomaly_detected` | detector | Le score dépasse le seuil |
@@ -333,6 +334,7 @@ Montants en **centimes entiers**. Aucune nouvelle route n'ajoute de label de mé
 | `GET /api/v1/accounts` | JWT | `[{id, iban_fake, balance_cents, currency}]` |
 | `POST /api/v1/transactions` | JWT | `{src_account, dst_account, amount_cents, category?}` → `201 TransactionOut` ; refus métier tracés (`transaction_rejected`). `category` ∈ `food, shopping, transport, subscriptions, health, leisure, housing, transfer, other`, **facultatif** (défaut `transfer` : `verify_tx` inchangé), invalide → `422 validation_error` (#44) |
 | `GET /api/v1/transactions?limit=` | JWT | Historique de l'utilisateur, plus récent d'abord ; `category` = celle choisie par l'**émetteur**, `null` pour le destinataire (jamais divulguée) |
+| `GET /api/v1/transactions/{id}` | JWT | Détail d'une opération (#45) si le client possède le compte **source ou destination** ; sinon (ou id inconnu) `404 transaction_not_found` — jamais 403 (anti-énumération), tracé `transaction_access_denied`. Id hors `[1, 2^31-1]` → `422`. WAF : location regex dédiée, 60 req/min par IP, GET seul (le préfixe `/api/v1/transactions` reste sans limite : cible de `service_flood`). Même masquage de `category` que la liste |
 | `GET /api/v1/stats/spending?period=week\|month&offset=0` | JWT | `offset` ∈ [-24, 0] (périodes passées). `{period, offset, start, end (exclusif), total_cents, by_category:[{category, amount_cents, share}], by_day:[{date, amount_cents}]}`. Dépense = virement **accepté** vers un compte **tiers** (refus et virements internes exclus). Semaine ISO / mois civil, jours **UTC**, agrégé en SQL (`GROUP BY`). WAF : 60 req/min par IP, GET seul. `category` n'est **pas** un label de métrique (§2 figé) (#44) |
 | `GET /api/v1/beneficiaries` | JWT | Mes bénéficiaires `[{id, display_name, account_id, iban_fake, created_at}]`, triés par nom (#43) |
 | `POST /api/v1/beneficiaries` | JWT | `{display_name (1–64), iban_fake}` → `201`. IBAN résolu vers un compte (espaces/casse ignorés, recherche exacte sur l'index unique). WAF : 30 req/min par IP (rafale 10) contre l'énumération ; events `beneficiary_added` / `beneficiary_rejected`. `404 account_not_found`, `409 beneficiary_exists`, `422 own_account`, `409 beneficiary_limit` (100) |
