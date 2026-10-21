@@ -138,6 +138,11 @@ def create_app(
     async def _api_error(_req: Request, exc: ApiError):
         return error_response(exc.status, exc.code, exc.message, exc.headers)
 
+    @app.exception_handler(Rejection)
+    async def _rejection(_req: Request, exc: Rejection):
+        # Refus métier non intercepté par la route : même corps que ApiError (contrat).
+        return error_response(exc.status, exc.code, exc.message)
+
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(_req: Request, exc: StarletteHTTPException):
         return error_response(exc.status_code, f"http_{exc.status_code}", str(exc.detail))
@@ -295,13 +300,34 @@ def create_app(
     def list_cards(user: User = Depends(current_user), session=Depends(get_session)):
         return cards.list_for(session, user)
 
-    def _card_status(card_id: int, status: str, event: str, user: User, session):
+    def _owned_card_or_audit(action, user: User, card_id: int):
         try:
-            card, changed = cards.set_status(session, user, card_id, status)
+            return action()
         except Rejection as rej:
-            raise ApiError(rej.status, rej.code, rej.message)
+            if rej.code == "card_not_found":  # balayage d'ids de carte = tentative d'IDOR
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "card_access_denied",
+                    f"Card {card_id} access denied",
+                    http_status=404,
+                    user=user.username,
+                )
+            raise
+
+    def _card_status(card_id: int, status: str, event: str, user: User, session):
+        card, changed = _owned_card_or_audit(
+            lambda: cards.set_status(session, user, card_id, status), user, card_id
+        )
         if changed:  # idempotent : pas de second événement pour un état inchangé
-            log_event(log, logging.INFO, event, f"Card {card.id} {status}", user=user.username)
+            log_event(
+                log,
+                logging.INFO,
+                event,
+                f"Card {card.id} {status}",
+                http_status=200,
+                user=user.username,
+            )
         return card
 
     @app.post("/api/v1/cards/{card_id}/freeze", response_model=CardOut)
@@ -324,17 +350,18 @@ def create_app(
         session=Depends(get_session),
     ):
         changes = body.model_dump(exclude_unset=True)
-        try:
-            card = cards.update(session, user, card_id, changes)
-        except Rejection as rej:
-            raise ApiError(rej.status, rej.code, rej.message)
-        log_event(
-            log,
-            logging.INFO,
-            "card_settings_changed",
-            f"Card {card.id} settings changed: {', '.join(sorted(changes))}",
-            user=user.username,
+        card, changed = _owned_card_or_audit(
+            lambda: cards.update(session, user, card_id, changes), user, card_id
         )
+        if changed:
+            log_event(
+                log,
+                logging.INFO,
+                "card_settings_changed",
+                f"Card {card.id} settings changed: {', '.join(changed)}",
+                http_status=200,
+                user=user.username,
+            )
         return card
 
     # ---------------------------------------------------------------- bénéficiaires (#43)
@@ -375,10 +402,7 @@ def create_app(
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
-        try:
-            beneficiaries.remove(session, user, beneficiary_id)
-        except Rejection as rej:
-            raise ApiError(rej.status, rej.code, rej.message)
+        beneficiaries.remove(session, user, beneficiary_id)  # Rejection -> handler commun
         log_event(
             log,
             logging.INFO,

@@ -47,6 +47,7 @@ RESERVED_EVENTS: frozenset[str] = frozenset(
         "card_frozen",
         "card_unfrozen",
         "card_settings_changed",
+        "card_access_denied",
         # waf
         "waf_blocked",
         # detector

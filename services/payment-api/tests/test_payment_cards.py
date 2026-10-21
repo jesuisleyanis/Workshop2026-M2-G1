@@ -127,3 +127,38 @@ def test_bearer_required_and_ids_bounded(client, alice, cards):
     assert client.get(C).status_code == 401
     assert client.post(f"{C}/1/freeze").status_code == 401
     assert client.post(f"{C}/{2**31}/freeze", headers=alice).status_code == 422
+
+
+def test_patch_with_unchanged_values_emits_no_event(client, alice, cards, log_lines):
+    for _ in range(3):
+        r = client.patch(f"{C}/1", headers=alice, json={"contactless": True})
+        assert r.status_code == 200
+    assert log_lines("card_settings_changed") == [], "aucun changement réel, aucun événement"
+
+
+def test_card_events_carry_http_status_and_denials_are_audited(client, alice, cards, log_lines):
+    client.post(f"{C}/1/freeze", headers=alice)
+    (e,) = log_lines("card_frozen")
+    assert e["http_status"] == 200
+    client.post(f"{C}/2/freeze", headers=alice)  # carte de bob
+    client.patch(f"{C}/999", headers=alice, json={"contactless": False})
+    denied = log_lines("card_access_denied")
+    assert [d["user"] for d in denied] == ["alice", "alice"] and all(
+        d["http_status"] == 404 for d in denied
+    )
+
+
+def test_card_lookup_locks_the_row_for_update():
+    from sqlalchemy.dialects import postgresql
+
+    from payment_api import cards as mod
+
+    captured = {}
+
+    class Spy:
+        def scalar(self, stmt):
+            captured["sql"] = str(stmt.compile(dialect=postgresql.dialect()))
+
+    with pytest.raises(mod.Rejection):
+        mod.owned(Spy(), type("U", (), {"id": 1})(), 1)
+    assert "FOR UPDATE OF cards" in captured["sql"], "verrou de ligne (gel concurrent)"

@@ -25,10 +25,13 @@ def list_for(session: Session, user: User) -> list[Card]:
 
 
 def owned(session: Session, user: User, card_id: int) -> Card:
+    """Carte du client, VERROUILLÉE jusqu'au commit : un gel concurrent ne peut pas s'intercaler
+    entre la lecture du statut et l'écriture des réglages (même principe que le ledger)."""
     card = session.scalar(
         select(Card)
         .join(Account, Account.id == Card.account_id)
         .where(Card.id == card_id, Account.user_id == user.id)
+        .with_for_update(of=Card)
     )
     if card is None:
         raise Rejection(404, "card_not_found", "Card not found")
@@ -45,11 +48,13 @@ def set_status(session: Session, user: User, card_id: int, status: str) -> tuple
     return card, changed
 
 
-def update(session: Session, user: User, card_id: int, changes: dict) -> Card:
+def update(session: Session, user: User, card_id: int, changes: dict) -> tuple[Card, list[str]]:
+    """Renvoie (carte, champs réellement modifiés) : renvoyer la valeur actuelle n'est pas un changement."""
     card = owned(session, user, card_id)
     if card.status == "frozen":
         raise Rejection(409, "card_frozen", "Unfreeze the card before changing its settings")
-    for field, value in changes.items():
-        setattr(card, field, value)
+    changed = sorted(f for f, v in changes.items() if getattr(card, f) != v)
+    for field in changed:
+        setattr(card, field, changes[field])
     session.commit()
-    return card
+    return card, changed
