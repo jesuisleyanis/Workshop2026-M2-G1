@@ -22,7 +22,7 @@ export function LimitsPage() {
           <section key={l.accountId} aria-label={`Plafond du ${accountName(l.accountId)}`} className="card flex flex-col gap-3.5 p-[18px]">
             <span className="text-[15px] font-semibold">{accountName(l.accountId)}</span>
             {l.limit === null ? (
-              <p className="m-0 text-sm text-ink-3">Sans plafond (compte de service). Consommé ce mois-ci : {formatMoney(l.used, cur)}.</p>
+              <p className="m-0 text-sm text-ink-3">Sans plafond. Consommé ce mois-ci : {formatMoney(l.used, cur)}.</p>
             ) : (
               <>
                 <LimitBar limit={l} currency={cur} />

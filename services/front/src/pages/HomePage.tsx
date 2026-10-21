@@ -72,9 +72,13 @@ export function HomePage() {
           Sur {list.length} compte{list.length > 1 ? 's' : ''} · au {new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
         </span>
         {mainLimit && (
-          <button type="button" onClick={() => navigate('/limits')} aria-label="Voir les plafonds" className="mt-2.5 border-0 bg-transparent p-0 text-left">
+          // La barre (role=meter) reste hors du bouton : un bouton n'admet que du contenu phrasé.
+          <div className="mt-2.5 flex flex-col gap-1.5">
             <LimitBar limit={mainLimit} currency={list[0]!.currency} />
-          </button>
+            <button type="button" onClick={() => navigate('/limits')} className="min-h-11 self-start border-0 bg-transparent px-0 text-sm font-semibold text-ink-2 underline underline-offset-[3px]">
+              Voir les plafonds
+            </button>
+          </div>
         )}
       </Card>
 

@@ -19,7 +19,7 @@ export function ProfilePage() {
   const subs: Record<string, string> = {
     '/rib': plural(accounts.data?.length ?? 0, 'compte'),
     '/beneficiaries': plural(beneficiaries.data?.length ?? 0, 'bénéficiaire'),
-    '/limits': limits.data ? (limits.data.some((l) => l.limit !== null) ? 'Plafond mensuel' : 'Sans plafond') : '',
+    '/limits': limits.data ? (limits.data.some((l) => l.limit !== null) ? 'Plafond mensuel' : 'Sans plafond') : limits.error ? 'Indisponible pour le moment' : '',
   }
 
   return (

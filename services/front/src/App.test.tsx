@@ -731,3 +731,32 @@ describe('Front - plafonds (#46)', () => {
     await waitFor(() => expect(f.mock.calls.filter(([u]) => String(u).endsWith('/api/v1/limits')).length).toBeGreaterThan(1))
   })
 })
+
+describe('Front - plafonds, revue (#46)', () => {
+  const LIMITS = [{ account_id: 1, monthly_limit_cents: 80000, used_cents: 21399, remaining_cents: 58601, period_end: '2026-11-01' }]
+
+  it('la barre n’est pas dans un bouton ; « Voir les plafonds » ouvre /limits', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/limits': () => jsonResponse(LIMITS),
+    })
+    renderApp('/')
+    const meter = await screen.findByRole('meter')
+    expect(meter.closest('button')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Voir les plafonds' }))
+    expect(await screen.findByRole('heading', { level: 1, name: /Plafonds/ })).toBeInTheDocument()
+  })
+
+  it('profil : plafonds en erreur => « Indisponible pour le moment »', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/limits': () => jsonResponse({ error: { code: 'rate_limited', message: 'x' } }, 429),
+    })
+    renderApp('/profile')
+    expect(await screen.findByText('Indisponible pour le moment')).toBeInTheDocument()
+  })
+})

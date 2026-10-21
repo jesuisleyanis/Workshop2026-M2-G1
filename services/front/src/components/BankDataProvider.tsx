@@ -18,7 +18,7 @@ export function BankDataProvider({ children }: { children: ReactNode }) {
   const { reload: reloadAccounts } = accounts
   const { reload: reloadTransactions } = transactions
   const { reload: reloadBeneficiaries, error: beneficiariesError } = beneficiaries
-  const { reload: reloadLimits, error: limitsError } = limits
+  const { reload: reloadLimits } = limits
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -27,10 +27,11 @@ export function BankDataProvider({ children }: { children: ReactNode }) {
       reloadTransactions()
       // Rarement modifiés : rechargés seulement s'ils ont échoué (ex. pendant un incident).
       if (beneficiariesError) reloadBeneficiaries()
-      if (limitsError) reloadLimits()
+      // Plafonds : dérivés des virements, rafraîchis au même rythme (autre onglet, changement de mois).
+      reloadLimits()
     }, REFRESH_MS)
     return () => clearInterval(id)
-  }, [reloadAccounts, reloadTransactions, reloadBeneficiaries, beneficiariesError, reloadLimits, limitsError])
+  }, [reloadAccounts, reloadTransactions, reloadBeneficiaries, beneficiariesError, reloadLimits])
   const [labels, setLabels] = useState(labelStore.all)
   const saveLabel = useCallback((txId: string, label: string) => setLabels(labelStore.save(txId, label)), [])
 
