@@ -171,3 +171,4 @@ def test_payment_api_replicas_are_load_balanced_with_failover_but_no_post_replay
         line = next(ln for ln in NGINX.splitlines() if f"location {route}" in ln)
         assert "proxy_next_upstream error timeout http_502 http_503;" in line, route
         assert "non_idempotent" not in line, "un virement (POST) ne doit jamais être rejoué en double"
+        assert "proxy_connect_timeout 2s;" in line, "réplique morte abandonnée avant le timeout client"
