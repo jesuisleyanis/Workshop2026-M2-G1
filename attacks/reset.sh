@@ -14,9 +14,11 @@ COMPOSE=(docker compose -f "${ROOT}/infra/compose/docker-compose.yml")
 # requises), `ps` aussi, et la deny-list n'était JAMAIS vidée.
 [[ -f "${ROOT}/.env" ]] && COMPOSE+=(--env-file "${ROOT}/.env")
 if "${COMPOSE[@]}" ps --status running waf >/dev/null 2>&1; then
-  "${COMPOSE[@]}" exec -T waf sh -c \
-    'printf "# vidé par attacks/reset.sh\n" > /etc/nginx/deny/blocked_ips.conf && nginx -s reload' \
-    || echo "(deny-list : WAF non joignable, à vider manuellement)"
+  # Le fichier appartient à la remédiation (volume waf-deny) : écrit depuis son conteneur, relu par le WAF.
+  { "${COMPOSE[@]}" exec -T remediation sh -c \
+      'echo "# vidé par attacks/reset.sh" > /etc/resilience/waf-deny/blocked_ips.conf' \
+    && "${COMPOSE[@]}" exec -T waf nginx -s reload 2>/dev/null; } \
+    || echo "(deny-list : remédiation/WAF non joignables, lancer make unblock)"
 fi
 
 # Annule une éventuelle corruption data_corruption (renommage inverse, idempotent).

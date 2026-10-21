@@ -134,6 +134,13 @@ bench: ## Banc de latence attaque -> détection -> action (BENCH_ARGS="--runs 5 
 attack: ## Lance un scénario de test (SC=<scenario>) — dev uniquement
 	@$(LOADENV) attacks/run.sh $(or $(SC),service_flood)
 
+# La deny-list appartient à la remédiation (volume waf-deny) : on l'écrit depuis son conteneur, puis le
+# WAF la relit (SIGHUP). Débloque les IP mises en liste noire par waf_block_ip / waf_blacklist_ip.
+unblock: ## Vide la liste noire d'IP du WAF (débloque le PC attaquant entre deux séries d'attaques)
+	@$(COMPOSE) exec -T remediation sh -c 'echo "# vidé par make unblock" > /etc/resilience/waf-deny/blocked_ips.conf'
+	@$(COMPOSE) exec -T waf nginx -s reload 2>/dev/null
+	@echo "Liste noire du WAF vidée."
+
 stop-attack: ## Kill-switch des scénarios
 	attacks/run.sh --stop
 

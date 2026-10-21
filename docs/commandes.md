@@ -94,6 +94,7 @@ publication `127.0.0.1` en dev).
 | Scénario seul (dev) | `make attack SC=<scenario>` | `service_flood`, `auth_abuse`, `web_attack`, `data_corruption` |
 | Kill-switch | `make stop-attack` | arrête tous les scénarios |
 | Remettre la cible « avant » | `make reset` | |
+| **Débloquer les IP bloquées par la remédiation** (entre deux séries d'attaques) | `make unblock` (avec `REAL_IP=1` si la stack tourne dans ce mode) | liste noire du WAF vidée |
 | Audit de durcissement | `make audit` | |
 | Archive du rendu | `make package` | `Workshop2026-M2-G1-Code.zip` sans secrets |
 | **Latence de détection** (preuve chiffrée) | `make bench` (`BENCH_ARGS="--runs 5 --quiet 600"`) | p50/p95/max attaque → détection → 1re action, faux positifs ; JSON `bench-detection.json` |
