@@ -118,20 +118,35 @@ scikit-learn que le runtime → même `model_fingerprint`). Le dépôt est mont�
 `make train` utilise automatiquement `ml/training/data/baseline_real.csv`, `attacks_real.csv` et `calibration.json`
 s'ils existent, sinon la baseline synthétique.
 
-### 4.2 Avec la stack (vraies séries Prometheus — procédure avant jury)
+### 4.2 Calibration réelle — À FAIRE SUR LE PC HÔTE DE LA DÉMO
 
-Prérequis : `make up-full` (Prometheus + cAdvisor + détection) et `make seed`.
+Le modèle est entraîné au build du detector à partir des CSV versionnés : il apprend le « normal » et les
+attaques **de la machine où ils ont été capturés**. Latence, débit atteignable et réseau dépendent du
+matériel : un seuil calibré sur un autre poste ne sépare pas les attaques du PC hôte (constaté le 21/10 :
+seuil 0,71 aveugle aux attaques du PC attaquant). La calibration se fait donc **sur le PC hôte**, avec les
+**attaques lancées depuis le PC attaquant** (débit réel via le hotspot, bien inférieur au `--rate` demandé).
+
+Prérequis sur le PC hôte : branche à jour, `make up-full`, `make seed`, hotspot actif, PC attaquant prêt.
 
 ```bash
-make capture-baseline                      # 60 min de trafic légitime (DURATION=60m), detector arrêté pendant la capture
-make capture-attack SC=service_flood       # puis auth_abuse, web_attack, data_corruption (ATTACK_S=20)
-make calibrate                             # seuil + MTTD par scénario -> data/calibration.json
-make train                                 # ré-entraîne avec la calibration (échec code 3 si empreinte différente)
-make retrain-detector                      # le build du detector ré-entraîne avec ces données et le relance
+make capture-baseline                        # 60 min de trafic légitime ; detector + alertmanager suspendus
+make capture-remote SC=service_flood         # annonce « Lancez MAINTENANT » : l'attaque part du PC attaquant
+make capture-remote SC=auth_abuse            #   (fenêtre REMOTE_S=30 s ; >= 70 s entre deux passages)
+make capture-remote SC=web_attack            #   3 passages par scénario, avec les commandes du runbook
+make capture-attack SC=data_corruption       # corruption réversible locale (base non exposée au PC attaquant)
+make calibrate                               # niveau tenu sur 4 fenêtres + garde-fou ; 0 = OK, 1 = non séparable
+make retrain-detector                        # le build du detector ré-entraîne avec ces données et le relance
+make bench BENCH_ARGS="--target https://192.168.137.1"   # contrôle (attaques locales) ; en démo : MTTD du dashboard
+git add ml/training/data/*.csv ml/training/data/calibration*.json   # le modèle de la démo = ces données
 ```
 
-Codes retour de `calibrate` : `0` OK · `1` non séparable · `2` MTTD > 20 s. Détails :
-[`ml/training/README.md` §6](../ml/training/README.md).
+Lecture de `make calibrate` : chaque scénario est détecté soit par le **modèle** (niveau tenu sur 4 fenêtres
+au-dessus du normal), soit par le **garde-fou** (z ≥ 15 ; cas de `db_errors_per_s` et `waf_blocked_per_s`, nuls au
+normal donc invisibles pour une IsolationForest). Code `1` : un passage n'est détecté par aucun des deux, ou un
+faux positif apparaît au normal. Détails : [`ml/training/README.md` §6](../ml/training/README.md).
+
+Les CSV versionnés au 21/10 viennent du poste de développement (fenêtres 5 s, pas 1 s) : **provisoires**, à
+remplacer par une capture sur le PC hôte.
 
 ### 4.3 Trafic légitime seul
 

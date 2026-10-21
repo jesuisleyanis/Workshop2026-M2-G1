@@ -21,7 +21,7 @@ PROFILES_ALL  := $(PROFILES_FULL) --profile iot --profile attack --profile ai
 
 .PHONY: help up up-full up-iot build start start-full ps down reset-grafana check-env seed verify demo attack stop-attack reset \
         test test-py test-front audit package decrypt model retrain-detector bench \
-        traffic train capture-baseline capture-attack calibrate ml-tools test-ml
+        traffic train capture-baseline capture-attack capture-remote calibrate ml-tools test-ml
 
 ML_DATA  := ml/training/data
 # Baseline : 60 min = 3 600 fenêtres d'1 s (COLLECT_INTERVAL_SECONDS du collector) ; MIN_ROWS = 50 min
@@ -39,8 +39,8 @@ RATE_LAG := 10
 # data_corruption se déclenche côté PC Hôte (base non exposée) : renommage réversible de la table.
 ATTACK_CMD = $(if $(filter data_corruption,$(SC)),attacks/db_corrupt_local.sh --duration $(ATTACK_S),attacks/run.sh $(SC) --target $(ATTACK_TARGET) --duration $(ATTACK_S))
 VERSION  ?= 1.2.0
-# Budget MTTD côté modèle (pas de 1 s, confirmation 2 fenêtres) ; voir ml.training.calibrate --help
-CALIBRATE_ARGS ?= --max-mttd 3 --confirm 2
+# Budget MTTD côté modèle depuis le début de la capture (pas de 1 s, confirmation 4 fenêtres) ; voir ml.training.calibrate --help
+CALIBRATE_ARGS ?= --max-mttd 10 --confirm 4
 ML_TOOLS := resilience/ml-tools
 ML_SRC   := $(shell pwd -W 2>/dev/null || pwd)
 ML_DOCKER = MSYS_NO_PATHCONV=1 docker run --rm -v "$(ML_SRC):/src"
@@ -155,6 +155,14 @@ capture-attack: ## Joue le scénario SC (ATTACK_S s, sur fond de trafic normal) 
 # même Python 3.12 et même scikit-learn que le build du detector. Le modèle calibré est donc
 # exactement celui que le build ré-entraîne (model_fingerprint identique) — et rien à
 # installer sur le poste. `pwd -W` + MSYS_NO_PATHCONV : chemins Docker corrects sous Git Bash.
+# Calibration sur les VRAIES attaques de la démo : à lancer sur le PC HÔTE (celui que vise le PC
+# attaquant), le modèle devant apprendre le normal ET les attaques de cette machine-là. Même capture que
+# capture-attack, mais l'attaque part du PC attaquant pendant la fenêtre annoncée (rien n'est lancé ici).
+REMOTE_S ?= 30
+capture-remote: ## Capture une attaque lancée depuis le PC attaquant (SC=<scenario>, fenêtre REMOTE_S=30 s)
+	@test -n "$(SC)" || { echo "SC=<scenario> requis"; exit 1; }
+	@$(MAKE) --no-print-directory capture-attack SC=$(SC) ATTACK_S=$(REMOTE_S) 	  ATTACK_CMD='echo ">>> Lancez MAINTENANT $(SC) depuis le PC attaquant (fenêtre de $(REMOTE_S) s)"; sleep $(REMOTE_S)'
+
 ml-tools: ## Construit l'image d'outils ML (Python + scikit-learn du runtime)
 	docker build -f ml/detector/Dockerfile --target ml-tools -t $(ML_TOOLS) .
 

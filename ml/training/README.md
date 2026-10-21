@@ -70,6 +70,12 @@ Les chiffres complets sont écrits dans `baseline_stats.json` (`evaluation`) à 
 
 ## 6. Ré-entraîner sur les vraies séries Prometheus (procédure avant le jury)
 
+> **Sur le PC hôte de la démo, attaques lancées depuis le PC attaquant** (`make capture-remote SC=...`) :
+> le modèle apprend le normal et les attaques de la machine de capture ; calibré ailleurs, il ne sépare pas
+> les attaques réelles (constaté le 21/10). Fenêtres de 5 s au pas d'1 s ; règle de décision = score tenu
+> sur 4 fenêtres consécutives (ou seuil haut) OU garde-fou z ≥ 15 — voir `ml/training/calibrate.py`.
+> Procédure pas à pas : [`docs/commandes.md` §4.2](../../docs/commandes.md).
+
 Prérequis : Docker, `make` (Windows : `winget install ezwinports.make`, à lancer depuis Git Bash), `make up-full`
 (Prometheus + cAdvisor), `make seed`. **Aucun Python ML à installer sur le poste** : `train`, `calibrate` et `test-ml`
 tournent dans l'image `ml-tools` (étape du Dockerfile detector), qui a le même Python 3.12 et le même scikit-learn que le
