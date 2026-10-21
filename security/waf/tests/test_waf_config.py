@@ -52,6 +52,25 @@ def test_crs_allows_delete_but_not_put_or_patch():
     assert set(m.group(1).split()) == {"GET", "HEAD", "POST", "OPTIONS", "DELETE"}
 
 
+def test_delete_is_denied_everywhere_except_one_beneficiary():
+    conf = _directives(NGINX)
+    m = re.search(r'map "\$request_method:\$uri" \$method_denied \{\s*default 0;\s*"~([^"]+)" 1;\s*\}', conf)
+    assert m, "map $method_denied absente"
+    assert re.search(r"if \(\$method_denied\)\s*\{\s*return 405;\s*\}", conf)
+    denied = re.compile(m.group(1))
+    assert not denied.search("DELETE:/api/v1/beneficiaries/12")
+    for probe in ("DELETE:/api/v1/beneficiaries", "DELETE:/api/v1/beneficiaries/12/x",
+                  "DELETE:/api/v1/accounts", "DELETE:/api/v1/auth/session", "DELETE:/"):
+        assert denied.search(probe), probe
+    assert not denied.search("GET:/api/v1/accounts") and not denied.search("POST:/api/v1/beneficiaries")
+
+
+def test_beneficiaries_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=beneficiaries_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/beneficiaries \{\s*limit_req zone=beneficiaries_per_ip", conf)
+
+
 def test_public_status_route_is_exact_rate_limited_and_read_only():
     # #42 : route sans auth -> correspondance exacte (pas de préfixe ouvert sur payment-api),
     # limite par IP, GET seulement.

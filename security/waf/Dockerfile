@@ -44,7 +44,8 @@ RUN mkdir -p /var/log/modsec && chown nginx:nginx /var/log/modsec && chmod 0755 
 
 # Ports non privilégiés (entrypoint `check-low-port`) et chemins TLS utilisés par nginx.conf.
 # ALLOWED_METHODS : défaut CRS « GET HEAD POST OPTIONS » + DELETE (suppression d'un bénéficiaire,
-# #43) ; sans lui, la règle 911100 bloque tout DELETE en 403. PUT/PATCH restent refusés.
+# #43) ; sans lui, la règle 911100 bloque tout DELETE en 403. PUT/PATCH restent refusés, et
+# nginx.conf ($method_denied) restreint DELETE à /api/v1/beneficiaries/<id> seulement.
 ENV PORT=8080 \
     SSL_PORT=8443 \
     SSL_CERT_FILE=/etc/nginx/conf/server.crt \
