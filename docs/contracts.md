@@ -78,6 +78,7 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `scheduled_transfer_created` | payment-api | Virement programmé créé (#48) — piste d'audit d'un virement permanent vers un compte mule |
 | `scheduled_transfer_rejected` | payment-api | Création refusée (#48) — motif seul |
 | `scheduled_transfer_changed` | payment-api | Programmation mise en pause, reprise ou annulée (#48) |
+| `statement_exported` | payment-api | Relevé exporté (#50 : compte, période, nombre de lignes) — exfiltration de données = export massif |
 | `transaction_access_denied` | payment-api | Lecture refusée d'une opération (#45 : id inconnu ou d'un tiers, message `unknown`/`foreign`) — une rafale = balayage d'ids (IDOR) |
 | `beneficiary_rejected` | payment-api | Ajout refusé (IBAN inconnu, doublon, soi-même, quota) — une rafale = énumération d'IBAN |
 | `waf_blocked` | waf (via log Nginx/ModSec) | Requête bloquée par le CRS |

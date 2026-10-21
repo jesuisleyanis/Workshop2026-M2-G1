@@ -8,7 +8,7 @@ import logging
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Path, Query, Request, Response
@@ -25,7 +25,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from payment_api import beneficiaries, cards, limits, notifications, schedules, stats
+from payment_api import (
+    beneficiaries,
+    cards,
+    limits,
+    notifications,
+    schedules,
+    statements,
+    stats,
+)
 from payment_api.config import SERVICE_NAME, Settings
 from payment_api.ledger import Rejection, transfer
 from payment_api.observability import (
@@ -317,6 +325,34 @@ def create_app(
         session=Depends(get_session),
     ):
         return stats.spending(session, user, period, now(), offset)
+
+    # ---------------------------------------------------------------- relevés (#50)
+    @app.get("/api/v1/statements")
+    def get_statement(
+        account_id: int = Query(ge=1, le=2**31 - 1),
+        from_: date = Query(alias="from"),
+        to: date = Query(),
+        format: Literal["csv", "json"] = Query("csv"),
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        st = statements.build(session, user, account_id, from_, to)
+        log_event(
+            log,
+            logging.INFO,
+            "statement_exported",
+            f"Statement {format} account {account_id} {from_}..{to} ({len(st['rows'])} rows)",
+            http_status=200,
+            user=user.username,
+        )
+        if format == "json":
+            return st
+        name = f"releve-{account_id}-{from_}-{to}.csv"
+        return Response(
+            statements.to_csv(st),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
 
     # ---------------------------------------------------------------- notifications (#49)
     @app.get("/api/v1/notifications", response_model=list[NotificationOut])

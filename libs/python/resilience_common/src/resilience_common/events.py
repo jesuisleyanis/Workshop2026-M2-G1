@@ -53,6 +53,7 @@ RESERVED_EVENTS: frozenset[str] = frozenset(
         "scheduled_transfer_created",
         "scheduled_transfer_rejected",
         "scheduled_transfer_changed",
+        "statement_exported",
         # waf
         "waf_blocked",
         # detector
