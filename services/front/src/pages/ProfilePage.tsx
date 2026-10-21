@@ -21,6 +21,7 @@ export function ProfilePage() {
     '/beneficiaries': plural(beneficiaries.data?.length ?? 0, 'bénéficiaire'),
     // Libellé fixe : pas de GET /api/v1/cards à chaque ouverture du Profil (écran Cartes seul).
     '/cards': 'Geler, plafond de paiement',
+    '/scheduled': 'Unique, hebdomadaire ou mensuel',
     '/limits': limits.data ? (limits.data.some((l) => l.limit !== null) ? 'Plafond mensuel' : 'Sans plafond') : limits.error ? 'Indisponible pour le moment' : '',
   }
 

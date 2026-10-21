@@ -4,18 +4,20 @@ import { api } from '../api'
 import { ApiError } from '../api/errors'
 import { Icon } from '../components/icons'
 import { CategoryPicker } from '../components/CategoryPicker'
-import { AccountCard, Alert, Avatar, Card, EmptyState, ErrorState, H2, LoadingState } from '../components/ui'
+import { AccountCard, Alert, Avatar, Card, EmptyState, ErrorState, H2, LoadingState, Segmented } from '../components/ui'
+import { Switch } from '../components/Switch'
 import { useBackOverride, useShell } from '../hooks/shell-context'
 import { useBankData } from '../hooks/useBankData'
 import { useTxViews } from '../hooks/useTxViews'
 import { accountBadge, accountName, last4, recipients, type Recipient } from '../lib/bank'
 import { categoryLabel } from '../lib/categories'
 import { exceedsLimit } from '../lib/limits'
+import { FREQUENCY_LABELS, todayIso, whenLabel } from '../lib/schedules'
 import { copyText } from '../lib/clipboard'
 import { userMessage } from '../lib/errorMessages'
 import { formatMoney } from '../lib/format'
 import { parseAmount, validateTransfer } from '../lib/validation'
-import type { Account, Category, Transaction } from '../types/api'
+import type { Account, Category, ScheduleFrequency, ScheduledTransfer, Transaction } from '../types/api'
 
 /** Pré-remplissage : destinataire (accueil, « Envoyer à ») et/ou compte à débiter. */
 export interface SendRouteState {
@@ -26,7 +28,24 @@ export interface SendRouteState {
 type Step = 'form' | 'recap' | 'sending' | 'result'
 type Outcome =
   | { kind: 'success'; tx: Transaction }
+  | { kind: 'scheduled'; schedule: ScheduledTransfer }
   | { kind: 'balance' | 'limit' | 'refused' | 'error'; error: unknown }
+
+/** Programmation (#48) : désactivée = virement immédiat (comportement historique). */
+interface Plan {
+  on: boolean
+  frequency: ScheduleFrequency
+  startOn: string
+  endOn: string
+}
+const FREQUENCIES = (['once', 'weekly', 'monthly'] as const).map((f) => [f, FREQUENCY_LABELS[f]] as const)
+const newPlan = (): Plan => ({ on: false, frequency: 'monthly', startOn: todayIso(), endOn: '' })
+
+/** Refus de POST /api/v1/scheduled-transfers corrigeables dans le formulaire. */
+const PLAN_ERRORS: Record<string, string> = {
+  invalid_dates: 'Dates invalides : la date de début doit être aujourd’hui ou dans l’année, et la fin après le début.',
+  schedule_limit: 'Vous avez atteint le nombre maximal de virements programmés actifs (20). Annulez-en un pour en créer un autre.',
+}
 
 const QUICK = [50, 100, 150, 200]
 const WIZARD = ['Destinataire', 'Montant', 'Détails', 'Confirmation']
@@ -52,6 +71,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
   const [amt, setAmt] = useState('50')
   const [label, setLabel] = useState('')
   const [category, setCategory] = useState<Category>('transfer')
+  const [plan, setPlan] = useState<Plan>(newPlan)
   const [q, setQ] = useState('')
   const [all, setAll] = useState(false)
   const [step, setStep] = useState<Step>('form')
@@ -96,6 +116,8 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
     if (fields.includes('amount') && errors.amount) return fail(errors.amount)
     if (fields.includes('to') && !to) return fail('Choisissez un destinataire.')
     if (fields.includes('to') && errors.toAccount) return fail(errors.toAccount)
+    if (plan.on && !/^\d{4}-\d{2}-\d{2}$/.test(plan.startOn)) return fail('Choisissez la date de la première exécution.')
+    if (plan.on && plan.frequency !== 'once' && plan.endOn && plan.endOn < plan.startOn) return fail('La date de fin doit suivre la date de début.')
     setErr(null)
     return true
   }
@@ -110,8 +132,40 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
     setErr(null)
   }
 
+  async function schedule() {
+    if (!to) return
+    setStep('sending')
+    try {
+      const s = await api.createSchedule({
+        fromAccount: src.id,
+        toAccount: to,
+        amount,
+        category,
+        frequency: plan.frequency,
+        startOn: plan.startOn,
+        endOn: plan.frequency === 'once' ? null : plan.endOn || null,
+      })
+      setOutcome({ kind: 'scheduled', schedule: s })
+      setStep('result')
+    } catch (e) {
+      if (e instanceof ApiError && e.isUnauthorized) return
+      const fixable = e instanceof ApiError ? PLAN_ERRORS[e.code] : undefined
+      if (fixable) {
+        // Corrigeable : retour au formulaire (desktop) / à l'étape Détails (mobile), message en place.
+        if (isDesktop) setStep('form')
+        else goStep(3)
+        setErr(fixable)
+        return
+      }
+      const kind = e instanceof ApiError && e.status >= 400 && e.status < 500 ? 'refused' : 'error'
+      setOutcome({ kind, error: e })
+      setStep('result')
+    }
+  }
+
   async function execute() {
     if (!to) return
+    if (plan.on) return schedule()
     setStep('sending')
     try {
       // « Virement » = défaut serveur : inutile de l'envoyer (corps identique à avant #44).
@@ -141,6 +195,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
     setAmt('50')
     setLabel('')
     setCategory('transfer')
+    setPlan(newPlan())
     setOutcome(null)
     goStep(1)
   }
@@ -152,21 +207,21 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
       Ce montant dépasse votre plafond mensuel restant ({formatMoney(srcLimit.remaining, src.currency)}) : la banque risque de refuser le virement.
     </Alert>
   )
-  const cta = `Envoyer ${formatMoney(amount, src.currency)}`
+  const cta = `${plan.on ? 'Programmer' : 'Envoyer'} ${formatMoney(amount, src.currency)}`
   const avail = `Disponible : ${formatMoney(src.balance, src.currency)}`
   const recapRows: [string, string][] = [
     ['Depuis', `${accountName(src.id)} •••• ${last4(src.iban, src.id)}`],
     ['Vers', toRec ? `${toRec.name}${toRec.own ? ' (vous)' : ''}` : '—'],
     ['Catégorie', categoryLabel(category)],
     ['Libellé', label.trim() || '—'],
-    ['Exécution', 'Immédiate'],
+    ['Exécution', plan.on ? whenLabel(plan.frequency, plan.startOn, plan.endOn) : 'Immédiate'],
   ]
 
   if (step === 'sending') {
     return (
       <div role="status" aria-live="polite" className="mx-auto mt-10 flex w-full max-w-[560px] flex-col items-center gap-[18px] rounded-[28px] bg-white px-6 py-12 text-center">
         <span className="h-14 w-14 animate-spin-fast rounded-full border-4 border-[#e6e8eb] border-t-ink" />
-        <span className="text-lg font-semibold">Envoi en cours…</span>
+        <span className="text-lg font-semibold">{plan.on ? 'Programmation en cours…' : 'Envoi en cours…'}</span>
         <span className="text-sm text-ink-3">Ne fermez pas l’application.</span>
       </div>
     )
@@ -185,6 +240,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
         onEditAmount={() => goStep(isDesktop ? 1 : 2)}
         onHome={() => navigate('/')}
         onHistory={() => navigate('/history')}
+        onScheduled={() => navigate('/scheduled')}
         onRetry={() => void execute()}
         onCancel={() => (isDesktop ? setStep('recap') : goStep(4))}
       />
@@ -260,6 +316,42 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
     </div>
   )
 
+  const planField = (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex flex-col">
+          <span className="text-sm font-semibold">Programmer</span>
+          <span className="text-[13px] text-ink-3">{plan.on ? 'Exécuté automatiquement par la banque' : 'Virement immédiat'}</span>
+        </span>
+        <Switch
+          label="Programmer le virement"
+          checked={plan.on}
+          onChange={(on) => {
+            setPlan((p) => ({ ...p, on }))
+            setErr(null)
+          }}
+        />
+      </div>
+      {plan.on && (
+        <>
+          <Segmented label="Fréquence" options={FREQUENCIES} value={plan.frequency} onChange={(frequency) => setPlan((p) => ({ ...p, frequency }))} stretch />
+          <div className="grid grid-cols-2 gap-2.5">
+            <label className="flex flex-col gap-1.5 text-sm font-medium text-ink-2">
+              {plan.frequency === 'once' ? 'Date' : 'Début'}
+              <input type="date" value={plan.startOn} min={todayIso()} onChange={(e) => setPlan((p) => ({ ...p, startOn: e.target.value }))} className="field" />
+            </label>
+            {plan.frequency !== 'once' && (
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-ink-2">
+                Fin (facultatif)
+                <input type="date" value={plan.endOn} min={plan.startOn} onChange={(e) => setPlan((p) => ({ ...p, endOn: e.target.value }))} className="field" />
+              </label>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+
   // ── Desktop : formulaire en une page puis récapitulatif ──
   if (isDesktop) {
     if (step === 'recap') {
@@ -276,7 +368,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
                 Modifier
               </button>
               <button type="button" onClick={() => void execute()} className="btn-primary">
-                Confirmer l’envoi
+                {plan.on ? 'Confirmer la programmation' : 'Confirmer l’envoi'}
               </button>
             </div>
           </Card>
@@ -354,6 +446,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
         <Card aria-label="Détails du virement" className="gap-3.5 p-5">
           {categoryField}
           {labelField}
+          {planField}
         </Card>
 
         <div className="pointer-events-none sticky bottom-4 z-[5] col-span-full flex min-w-0 flex-col items-end gap-2.5">
@@ -470,6 +563,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
           <section aria-label="Détails" className="flex flex-col gap-3.5 rounded-3xl bg-white p-[18px] shadow-card">
             {categoryField}
             {labelField}
+            {planField}
           </section>
           {errBox}
           {next('Vérifier le virement', () => check(['to', 'amount']) && goStep(4))}
@@ -625,6 +719,7 @@ function ResultCard({
   onHistory,
   onRetry,
   onCancel,
+  onScheduled,
 }: {
   outcome: Outcome
   amount: number
@@ -638,13 +733,24 @@ function ResultCard({
   onHistory: () => void
   onRetry: () => void
   onCancel: () => void
+  onScheduled: () => void
 }) {
   const money = formatMoney(amount, src.currency)
-  const apiRef = outcome.kind !== 'success' && outcome.error instanceof ApiError ? outcome.error.requestId : null
+  const apiRef = 'error' in outcome && outcome.error instanceof ApiError ? outcome.error.requestId : null
   const ref = outcome.kind === 'success' ? (outcome.tx.requestId ?? `#${outcome.tx.id}`) : apiRef
 
   let view: { icon: 'check' | 'x' | 'alert'; tone: string; title: string; text: ReactNode; a: [string, () => void]; b: [string, () => void] }
   switch (outcome.kind) {
+    case 'scheduled':
+      view = {
+        icon: 'check',
+        tone: 'bg-ok-bg text-ok-fg',
+        title: 'Virement programmé',
+        text: `${money} vers ${toName} — ${whenLabel(outcome.schedule.frequency, outcome.schedule.startOn, outcome.schedule.endOn).toLowerCase()}. La banque l’exécutera automatiquement.`,
+        a: ['Voir mes virements programmés', onScheduled],
+        b: ['Nouveau virement', onNew],
+      }
+      break
     case 'success':
       view = {
         icon: 'check',

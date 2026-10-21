@@ -856,3 +856,115 @@ describe('Front - cartes (#47)', () => {
     expect(await screen.findByText('Aucune carte')).toBeInTheDocument()
   })
 })
+
+describe('Front - virements programmés (#48)', () => {
+  const SCHED = (over: Record<string, unknown> = {}) => ({
+    id: 3, src_account: 1, dst_account: 42, amount_cents: 5000, category: 'housing', frequency: 'monthly',
+    start_on: '2026-10-01', next_run_on: '2026-11-01', end_on: null, status: 'active', last_run: null, ...over,
+  })
+  const base = {
+    'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+    'GET /api/v1/transactions': () => jsonResponse([]),
+    'GET /api/v1/beneficiaries': () => jsonResponse([{ id: 5, display_name: 'Léa Martin', account_id: 42, iban_fake: 'FR76 9999 0000 0001', created_at: null }]),
+  }
+
+  it('liste : destinataire nommé, fréquence, prochaine exécution, exécution échouée avec motif', async () => {
+    loginAsStored()
+    stubFetch({
+      ...base,
+      'GET /api/v1/scheduled-transfers': () =>
+        jsonResponse([SCHED({ last_run: { run_on: '2026-10-01', status: 'failed', error_code: 'insufficient_funds' } }), SCHED({ id: 4, status: 'cancelled', frequency: 'once', next_run_on: null })]),
+    })
+    renderApp('/scheduled')
+    const list = await screen.findByRole('list', { name: 'Virements programmés' })
+    const [first, second] = within(list).getAllByRole('listitem')
+    expect(first).toHaveTextContent('Léa Martin')
+    expect(first).toHaveTextContent('Chaque mois')
+    expect(first).toHaveTextContent(/1 nov\. 2026/)
+    expect(first).toHaveTextContent('Dernière exécution échouée le 1 oct. 2026 : solde insuffisant.')
+    expect(second).toHaveTextContent('Annulée')
+    expect(within(second!).queryByRole('button', { name: 'Annuler' })).not.toBeInTheDocument()
+  })
+
+  it('pause puis reprise (PATCH), annulation confirmée (DELETE), refus de confirmation sans appel', async () => {
+    loginAsStored()
+    let current = SCHED()
+    const f = stubFetch({
+      ...base,
+      'GET /api/v1/scheduled-transfers': () => jsonResponse([current]),
+      'PATCH /api/v1/scheduled-transfers/3': (init) => {
+        current = SCHED({ status: JSON.parse(init!.body as string).status })
+        return jsonResponse(current)
+      },
+      'DELETE /api/v1/scheduled-transfers/3': () => {
+        current = SCHED({ status: 'cancelled', next_run_on: null })
+        return new Response(null, { status: 204 })
+      },
+    })
+    renderApp('/scheduled')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Mettre en pause' }))
+    await user.click(await screen.findByRole('button', { name: 'Reprendre' }))
+    expect(await screen.findByRole('button', { name: 'Mettre en pause' })).toBeInTheDocument()
+    const patches = f.mock.calls.filter(([, i]) => (i as RequestInit | undefined)?.method === 'PATCH')
+    expect(patches.map(([, i]) => JSON.parse((i as RequestInit).body as string))).toEqual([{ status: 'paused' }, { status: 'active' }])
+
+    const deletes = () => f.mock.calls.filter(([, i]) => (i as RequestInit | undefined)?.method === 'DELETE')
+    await user.click(screen.getByRole('button', { name: 'Annuler' }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Annuler' }))
+    expect(deletes()).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Annuler' }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Annuler la programmation' }))
+    expect(await screen.findByText('Annulée')).toBeInTheDocument()
+    expect(deletes()).toHaveLength(1)
+  })
+
+  async function programFromSend(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '12,50')
+    await user.click(screen.getByRole('switch', { name: 'Programmer le virement' }))
+    await user.click(screen.getByRole('button', { name: 'Chaque semaine' }))
+    const start = screen.getByLabelText('Début')
+    await user.clear(start)
+    await user.type(start, '2026-12-01')
+    await user.type(screen.getByLabelText('Fin (facultatif)'), '2027-03-01')
+    await user.click(screen.getByRole('button', { name: /^Programmer 12,50/ }))
+    expect(screen.getByText(/Chaque semaine à partir du 1 déc\. 2026, jusqu’au 1 mars 2027/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Confirmer la programmation' }))
+  }
+
+  it('Envoyer → Programmer : POST /scheduled-transfers en centimes + dates, écran « Virement programmé »', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      ...base,
+      'POST /api/v1/scheduled-transfers': (init) => jsonResponse(SCHED({ ...JSON.parse(init!.body as string), id: 9 }), 201),
+    })
+    renderApp('/send')
+    const user = userEvent.setup()
+    await programFromSend(user)
+    expect(await screen.findByRole('heading', { name: 'Virement programmé' })).toBeInTheDocument()
+    expect(f.mock.calls.some(([u, i]) => String(u).endsWith('/api/v1/transactions') && (i as RequestInit | undefined)?.method === 'POST')).toBe(false)
+    expect(JSON.parse((posts(f)[0]![1] as RequestInit).body as string)).toEqual({
+      src_account: 1, dst_account: 77, amount_cents: 1250, frequency: 'weekly', start_on: '2026-12-01', end_on: '2027-03-01',
+    })
+    await user.click(screen.getByRole('button', { name: 'Voir mes virements programmés' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Virements programmés' })).toBeInTheDocument()
+  })
+
+  it('refus invalid_dates : retour au formulaire avec un message clair, aucun virement immédiat', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      ...base,
+      'POST /api/v1/scheduled-transfers': () => jsonResponse({ error: { code: 'invalid_dates', message: 'x' } }, 422),
+    })
+    renderApp('/send')
+    const user = userEvent.setup()
+    await programFromSend(user)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Dates invalides/)
+    expect(screen.getByRole('switch', { name: 'Programmer le virement' })).toHaveAttribute('aria-checked', 'true')
+    expect(posts(f).every(([u]) => String(u).endsWith('/api/v1/scheduled-transfers'))).toBe(true)
+  })
+})

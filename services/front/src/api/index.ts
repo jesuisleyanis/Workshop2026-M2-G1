@@ -1,9 +1,9 @@
 import { API_BASE } from '../config'
 import { createApiClient, type ApiClient } from './client'
-import { parseAccounts, parseBeneficiaries, parseBeneficiary, parseCard, parseCards, parseLimits, parseLogin, parseServiceHealth, parseSpending, parseTransaction, parseTransactions } from './parsers'
+import { parseAccounts, parseBeneficiaries, parseBeneficiary, parseCard, parseCards, parseLimits, parseLogin, parseSchedule, parseSchedules, parseServiceHealth, parseSpending, parseTransaction, parseTransactions } from './parsers'
 import { tokenStore } from './tokenStore'
 import { serviceStatus } from '../lib/serviceStatus'
-import type { Account, AccountLimit, Beneficiary, Card, CardPatch, LoginRequest, LoginResponse, NewBeneficiary, ServiceHealth, Spending, Transaction, TransferRequest } from '../types/api'
+import type { Account, AccountLimit, Beneficiary, Card, CardPatch, LoginRequest, LoginResponse, NewBeneficiary, NewSchedule, ScheduledTransfer, ScheduleStatus, ServiceHealth, Spending, Transaction, TransferRequest } from '../types/api'
 
 /** Endpoints métier /api/v1 (docs/contracts.md : préfixe /api/v1, JWT Bearer). */
 export function createEndpoints(client: ApiClient) {
@@ -62,6 +62,29 @@ export function createEndpoints(client: ApiClient) {
           },
         }),
       ),
+    // Virements programmés (#48) : création, pause / reprise, annulation ; l'exécution est côté serveur.
+    listSchedules: async (signal?: AbortSignal): Promise<ScheduledTransfer[]> =>
+      parseSchedules(await client.request('/api/v1/scheduled-transfers', { signal })),
+    createSchedule: async (s: NewSchedule): Promise<ScheduledTransfer> =>
+      parseSchedule(
+        await client.request('/api/v1/scheduled-transfers', {
+          method: 'POST',
+          body: {
+            src_account: Number(s.fromAccount),
+            dst_account: Number(s.toAccount),
+            amount_cents: Math.round(s.amount * 100),
+            ...(s.category && s.category !== 'transfer' ? { category: s.category } : {}),
+            frequency: s.frequency,
+            start_on: s.startOn,
+            ...(s.endOn ? { end_on: s.endOn } : {}),
+          },
+        }),
+      ),
+    setScheduleStatus: async (id: string, status: Extract<ScheduleStatus, 'active' | 'paused'>): Promise<ScheduledTransfer> =>
+      parseSchedule(await client.request(`/api/v1/scheduled-transfers/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status } })),
+    cancelSchedule: async (id: string): Promise<void> => {
+      await client.request(`/api/v1/scheduled-transfers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    },
     getSpending: async (period: 'week' | 'month', offset = 0, signal?: AbortSignal): Promise<Spending> =>
       parseSpending(await client.request(`/api/v1/stats/spending?period=${period}&offset=${Math.min(0, Math.trunc(offset))}`, { signal })),
   }

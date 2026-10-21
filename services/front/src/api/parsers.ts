@@ -1,5 +1,5 @@
 import { ApiError } from './errors'
-import type { Account, Card, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
+import type { ScheduledTransfer, Account, Card, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
 import { isCategory } from '../lib/categories'
 
 type Obj = Record<string, unknown>
@@ -201,4 +201,40 @@ function bool(o: Obj, key: string, what: string): boolean {
 
 export function parseCards(v: unknown): Card[] {
   return list(v, 'cards', 'cartes').map(parseCard)
+}
+
+const FREQUENCIES = ['once', 'weekly', 'monthly'] as const
+const SCHEDULE_STATUSES = ['active', 'paused', 'cancelled', 'completed'] as const
+
+function oneOf<T extends string>(v: unknown, allowed: readonly T[], what: string): T {
+  if (typeof v === 'string' && (allowed as readonly string[]).includes(v)) return v as T
+  throw new ApiError(0, 'invalid_response', `Valeur inattendue (${what}).`)
+}
+
+export function parseSchedule(v: unknown): ScheduledTransfer {
+  const o = asObj(v, 'virement programmé')
+  const w = 'virement programmé'
+  const run = o.last_run == null ? null : asObj(o.last_run, 'dernière exécution')
+  return {
+    id: str(o, 'id', w),
+    fromAccount: str(o, 'src_account', w),
+    toAccount: str(o, 'dst_account', w),
+    amount: num(o, 'amount_cents', w) / 100,
+    category: parseCategory(o.category),
+    frequency: oneOf(o.frequency, FREQUENCIES, 'fréquence'),
+    startOn: str(o, 'start_on', w),
+    nextRunOn: optStr(o, 'next_run_on'),
+    endOn: optStr(o, 'end_on'),
+    // Échec fermé : un statut inconnu n'est jamais affiché « Actif ».
+    status: oneOf(o.status, SCHEDULE_STATUSES, 'statut de programmation'),
+    lastRun: run && {
+      runOn: str(run, 'run_on', 'dernière exécution'),
+      status: oneOf(run.status, ['executed', 'failed'] as const, 'exécution'),
+      errorCode: optStr(run, 'error_code'),
+    },
+  }
+}
+
+export function parseSchedules(v: unknown): ScheduledTransfer[] {
+  return list(v, 'scheduled_transfers', 'virements programmés').map(parseSchedule)
 }

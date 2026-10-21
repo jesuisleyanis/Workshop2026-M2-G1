@@ -123,3 +123,34 @@ export interface CardPatch {
   contactless?: boolean
   onlinePayments?: boolean
 }
+
+/** Virement programmé (#48, D12) : exécuté par payment-api, mêmes règles que les virements. */
+export type ScheduleFrequency = 'once' | 'weekly' | 'monthly'
+export type ScheduleStatus = 'active' | 'paused' | 'cancelled' | 'completed'
+
+export interface ScheduledTransfer {
+  id: string
+  fromAccount: string
+  toAccount: string
+  /** En euros. */
+  amount: number
+  category: Category
+  frequency: ScheduleFrequency
+  /** YYYY-MM-DD. */
+  startOn: string
+  nextRunOn: string | null
+  endOn: string | null
+  status: ScheduleStatus
+  lastRun: { runOn: string; status: 'executed' | 'failed'; errorCode: string | null } | null
+}
+
+export interface NewSchedule {
+  fromAccount: string
+  toAccount: string
+  /** En euros. */
+  amount: number
+  category?: Category
+  frequency: ScheduleFrequency
+  startOn: string
+  endOn?: string | null
+}
