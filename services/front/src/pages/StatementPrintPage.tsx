@@ -8,8 +8,14 @@ import { useResource } from '../hooks/useResource'
 import { accountName } from '../lib/bank'
 import { ADDRESS, BANK, BIC } from '../lib/bankInfo'
 import { categoryLabel } from '../lib/categories'
-import { formatDateTime, formatIban, formatMoney } from '../lib/format'
+import { formatIban, formatMoney } from '../lib/format'
 import { statementError } from '../lib/statements'
+
+/** Même base que la période et le CSV (UTC) : une opération du 31 à 23 h 30 Z reste le 31. */
+const utcDateTime = (iso: string) => {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '—' : `${d.toISOString().slice(0, 10).split('-').reverse().join('/')} ${d.toISOString().slice(11, 16)} UTC`
+}
 
 /** D14 — Relevé imprimable : en-tête banque, titulaire, période, opérations, totaux (CSS print, sans lib PDF). */
 export function StatementPrintPage() {
@@ -32,7 +38,7 @@ export function StatementPrintPage() {
           Imprimer
         </button>
       </div>
-      <section data-print aria-label="Relevé de compte" className="card flex flex-col gap-4 p-6 text-[14px]">
+      <section data-print-doc aria-label="Relevé de compte" className="card flex flex-col gap-4 p-6 text-[14px]">
         <header className="flex flex-wrap justify-between gap-4 border-b border-mute pb-4">
           <div className="flex flex-col">
             <strong className="text-lg">{BANK}</strong>
@@ -76,7 +82,7 @@ export function StatementPrintPage() {
                 const label = labels[r.id] ?? (r.direction === 'debit' ? `Virement vers ${accountName(r.counterpartyAccount)}` : `Virement de ${accountName(r.counterpartyAccount)}`)
                 return (
                   <tr key={r.id} data-testid="statement-row" className={`border-b border-mute ${rejected ? 'text-ink-3 line-through' : ''}`}>
-                    <td className="py-1.5 whitespace-nowrap">{formatDateTime(r.createdAt)}</td>
+                    <td className="py-1.5 whitespace-nowrap">{utcDateTime(r.createdAt)}</td>
                     <td className="py-1.5">
                       {label} <span className="font-mono text-[12px] text-ink-3">{r.reference}</span>
                     </td>

@@ -1198,3 +1198,39 @@ describe('Front - relevés (#50)', () => {
     }
   })
 })
+
+describe('Front - relevés, revue (#50)', () => {
+  it('dates personnalisées vides ou inversées : message et boutons désactivés, aucun appel', async () => {
+    loginAsStored()
+    const f = stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
+    renderApp('/statements')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Personnalisée' }))
+    const [from, to] = screen.getAllByDisplayValue(/^\d{4}-\d{2}-\d{2}$/) as HTMLInputElement[]
+    await user.clear(from!)
+    expect(screen.getByText('Renseignez les deux dates.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Télécharger CSV/ })).toBeDisabled()
+    await user.type(from!, '2026-10-20')
+    await user.clear(to!)
+    await user.type(to!, '2026-10-01')
+    expect(screen.getByText('La date de début doit précéder la date de fin.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Version imprimable/ })).toBeDisabled()
+    expect(f.mock.calls.some(([u]) => String(u).includes('/api/v1/statements'))).toBe(false)
+  })
+
+  it('page imprimable : dates en UTC (même jour que le CSV)', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/statements?account_id=1&from=2026-10-01&to=2026-10-31&format=json': () =>
+        jsonResponse({
+          account_id: 1, iban_fake: 'FR76 0000 0001', holder: 'demo01', from: '2026-10-01', to: '2026-10-31',
+          rows: [{ id: 9, created_at: '2026-10-31T23:30:00Z', reference: 'r', direction: 'debit', counterparty_account: 3, category: null, amount_cents: 100, status: 'created' }],
+          total_debit_cents: 100, total_credit_cents: 0,
+        }),
+    })
+    renderApp('/statements/print?account=1&from=2026-10-01&to=2026-10-31')
+    expect(await screen.findByText('31/10/2026 23:30 UTC')).toBeInTheDocument()
+  })
+})

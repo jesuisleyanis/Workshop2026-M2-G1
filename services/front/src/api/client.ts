@@ -98,7 +98,21 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     const res = await send(path, o, 'text/csv, application/json')
     const disposition = res.headers.get('Content-Disposition') ?? ''
     const m = /filename="?([^";]+)"?/i.exec(disposition)
-    return { blob: await res.blob(), filename: m ? m[1]! : null }
+    // Le corps (jusqu'à 5 000 lignes) est lu sous le même délai et la même normalisation
+    // d'erreur que l'en-tête : jamais de bouton bloqué ni de TypeError brute.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const expiry = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new ApiError(0, 'timeout', 'Le serveur met trop de temps à répondre.')), timeoutMs)
+    })
+    try {
+      return { blob: await Promise.race([res.blob(), expiry]), filename: m ? m[1]! : null }
+    } catch (err) {
+      onAvailability?.(false, performance.now())
+      if (err instanceof ApiError) throw err
+      throw new ApiError(0, 'network_error', 'Impossible de joindre le serveur.')
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   return { request, download }

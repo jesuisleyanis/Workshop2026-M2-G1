@@ -26,6 +26,9 @@ export function StatementsPage() {
   const acc = accounts.data.find((a) => a.id === picked) ?? accounts.data[0]!
   const range = preset === 'custom' ? custom : presetRange(preset)
   const query = { accountId: acc.id, ...range }
+  // Dates personnalisées : saisie complète et ordonnée avant tout appel (le serveur reste l'autorité).
+  const iso = /^\d{4}-\d{2}-\d{2}$/
+  const rangeError = !iso.test(range.from) || !iso.test(range.to) ? 'Renseignez les deux dates.' : range.from > range.to ? 'La date de début doit précéder la date de fin.' : null
 
   const download = async () => {
     setBusy(true)
@@ -90,13 +93,13 @@ export function StatementsPage() {
         </p>
       </section>
 
-      {err && <Alert>{err}</Alert>}
+      {(rangeError ?? err) && <Alert>{rangeError ?? err}</Alert>}
       <div className="grid grid-cols-2 gap-2.5">
-        <button type="button" disabled={busy} onClick={() => void download()} className="btn-primary">
+        <button type="button" disabled={busy || rangeError !== null} onClick={() => void download()} className="btn-primary">
           <Icon name="download" size={18} />
           {busy ? 'Téléchargement…' : 'Télécharger CSV'}
         </button>
-        <button type="button" onClick={() => navigate(printPath(query))} className="btn-ghost">
+        <button type="button" disabled={rangeError !== null} onClick={() => navigate(printPath(query))} className="btn-ghost">
           <Icon name="print" size={18} />
           Version imprimable
         </button>
