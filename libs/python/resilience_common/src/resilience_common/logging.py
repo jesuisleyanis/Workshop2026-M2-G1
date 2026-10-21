@@ -30,6 +30,8 @@ NORMALIZED_EVENTS = frozenset(
         "card_unfrozen",
         "card_settings_changed",
         "card_access_denied",
+        "scheduled_transfer_executed",
+        "scheduled_transfer_failed",
         "waf_blocked",
         "anomaly_detected",
         "remediation_started",

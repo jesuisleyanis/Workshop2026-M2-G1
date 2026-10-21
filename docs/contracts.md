@@ -73,6 +73,8 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `card_unfrozen` | payment-api | Carte dégelée (#47) |
 | `card_settings_changed` | payment-api | Réglages de carte modifiés (#47 : plafond, sans contact, paiement en ligne — noms des champs seulement) |
 | `card_access_denied` | payment-api | Action sur une carte inconnue ou d'un tiers (#47, `404 card_not_found`) — une rafale = balayage d'ids (IDOR) |
+| `scheduled_transfer_executed` | payment-api | Échéance d'un virement programmé exécutée par la tâche de fond (#48) |
+| `scheduled_transfer_failed` | payment-api | Échéance refusée par le ledger (#48 : solde, plafond…) — motif dans le message |
 | `transaction_access_denied` | payment-api | Lecture refusée d'une opération (#45 : id inconnu ou d'un tiers, message `unknown`/`foreign`) — une rafale = balayage d'ids (IDOR) |
 | `beneficiary_rejected` | payment-api | Ajout refusé (IBAN inconnu, doublon, soi-même, quota) — une rafale = énumération d'IBAN |
 | `waf_blocked` | waf (via log Nginx/ModSec) | Requête bloquée par le CRS |

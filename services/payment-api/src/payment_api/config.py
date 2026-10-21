@@ -24,6 +24,9 @@ class Settings:
     enable_docs: bool = False
     log_level: str = "INFO"
     status_cache_s: float = 2.0
+    # Exécuteur des virements programmés (#48) : tâche de fond, une passe par intervalle.
+    scheduler_enabled: bool = True
+    scheduler_interval_s: float = 60.0
 
     def __post_init__(self) -> None:
         if len(self.jwt_secret) < MIN_SECRET_LENGTH:
@@ -43,4 +46,6 @@ class Settings:
             enable_docs=_bool("ENABLE_DOCS", False),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
             status_cache_s=float(os.environ.get("STATUS_CACHE_S", "2")),
+            scheduler_enabled=_bool("SCHEDULER_ENABLED", True),
+            scheduler_interval_s=float(os.environ.get("SCHEDULER_INTERVAL_S", "60")),
         )
