@@ -21,6 +21,16 @@ class Rejection(Exception):
         super().__init__(message)
 
 
+def check_amount_and_accounts(src_id: int, dst_id: int, amount_cents: int) -> None:
+    """Règles statiques d'un virement, partagées avec les virements programmés (#48)."""
+    if amount_cents <= 0:
+        raise Rejection(422, "invalid_amount", "Amount must be strictly positive")
+    if amount_cents > MAX_AMOUNT_CENTS:
+        raise Rejection(422, "amount_too_large", "Amount exceeds the maximum allowed")
+    if src_id == dst_id:
+        raise Rejection(422, "same_account", "Source and destination must differ")
+
+
 def transfer(
     session: Session,
     user: User,
@@ -32,12 +42,7 @@ def transfer(
     now: datetime | None = None,
 ) -> Transaction:
     """Débite `src_id` (qui doit appartenir à `user`) et crédite `dst_id`, atomiquement."""
-    if amount_cents <= 0:
-        raise Rejection(422, "invalid_amount", "Amount must be strictly positive")
-    if amount_cents > MAX_AMOUNT_CENTS:
-        raise Rejection(422, "amount_too_large", "Amount exceeds the maximum allowed")
-    if src_id == dst_id:
-        raise Rejection(422, "same_account", "Source and destination must differ")
+    check_amount_and_accounts(src_id, dst_id, amount_cents)
 
     # Verrou de ligne dans l'ordre des id : pas de deadlock entre deux virements croisés,
     # et le contrôle de solde se fait sous verrou (pas de double dépense concurrente).

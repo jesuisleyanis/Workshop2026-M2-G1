@@ -41,7 +41,7 @@ def test_only_public_routes_are_proxied():
     locations = re.findall(r"location\s+(?:[=~]\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
                               "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/stats/spending",
-                              "^/api/v1/transactions/[0-9]+$", "/api/v1/limits", "/api/v1/cards",
+                              "^/api/v1/transactions/[0-9]+$", "/api/v1/limits", "/api/v1/cards", "/api/v1/scheduled-transfers",
                               "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
@@ -66,12 +66,20 @@ def test_delete_and_patch_are_denied_everywhere_except_their_one_route():
 
     assert not denied("DELETE:/api/v1/beneficiaries/12")
     assert not denied("PATCH:/api/v1/cards/3")
+    assert not denied("PATCH:/api/v1/scheduled-transfers/7") and not denied("DELETE:/api/v1/scheduled-transfers/7")
+    assert denied("DELETE:/api/v1/scheduled-transfers") and denied("PATCH:/api/v1/scheduled-transfers/7/x")
     for probe in ("DELETE:/api/v1/beneficiaries", "DELETE:/api/v1/beneficiaries/12/x",
                   "DELETE:/api/v1/accounts", "DELETE:/api/v1/cards/3", "DELETE:/",
                   "PATCH:/api/v1/cards", "PATCH:/api/v1/cards/3/freeze", "PATCH:/api/v1/accounts",
                   "PATCH:/api/v1/beneficiaries/12"):
         assert denied(probe), probe
     assert not denied("GET:/api/v1/accounts") and not denied("POST:/api/v1/cards/3/freeze")
+
+
+def test_scheduled_transfers_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=schedules_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/scheduled-transfers\s+\{\s*limit_req zone=schedules_per_ip", conf)
 
 
 def test_cards_route_is_rate_limited_per_ip():

@@ -142,3 +142,44 @@ class CardPatch(BaseModel):
         ):
             raise ValueError("at least one non-null setting is required")
         return self
+
+
+class ScheduleIn(BaseModel):
+    # Bornés à l'INTEGER Postgres : au-delà, un DataError deviendrait un faux db_error pour le ML.
+    src_account: StrictInt = Field(ge=1, le=2**31 - 1)
+    dst_account: StrictInt = Field(ge=1, le=2**31 - 1)
+    amount_cents: StrictInt
+    category: TransactionCategory = TransactionCategory.TRANSFER
+    frequency: Literal["once", "weekly", "monthly"]
+    start_on: date
+    end_on: date | None = None
+
+
+class ScheduleStatusIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["paused", "active"]
+
+
+class RunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    run_on: date
+    status: Literal["pending", "executed", "failed"]
+    error_code: str | None
+
+
+class ScheduleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    src_account: int
+    dst_account: int
+    amount_cents: int
+    category: TransactionCategory
+    frequency: Literal["once", "weekly", "monthly"]
+    start_on: date
+    next_run_on: date | None
+    end_on: date | None
+    status: Literal["active", "paused", "cancelled", "completed"]
+    last_run: RunOut | None = None

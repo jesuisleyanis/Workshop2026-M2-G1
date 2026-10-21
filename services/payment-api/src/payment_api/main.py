@@ -3,6 +3,7 @@
 Lancement : uvicorn payment_api.main:create_app --factory --port 8001
 """
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable
@@ -24,7 +25,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from payment_api import beneficiaries, cards, limits, stats
+from payment_api import beneficiaries, cards, limits, schedules, stats
 from payment_api.config import SERVICE_NAME, Settings
 from payment_api.ledger import Rejection, transfer
 from payment_api.observability import (
@@ -42,6 +43,10 @@ from payment_api.schemas import (
     CardOut,
     CardPatch,
     LimitOut,
+    RunOut,
+    ScheduleIn,
+    ScheduleOut,
+    ScheduleStatusIn,
     ServiceStatusOut,
     SpendingOut,
     TransactionIn,
@@ -95,11 +100,23 @@ def create_app(
         get_logger(SERVICE_NAME, getattr(logging, settings.log_level, logging.INFO))
     )
 
+    async def _scheduler_loop() -> None:
+        # Hors du thread de l'event loop : le ledger est synchrone (SQLAlchemy).
+        while True:
+            try:
+                await asyncio.to_thread(schedules.run_due, session_factory, log, now)
+            except Exception:  # BDD indisponible pendant un incident : on retente au tour suivant
+                log.warning("Scheduler pass failed", exc_info=True)
+            await asyncio.sleep(settings.scheduler_interval_s)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if settings.run_migrations:
             _migrate_with_retry(engine, log)
+        task = asyncio.create_task(_scheduler_loop()) if settings.scheduler_enabled else None
         yield
+        if task is not None:
+            task.cancel()
 
     app = FastAPI(
         title="RESILIENCE-ALPHA payment-api",
@@ -294,6 +311,63 @@ def create_app(
         session=Depends(get_session),
     ):
         return stats.spending(session, user, period, now(), offset)
+
+    # ---------------------------------------------------------------- programmés (#48)
+    def _schedule_out(s, run=None) -> ScheduleOut:
+        out = ScheduleOut.model_validate(s)
+        return out.model_copy(update={"last_run": RunOut.model_validate(run) if run else None})
+
+    @app.get("/api/v1/scheduled-transfers", response_model=list[ScheduleOut])
+    def list_schedules(user: User = Depends(current_user), session=Depends(get_session)):
+        return [_schedule_out(s, run) for s, run in schedules.list_for(session, user)]
+
+    def _audit(event: str, message: str, status: int, user: User, level=logging.INFO):
+        log_event(log, level, event, message, http_status=status, user=user.username)
+
+    @app.post("/api/v1/scheduled-transfers", response_model=ScheduleOut, status_code=201)
+    def create_schedule(
+        body: ScheduleIn, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        try:
+            s = schedules.create(session, user, body, now().astimezone(UTC).date())
+        except Rejection as rej:
+            # Piste d'audit (vol de session -> virement permanent vers un compte mule).
+            _audit(
+                "scheduled_transfer_rejected",
+                f"Schedule rejected ({rej.code})",
+                rej.status,
+                user,
+                logging.WARNING,
+            )
+            raise
+        _audit(
+            "scheduled_transfer_created",
+            f"Schedule {s.id} created ({s.frequency}, account {s.dst_account})",
+            201,
+            user,
+        )
+        return _schedule_out(s)
+
+    @app.patch("/api/v1/scheduled-transfers/{schedule_id}", response_model=ScheduleOut)
+    def set_schedule_status(
+        schedule_id: DbId,
+        body: ScheduleStatusIn,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        s = schedules.set_status(
+            session, user, schedule_id, body.status, now().astimezone(UTC).date()
+        )
+        _audit("scheduled_transfer_changed", f"Schedule {s.id} {s.status}", 200, user)
+        return _schedule_out(s)
+
+    @app.delete("/api/v1/scheduled-transfers/{schedule_id}", status_code=204)
+    def cancel_schedule(
+        schedule_id: DbId, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        schedules.cancel(session, user, schedule_id)
+        _audit("scheduled_transfer_changed", f"Schedule {schedule_id} cancelled", 204, user)
+        return Response(status_code=204)
 
     # ---------------------------------------------------------------- cartes (#47)
     @app.get("/api/v1/cards", response_model=list[CardOut])

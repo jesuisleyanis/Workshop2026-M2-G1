@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createApiClient } from './client'
 import { createEndpoints } from './index'
 import { decodeJwtClaims, decodeJwtExp } from './tokenStore'
-import { parseAccounts, parseCard, parseLimits, parseLogin, parseTransaction } from './parsers'
+import { parseAccounts, parseCard, parseLimits, parseLogin, parseSchedule, parseTransaction } from './parsers'
 import { fakeJwt, jsonResponse } from '../test/helpers'
 
 function endpointsWith(handler: (url: string, init?: RequestInit) => Response) {
@@ -113,6 +113,19 @@ describe('endpoints /api/v1', () => {
     expect(parseCard(base).status).toBe('active')
     expect(() => parseCard({ ...base, status: 'blocked' })).toThrow(/Statut de carte inconnu/)
     expect(() => parseCard({ ...base, contactless: undefined })).toThrow(/contactless/)
+  })
+
+  it('parseSchedule : euros, last_run, échec fermé sur statut/fréquence inconnus', () => {
+    const base = { id: 3, src_account: 1, dst_account: 42, amount_cents: 5000, category: 'housing', frequency: 'monthly', start_on: '2026-10-01', next_run_on: '2026-11-01', end_on: null, status: 'active', last_run: { run_on: '2026-10-01', status: 'failed', error_code: 'limit_exceeded' } }
+    const s = parseSchedule(base)
+    expect([s.amount, s.endOn, s.lastRun]).toEqual([50, null, { runOn: '2026-10-01', status: 'failed', errorCode: 'limit_exceeded' }])
+    expect(() => parseSchedule({ ...base, status: 'running' })).toThrow()
+    expect(() => parseSchedule({ ...base, frequency: 'daily' })).toThrow()
+  })
+
+  it('parseSchedule : une exécution interrompue (pending) reste lisible', () => {
+    const row = { id: 1, src_account: 1, dst_account: 2, amount_cents: 100, category: 'transfer', frequency: 'once', start_on: '2026-10-21', next_run_on: null, end_on: null, status: 'completed', last_run: { run_on: '2026-10-21', status: 'pending', error_code: null } }
+    expect(parseSchedule(row).lastRun?.status).toBe('pending')
   })
 
   it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {

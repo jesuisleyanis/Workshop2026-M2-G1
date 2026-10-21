@@ -9,6 +9,7 @@ import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { RibPage } from './pages/RibPage'
+import { ScheduledPage } from './pages/ScheduledPage'
 import { SendPage } from './pages/SendPage'
 import { StatsPage } from './pages/StatsPage'
 import { TxDetailPage } from './pages/TxDetailPage'
@@ -28,6 +29,7 @@ export function App() {
           <Route path="beneficiaries" element={<BeneficiariesPage />} />
           <Route path="cards" element={<CardsPage />} />
           <Route path="limits" element={<LimitsPage />} />
+          <Route path="scheduled" element={<ScheduledPage />} />
           <Route path="profile" element={<ProfilePage />} />
           {/* Anciennes routes (liens existants, scripts de démo). */}
           <Route path="transfer" element={<Navigate to="/send" replace />} />

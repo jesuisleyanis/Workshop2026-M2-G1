@@ -23,7 +23,7 @@ security/waf/
 
 | Point | Choix |
 |---|---|
-| Base | `owasp/modsecurity-crs:4.25.2-nginx-alpine-lts` (ModSecurity v3 + OWASP CRS préinstallés, configurés par l'entrypoint de l'image : `BLOCKING_PARANOIA=1`, `ANOMALY_INBOUND=5`, `ANOMALY_OUTBOUND=4`, `ALLOWED_METHODS="GET HEAD POST OPTIONS DELETE PATCH"` — DELETE pour les bénéficiaires #43, PATCH pour les réglages de carte #47, refusés en 405 par `$method_denied` sur tout autre chemin ; PUT refusé) |
+| Base | `owasp/modsecurity-crs:4.25.2-nginx-alpine-lts` (ModSecurity v3 + OWASP CRS préinstallés, configurés par l'entrypoint de l'image : `BLOCKING_PARANOIA=1`, `ANOMALY_INBOUND=5`, `ANOMALY_OUTBOUND=4`, `ALLOWED_METHODS="GET HEAD POST OPTIONS DELETE PATCH"` — DELETE pour les bénéficiaires #43, PATCH pour les réglages de carte #47, PATCH/DELETE d'un virement programmé #48, refusés en 405 par `$method_denied` sur tout autre chemin ; PUT refusé) |
 | Utilisateur | **non-root** (`nginx`, image *unprivileged*) → écoute **8080 / 8443** ; Compose publie `80:8080` et `443:8443` (seul service avec `ports:`) |
 | TLS | certificat **auto-signé généré au build** (`openssl req -x509`, ECDSA P-256, SAN `localhost`/`waf`/`192.168.137.1`) dans `/etc/nginx/conf/` — jamais commité ; les clients de labo utilisent `-k` / contexte non vérifié |
 | Config | `nginx.conf` du projet copié tel quel (les templates `nginx.conf`/`conf.d` de l'image sont retirés) ; les templates `modsecurity.d` de l'image restent et rendent `/etc/modsecurity.d/setup.conf` au démarrage |
@@ -75,7 +75,7 @@ docker compose -f infra/compose/docker-compose.yml exec waf-exporter \
 
 ```bash
 # waf-exporter (parseur, métrique exposée au format Prometheus, suivi du journal) + contrat de configuration
-# (upstream front:8080, non-root, TLS, routes, compose, câblage waf-exporter/Prometheus, méthodes CRS + DELETE/PATCH restreints) : 33 tests, sans conteneur
+# (upstream front:8080, non-root, TLS, routes, compose, câblage waf-exporter/Prometheus, méthodes CRS + DELETE/PATCH restreints) : 34 tests, sans conteneur
 python -m pytest security/waf/tests/ -q
 ```
 
