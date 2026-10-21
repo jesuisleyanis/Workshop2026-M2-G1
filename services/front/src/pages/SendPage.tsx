@@ -268,6 +268,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
         amount={amount}
         src={src}
         toName={toRec?.name ?? ''}
+        scheduling={plan.on}
         onCopy={(ref) => void copyText(ref).then((ok) => toast(ok ? 'Référence copiée' : 'Copie impossible : notez la référence'))}
         onView={(id) => navigate(`/operations/${id}`)}
         onNew={reset}
@@ -747,6 +748,7 @@ function ResultCard({
   amount,
   src,
   toName,
+  scheduling,
   onCopy,
   onView,
   onNew,
@@ -761,6 +763,8 @@ function ResultCard({
   amount: number
   src: Account
   toName: string
+  /** « Programmer » : un résultat incertain renvoie vers les programmations, pas l'historique. */
+  scheduling: boolean
   onCopy: (ref: string) => void
   onView: (txId: string) => void
   onNew: () => void
@@ -792,7 +796,7 @@ function ResultCard({
         icon: 'check',
         tone: 'bg-ok-bg text-ok-fg',
         title: 'Virement envoyé',
-        text: `${money} ont été envoyés au ${toName.toLowerCase()}.`,
+        text: `${money} ont été envoyés à ${toName}.`,
         a: ['Voir l’opération', () => onView(outcome.tx.id)],
         b: ['Nouveau virement', onNew],
       }
@@ -824,19 +828,31 @@ function ResultCard({
       }
       break
     default: {
-      // Timeout / coupure réseau : le serveur a pu exécuter le virement sans que la réponse arrive. Pas de clé
-      // d'idempotence côté payment-api : on renvoie vers l'historique plutôt que de risquer un double débit.
-      // Un 5xx explicite (transaction annulée côté ledger) garde « Réessayer ».
-      const unknown = outcome.error instanceof ApiError && outcome.error.isNetwork
+      // Issue incertaine : le serveur a pu exécuter l'opération sans que la réponse arrive. C'est le cas
+      // d'un timeout / coupure réseau, mais aussi d'un 502/504 du WAF (payment-api a pu committer avant
+      // que la passerelle n'abandonne) et d'un 500 inattendu. Pas de clé d'idempotence côté payment-api :
+      // jamais de « Réessayer » ici (double débit). Seul un 503 de payment-api (BDD injoignable, rien
+      // n'est écrit) reste réessayable.
+      const e = outcome.error
+      const unknown = e instanceof ApiError && (e.isNetwork || (e.status >= 500 && e.status !== 503))
       view = unknown
-        ? {
-            icon: 'alert',
-            tone: 'bg-warn-bg text-warn-fg',
-            title: 'Statut du virement inconnu',
-            text: 'Le serveur n’a pas répondu à temps : le virement a pu être exécuté. Vérifiez votre historique avant d’en émettre un nouveau.',
-            a: ['Voir l’historique', onHistory],
-            b: ['Retour à l’accueil', onHome],
-          }
+        ? scheduling
+          ? {
+              icon: 'alert',
+              tone: 'bg-warn-bg text-warn-fg',
+              title: 'Programmation incertaine',
+              text: 'Le serveur n’a pas confirmé la programmation : elle a pu être enregistrée. Vérifiez vos virements programmés avant d’en créer une nouvelle.',
+              a: ['Voir mes virements programmés', onScheduled],
+              b: ['Retour à l’accueil', onHome],
+            }
+          : {
+              icon: 'alert',
+              tone: 'bg-warn-bg text-warn-fg',
+              title: 'Statut du virement inconnu',
+              text: 'Le serveur n’a pas confirmé le virement : il a pu être exécuté. Vérifiez votre historique avant d’en émettre un nouveau.',
+              a: ['Voir l’historique', onHistory],
+              b: ['Retour à l’accueil', onHome],
+            }
         : {
             icon: 'alert',
             tone: 'bg-warn-bg text-warn-fg',

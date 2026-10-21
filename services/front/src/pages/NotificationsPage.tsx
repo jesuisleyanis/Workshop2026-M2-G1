@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { Icon } from '../components/icons'
 import { EmptyState, ErrorState, LoadingState } from '../components/ui'
@@ -14,10 +14,14 @@ import type { AppNotification } from '../types/api'
 export function NotificationsPage() {
   const all = useNotifications(false)
   const { unreadCount } = useBankData()
-  // Le sondage du badge (30 s) rafraîchit aussi la liste affichée : un nouveau compteur = recharger.
+  // Le sondage du badge (30 s) rafraîchit la liste quand de NOUVELLES notifications arrivent (compteur en
+  // hausse) : ni au montage (chargement déjà en cours), ni après un marquage lu (compteur en baisse).
   const { reload: reloadAll } = all
+  const prevCount = useRef<number | null>(null)
   useEffect(() => {
-    if (unreadCount.data !== null) reloadAll()
+    const prev = prevCount.current
+    prevCount.current = unreadCount.data
+    if (prev !== null && unreadCount.data !== null && unreadCount.data > prev) reloadAll()
   }, [unreadCount.data, reloadAll])
   const { toast } = useShell()
   // Réponses serveur après un marquage, valables pour CE chargement : un rechargement l'emporte.

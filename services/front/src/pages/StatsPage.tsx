@@ -21,12 +21,19 @@ export function StatsPage() {
   const navigate = useNavigate()
   const [mode, setMode] = useState<StatsMode>('week')
   const [offset, setOffset] = useState(0)
+  // Montants de la période = agrégat serveur (GET /stats/spending) : l'historique local ne contient que
+  // les 50 dernières opérations, un total calculé dessus serait faux dès qu'on remonte dans le temps.
+  const spending = useSpending(mode, offset)
 
   if (transactions.error && !views) return <ErrorState error={transactions.error} onRetry={transactions.reload} />
   if (!views) return <LoadingState label="Chargement des statistiques…" />
   if (views.length === 0) return <EmptyState title="Aucune dépense" text="Vos statistiques apparaîtront après vos premières opérations." icon="chart" />
 
-  const p = spendingPeriod(views, mode, offset)
+  const local = spendingPeriod(views, mode, offset)
+  const server = spending.data ? new Map(spending.data.byDay.map((d) => [d.date, d.amount])) : null
+  const p = server
+    ? { ...local, days: local.days.map((d) => ({ ...d, spent: server.get(d.key) ?? 0 })), total: spending.data!.total }
+    : local
   const week = mode === 'week'
   const max = Math.max(1, ...p.days.map((d) => d.spent))
   const today = dayKey(new Date().toISOString())
@@ -102,7 +109,7 @@ export function StatsPage() {
         </div>
       </Card>
 
-      <CategoriesCard mode={mode} offset={offset} />
+      <CategoriesCard mode={mode} offset={offset} spending={spending} />
 
       <Card aria-labelledby="h-pop" className="gap-1 px-3 pt-[18px] pb-2.5">
         <H2 id="h-pop" className="px-2 pb-2">
@@ -119,8 +126,7 @@ export function StatsPage() {
 }
 
 /** D8 : répartition par catégorie de la période affichée, calculée par payment-api (pas de calcul local inventé). */
-function CategoriesCard({ mode, offset }: { mode: StatsMode; offset: number }) {
-  const spending = useSpending(mode, offset)
+function CategoriesCard({ mode, offset, spending }: { mode: StatsMode; offset: number; spending: ReturnType<typeof useSpending> }) {
   const current = offset < 0 ? 'sur cette période' : mode === 'week' ? 'cette semaine' : 'ce mois-ci'
   let body
   if (spending.error && !spending.data) {
