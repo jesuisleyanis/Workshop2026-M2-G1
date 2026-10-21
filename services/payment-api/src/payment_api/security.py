@@ -27,15 +27,7 @@ def username_from_token(token: str, secret: str) -> str:
     L'algorithme est ÉPINGLÉ à HS256 (rejette `alg: none` et la confusion d'algorithme),
     `exp` et `sub` sont obligatoires.
     """
-    try:
-        claims = jwt.decode(
-            token, secret, algorithms=[ALGORITHM], options={"require": ["exp", "sub"]}
-        )
-    except jwt.ExpiredSignatureError:
-        raise ApiError(401, "token_expired", "Token expired", _bearer("invalid_token"))
-    except jwt.InvalidTokenError:
-        raise ApiError(401, "invalid_token", "Invalid token", _bearer("invalid_token"))
-    sub = claims["sub"]
+    sub = claims_from_token(token, secret)["sub"]
     if not isinstance(sub, str) or not sub:
         raise ApiError(401, "invalid_token", "Invalid token", _bearer("invalid_token"))
     return sub
