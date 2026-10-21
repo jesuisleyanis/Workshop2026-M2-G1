@@ -20,9 +20,10 @@ describe('format', () => {
 })
 
 describe('maskIban (#45)', () => {
-  it('garde pays + clé et le 4e groupe, masque le reste', () => {
-    expect(maskIban('FR76 0000 0000 0001 0000 0000 000')).toBe('FR76 •••• •••• 0001 •••• •••• •••')
-    expect(maskIban('FR7612345678901234567890')).toBe('FR76 •••• •••• 9012 •••• ••••')
+  it('garde pays + clé, code banque et 4e groupe ; client et tiers restent distincts', () => {
+    expect(maskIban('FR76 0000 0000 0001 0000 0000 000')).toBe('FR76 0000 •••• 0001 •••• •••• •••')
+    expect(maskIban('FR76 9999 0000 0001 0000 0000 000')).toBe('FR76 9999 •••• 0001 •••• •••• •••')
+    expect(maskIban('FR7612345678901234567890')).toBe('FR76 1234 •••• 9012 •••• ••••')
     expect(maskIban('FR76 A1')).toBe('FR76 A1')
   })
 })

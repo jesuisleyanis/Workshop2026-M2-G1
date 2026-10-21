@@ -33,7 +33,8 @@ export function TxDetailPage() {
   if (!views) return <LoadingState label="Chargement de l’opération…" />
   const v = views.find((x) => x.tx.id === id)
   // Hors des 50 dernières (lien direct, opération ancienne) : GET /api/v1/transactions/{id} (#45).
-  return v ? <TxDetail view={v} /> : <FetchedTxDetail id={id} />
+  // key : un changement d'id remonte le composant, jamais l'opération précédente sous la nouvelle URL.
+  return v ? <TxDetail view={v} /> : <FetchedTxDetail key={id} id={id} />
 }
 
 function FetchedTxDetail({ id }: { id: string }) {

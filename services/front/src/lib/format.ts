@@ -39,14 +39,15 @@ export function formatIban(iban: string): string {
 }
 
 /**
- * IBAN masqué pour un écran partageable (#45) : pays + clé et le 4e groupe (le plus discriminant
- * des IBAN fictifs du seed) restent lisibles, le reste est masqué.
+ * IBAN masqué pour un écran partageable (#45) : pays + clé, code banque (2e groupe) et 4e groupe
+ * restent lisibles — dans le seed, le 2e distingue un client (0000) d'un tiers (9999) et le 4e
+ * numérote le compte. Le reste est masqué.
  */
 export function maskIban(iban: string): string {
   const groups = formatIban(iban).split(' ')
-  if (groups.length <= 2) return groups.join(' ')
-  const keep = Math.min(3, groups.length - 1)
-  return groups.map((g, i) => (i === 0 || i === keep ? g : '•'.repeat(g.length))).join(' ')
+  if (groups.length <= 3) return groups.join(' ')
+  const keep = new Set([0, 1, Math.min(3, groups.length - 1)])
+  return groups.map((g, i) => (keep.has(i) ? g : '•'.repeat(g.length))).join(' ')
 }
 
 /** « FR76 … 0142 » pour les espaces contraints. */

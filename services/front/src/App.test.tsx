@@ -610,20 +610,54 @@ describe('Front - détail d’opération (#45)', () => {
     })
     renderApp('/operations/500')
     expect(await screen.findByTestId('tx-amount')).toHaveTextContent(/12,34/)
-    expect(screen.getByText('Compte n°1 · FR76 •••• •••• 0001 •••• •••• •••')).toBeInTheDocument()
-    expect(screen.getByText('Léa Martin · FR76 •••• •••• 0001 •••• •••• •••')).toBeInTheDocument()
+    expect(screen.getByText('Compte n°1 · FR76 0000 •••• 0001 •••• •••• •••')).toBeInTheDocument()
+    expect(screen.getByText('Léa Martin · FR76 9999 •••• 0001 •••• •••• •••')).toBeInTheDocument()
     expect(screen.getByText('Santé')).toBeInTheDocument()
-    expect(screen.getByText('req-old')).toBeInTheDocument()
+    // Référence copiable (support / démo).
+    const writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await userEvent.click(screen.getByRole('button', { name: 'Copier la référence' }))
+    expect(writeText).toHaveBeenCalledWith('req-old')
+    expect(await screen.findByText('Référence copiée')).toBeInTheDocument()
   })
 
-  it('opération d’un tiers ou inconnue (404) : « Opération introuvable », sans fuite', async () => {
+  it('RIB : IBAN complet, copie, partage (repli copie sans Web Share) et impression', async () => {
+    loginAsStored()
+    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
+    const writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {})
+    try {
+      renderApp('/rib')
+      const rib = await screen.findByRole('region', { name: 'RIB du Compte n°1' })
+      expect(rib).toHaveTextContent('FR76 0000 0001')
+      await userEvent.click(screen.getByRole('button', { name: /Partager/ }))
+      expect(writeText).toHaveBeenLastCalledWith(expect.stringMatching(/IBAN FR76 0000 0001 — BIC/))
+      await userEvent.click(screen.getByRole('button', { name: /Imprimer/ }))
+      expect(print).toHaveBeenCalled()
+    } finally {
+      print.mockRestore()
+    }
+  })
+
+  it('opération d’un tiers ou inconnue (404) : « Opération introuvable » ; panne (503) : erreur + réessai', async () => {
     loginAsStored()
     stubFetch({
       'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
       'GET /api/v1/transactions': () => jsonResponse(TXS),
       'GET /api/v1/transactions/77': () => jsonResponse({ error: { code: 'transaction_not_found', message: 'x' } }, 404),
     })
-    renderApp('/operations/77')
+    const { unmount } = renderApp('/operations/77')
     expect(await screen.findByText('Opération introuvable')).toBeInTheDocument()
+    expect(screen.queryByTestId('tx-amount')).not.toBeInTheDocument()
+    unmount()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/transactions/77': () => jsonResponse({ error: { code: 'db_unavailable', message: 'x' } }, 503),
+    })
+    renderApp('/operations/77')
+    expect(await screen.findByRole('button', { name: 'Réessayer' })).toBeInTheDocument()
+    expect(screen.queryByText('Opération introuvable')).not.toBeInTheDocument()
   })
 })
