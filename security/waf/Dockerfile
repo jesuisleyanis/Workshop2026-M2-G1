@@ -41,6 +41,10 @@ COPY --chown=nginx:nginx nginx.conf /etc/nginx/nginx.conf
 # nginx (uid 101) le relit au SIGHUP. Le script d'entrypoint recrée le fichier s'il manque.
 COPY --chown=nginx:nginx deny/blocked_ips.conf /etc/nginx/deny/blocked_ips.conf
 COPY --chmod=0755 docker-entrypoint.d/05-ensure-deny-list.sh /docker-entrypoint.d/05-ensure-deny-list.sh
+# Mode « IP réelle » : confiance X-Forwarded-For générée au démarrage (vide par défaut = aucune confiance).
+COPY --chmod=0755 docker-entrypoint.d/06-trust-forwarded.sh /docker-entrypoint.d/06-trust-forwarded.sh
+RUN echo '# aucune source de confiance (défaut)' > /etc/nginx/conf/realip.conf \
+ && chown nginx:nginx /etc/nginx/conf/realip.conf
 RUN chown -R nginx:nginx /etc/nginx/deny && chmod 2775 /etc/nginx/deny && chmod 0644 /etc/nginx/deny/blocked_ips.conf
 
 # Journal d'audit ModSecurity (JSON Serial, blocages) : répertoire partagé avec waf-exporter via le volume

@@ -27,7 +27,7 @@ MAKEFILE = (ROOT / "Makefile").read_text(encoding="utf-8")
 # ---------------------------------------------------------------- Makefile
 def _make_var(name: str) -> str:
     """Valeur d'une variable du Makefile, variables $(X) imbriquées résolues."""
-    match = re.search(rf"^{name}\s*:?=\s*(.*)$", MAKEFILE, re.MULTILINE)
+    match = re.search(rf"^{name}[ \t]*[:?]?=[ \t]*(.*)$", MAKEFILE, re.MULTILINE)
     assert match, f"variable {name} absente du Makefile"
     return re.sub(r"\$\((\w+)\)", lambda m: _make_var(m.group(1)), match.group(1))
 
@@ -219,3 +219,34 @@ def test_only_the_remediation_fixed_ip_is_exempt_from_the_login_rate_limit():
     assert exempt == [ip]  # une IP exacte, jamais une plage (les clients externes = passerelle Docker)
     gateway = COMPOSE["networks"]["app"]["ipam"]["config"][0]["gateway"]
     assert ip != gateway
+
+
+# ---------------------------------------------------------------- mode « IP réelle » (Caddy natif)
+def test_by_default_the_waf_never_trusts_x_forwarded_for():
+    # Sans proxy de confiance devant lui, croire X-Forwarded-For = un client choisit son IP
+    # (échapper au blocage, faire bloquer quelqu'un d'autre, contourner la limitation de débit).
+    assert SERVICES["waf"]["environment"]["WAF_TRUST_FORWARDED_FROM"] == ""
+
+
+def test_real_ip_overlay_publishes_the_waf_on_loopback_and_trusts_only_docker_gateways():
+    class ComposeLoader(yaml.SafeLoader):  # balise Compose `!override` (remplace la liste de base)
+        pass
+
+    ComposeLoader.add_constructor("!override", lambda loader, node: loader.construct_sequence(node))
+    overlay = yaml.load(  # noqa: S506 — SafeLoader + une seule balise ajoutée
+        (ROOT / "infra/compose/docker-compose.realip.yml").read_text(encoding="utf-8"), Loader=ComposeLoader
+    )
+    waf = overlay["services"]["waf"]
+    # Seul Caddy (même poste) peut joindre le WAF : personne ne contourne le proxy depuis le hotspot.
+    assert all(str(p).startswith("127.0.0.1:") for p in waf["ports"]), waf["ports"]
+    trusted = waf["environment"]["WAF_TRUST_FORWARDED_FROM"].split(",")
+    gateways = {COMPOSE["networks"][n]["ipam"]["config"][0]["gateway"] for n in SERVICES["waf"]["networks"]}
+    assert set(trusted) == gateways  # ni plage, ni IP de client : uniquement le trafic publié en local
+
+
+def test_caddy_overwrites_x_forwarded_for_and_targets_the_loopback_waf():
+    caddy = (ROOT / "infra/caddy/Caddyfile").read_text(encoding="utf-8")
+    overlay = (ROOT / "infra/compose/docker-compose.realip.yml").read_text(encoding="utf-8")
+    assert "header_up X-Forwarded-For {remote_host}" in caddy  # écrase la valeur du client
+    assert "reverse_proxy https://127.0.0.1:8443" in caddy and '"127.0.0.1:8443:8443"' in overlay
+    assert "admin off" in caddy and "https://192.168.137.1" in caddy

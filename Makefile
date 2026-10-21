@@ -5,7 +5,9 @@ SHELL := /bin/bash   # pipefail dans les recettes de tests
 # --env-file .env : Compose chercherait sinon le .env dans infra/compose/ (répertoire du fichier
 # compose), où il n'existe pas -> POSTGRES_PASSWORD, JWT_SECRET, tokens vides. Affectation récursive
 # (`=`) : le wildcard est évalué à l'exécution de la recette, donc APRÈS `make decrypt`.
-COMPOSE = docker compose -f infra/compose/docker-compose.yml $(if $(wildcard .env),--env-file .env)
+# REAL_IP=1 : mode « IP réelle » (proxy natif Caddy devant le WAF, publié en 127.0.0.1) — infra/caddy/README.md.
+REAL_IP ?=
+COMPOSE = docker compose -f infra/compose/docker-compose.yml $(if $(REAL_IP),-f infra/compose/docker-compose.realip.yml) $(if $(wildcard .env),--env-file .env)
 ROOT    := $(shell pwd)
 # Charge .env (produit par `make decrypt`) dans l'environnement d'une cible : SEED_PASSWORD, tokens...
 LOADENV := set -a; [ -f .env ] && . ./.env; set +a;
@@ -19,7 +21,7 @@ PROFILES_DEMO := --profile demo --profile ml
 PROFILES_FULL := $(PROFILES_DEMO) --profile full
 PROFILES_ALL  := $(PROFILES_FULL) --profile iot --profile attack --profile ai
 
-.PHONY: help up up-full up-iot build start start-full ui ps down reset-grafana check-env seed verify demo attack stop-attack reset \
+.PHONY: help up up-full up-iot build start start-full ui caddy ps down reset-grafana check-env seed verify demo attack stop-attack reset \
         test test-py test-front audit package decrypt model retrain-detector bench \
         traffic train capture-baseline capture-attack capture-remote calibrate ml-tools test-ml
 
@@ -93,6 +95,10 @@ UI_COMPOSE = $(COMPOSE) -f infra/compose/docker-compose.ui-local.yml
 ui: check-env ## Ouvre le dashboard sur http://127.0.0.1:8081 (PC hôte seulement, jamais sur le hotspot)
 	$(UI_COMPOSE) $(PROFILES_FULL) up -d dashboard
 	@echo "Dashboard : http://127.0.0.1:8081"
+
+caddy: ## Lance le proxy natif Windows (mode REAL_IP=1) : vraie IP des clients transmise au WAF
+	@command -v caddy >/dev/null || { echo "Caddy absent : winget install --id CaddyServer.Caddy -e (voir infra/caddy/README.md)"; exit 1; }
+	caddy run --config infra/caddy/Caddyfile --adapter caddyfile
 
 ps: ## État des conteneurs (tous profils)
 	$(COMPOSE) $(PROFILES_ALL) ps

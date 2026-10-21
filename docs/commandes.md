@@ -71,6 +71,9 @@ COMPOSE="docker compose -f infra/compose/docker-compose.yml --env-file .env"
 `make up*` déchiffre d'abord les secrets (`make decrypt`) et échoue clairement si `.env` est absent.
 Les services démarrent dans l'ordre de santé : postgres *healthy* → payment-api/auth *healthy* → WAF, etc.
 
+**Mode IP réelle** (blocage de l'IP de l'attaquant) : `REAL_IP=1 make up-full`, `REAL_IP=1 make ui`, puis `make caddy`
+dans un terminal dédié — voir `infra/caddy/README.md`. Sans Caddy, ce mode rend la stack injoignable depuis le hotspot.
+
 **Répliques de payment-api** : 3 par défaut derrière le WAF (répartition + bascule) ; `PAYMENT_API_REPLICAS=2 make up-full` pour changer. Voir `services/payment-api/README.md`.
 
 **Dashboard de supervision** : `make ui` puis http://127.0.0.1:8081 (publié sur le loopback du PC hôte

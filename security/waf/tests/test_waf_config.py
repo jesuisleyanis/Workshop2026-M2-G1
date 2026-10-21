@@ -172,3 +172,13 @@ def test_payment_api_replicas_are_load_balanced_with_failover_but_no_post_replay
         assert "proxy_next_upstream error timeout http_502 http_503;" in line, route
         assert "non_idempotent" not in line, "un virement (POST) ne doit jamais être rejoué en double"
         assert "proxy_connect_timeout 2s;" in line, "réplique morte abandonnée avant le timeout client"
+
+
+def test_real_ip_trust_is_generated_empty_by_default_and_applied_before_blocking():
+    # include realip AVANT le geo de blocage : en mode IP réelle, le blocage vise le vrai client.
+    conf = _directives(NGINX)
+    assert conf.index("include /etc/nginx/conf/realip.conf;") < conf.index("geo $blocked_source")
+    script = (WAF / "docker-entrypoint.d" / "06-trust-forwarded.sh").read_text(encoding="utf-8")
+    assert "WAF_TRUST_FORWARDED_FROM" in script and "real_ip_header X-Forwarded-For;" in script
+    assert "grep -Eq '^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'" in script  # IP/CIDR littérale : aucune injection
+    assert "06-trust-forwarded.sh /docker-entrypoint.d/06-trust-forwarded.sh" in DOCKERFILE

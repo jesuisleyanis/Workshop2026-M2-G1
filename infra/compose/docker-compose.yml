@@ -70,6 +70,9 @@ services:
       - "80:8080"
       - "443:8443"
     environment:
+      # Confiance X-Forwarded-For : VIDE par défaut (un client ne choisit jamais son IP). Renseignée par
+      # la surcouche docker-compose.realip.yml (REAL_IP=1), où seul le proxy natif Caddy joint le WAF.
+      WAF_TRUST_FORWARDED_FROM: ""
       # Audit ModSecurity (blocages 4xx/5xx, JSON Serial) écrit dans le volume partagé lu par waf-exporter (#12).
       MODSEC_AUDIT_ENGINE: RelevantOnly
       MODSEC_AUDIT_LOG_FORMAT: JSON
