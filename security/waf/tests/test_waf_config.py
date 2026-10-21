@@ -52,6 +52,15 @@ def test_dockerfile_is_pinned_owasp_crs_nginx_and_non_root():
     assert "ENTRYPOINT" not in DOCKERFILE and "CMD [" not in DOCKERFILE, "l'entrypoint de l'image (ModSec/CRS) doit rester actif"
 
 
+def test_entrypoint_scripts_patching_the_removed_default_conf_are_dropped():
+    # conf.d/default.conf est supprimé (nginx.conf du projet fait foi) : les scripts de l'image qui le
+    # modifient sous `set -e` (93 PROXY_SSL, 96 HTTP3) feraient échouer le démarrage du WAF.
+    assert "/etc/nginx/conf.d/*.conf" in DOCKERFILE
+    for script in ("93-update-proxy-ssl-config.sh", "96-update-http3-config.sh"):
+        removed = [line for line in DOCKERFILE.splitlines() if "rm -f" in line and f"/docker-entrypoint.d/{script}" in line]
+        assert removed, f"{script} doit être retiré de l'image"
+
+
 def test_tls_certificate_generated_at_build_and_used_by_nginx():
     assert "openssl req -x509" in DOCKERFILE
     key = re.search(r"-keyout\s+(\S+)", DOCKERFILE).group(1)

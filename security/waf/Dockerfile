@@ -14,9 +14,13 @@ USER root
 # templates nginx.conf / conf.d de l'image pour que l'entrypoint ne les régénère pas.
 # Les templates modsecurity.d sont CONSERVÉS : ils produisent /etc/modsecurity.d/setup.conf
 # (ModSecurity + CRS), inclus par notre nginx.conf.
+# Les scripts d'entrypoint 93 (PROXY_SSL) et 96 (HTTP3) ne font qu'un `sed` sur conf.d/default.conf,
+# supprimé ici : sous `set -e`, ils font échouer le démarrage (WAF en boucle de redémarrage, vu sur
+# une republication du tag de base). Ces options ne sont pas utilisées : notre nginx.conf fait foi.
 RUN set -eux; \
     rm -f /etc/nginx/templates/nginx.conf.template; \
-    rm -rf /etc/nginx/templates/conf.d /etc/nginx/conf.d/*.conf
+    rm -rf /etc/nginx/templates/conf.d /etc/nginx/conf.d/*.conf; \
+    rm -f /docker-entrypoint.d/93-update-proxy-ssl-config.sh /docker-entrypoint.d/96-update-http3-config.sh
 
 # Certificat TLS AUTO-SIGNÉ généré au build (labo fermé, jamais commité). Déposé là où le script
 # `generate-certificate` de l'image le cherche : il détecte la clé et ne régénère rien au démarrage.
