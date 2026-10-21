@@ -41,7 +41,7 @@ def test_only_public_routes_are_proxied():
     locations = re.findall(r"location\s+(?:[=~]\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
                               "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/stats/spending",
-                              "^/api/v1/transactions/[0-9]+$", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
+                              "^/api/v1/transactions/[0-9]+$", "/api/v1/limits", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
 
@@ -85,6 +85,14 @@ def test_transaction_detail_is_rate_limited_but_transfers_are_not():
     assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=tx_detail_per_ip:\d+m\s+rate=\d+r/m;", conf)
     prefix = re.search(r"location /api/v1/transactions\s+\{([^}]*)\}", conf)
     assert prefix and "limit_req" not in prefix.group(1), "ne pas étouffer service_flood au WAF"
+
+
+def test_limits_route_is_exact_rate_limited_and_read_only():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=limits_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    block = re.search(r"location = /api/v1/limits\s*\{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block and "limit_req zone=limits_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
 
 
 def test_beneficiaries_route_is_rate_limited_per_ip():
