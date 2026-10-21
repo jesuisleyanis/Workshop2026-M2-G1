@@ -21,6 +21,7 @@ const PATHS = {
   logout: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2',
   card: 'M3 6h18v12H3zM3 10h18M7 15h4',
+  bell: 'M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0',
   bank: 'M3 10 12 4l9 6M5 10v8M10 10v8M14 10v8M19 10v8M3 21h18',
   grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
   swap: 'M4 8h14l-3-3M20 16H6l3 3',

@@ -1,9 +1,10 @@
 import { API_BASE } from '../config'
+import { ApiError } from './errors'
 import { createApiClient, type ApiClient } from './client'
-import { parseAccounts, parseBeneficiaries, parseBeneficiary, parseCard, parseCards, parseLimits, parseLogin, parseSchedule, parseSchedules, parseServiceHealth, parseSpending, parseTransaction, parseTransactions } from './parsers'
+import { parseNotification, parseNotifications, parseAccounts, parseBeneficiaries, parseBeneficiary, parseCard, parseCards, parseLimits, parseLogin, parseSchedule, parseSchedules, parseServiceHealth, parseSpending, parseTransaction, parseTransactions } from './parsers'
 import { tokenStore } from './tokenStore'
 import { serviceStatus } from '../lib/serviceStatus'
-import type { Account, AccountLimit, Beneficiary, Card, CardPatch, LoginRequest, LoginResponse, NewBeneficiary, NewSchedule, ScheduledTransfer, ScheduleStatus, ServiceHealth, Spending, Transaction, TransferRequest } from '../types/api'
+import type { AppNotification, Account, AccountLimit, Beneficiary, Card, CardPatch, LoginRequest, LoginResponse, NewBeneficiary, NewSchedule, ScheduledTransfer, ScheduleStatus, ServiceHealth, Spending, Transaction, TransferRequest } from '../types/api'
 
 /** Endpoints métier /api/v1 (docs/contracts.md : préfixe /api/v1, JWT Bearer). */
 export function createEndpoints(client: ApiClient) {
@@ -84,6 +85,22 @@ export function createEndpoints(client: ApiClient) {
       parseSchedule(await client.request(`/api/v1/scheduled-transfers/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status } })),
     cancelSchedule: async (id: string): Promise<void> => {
       await client.request(`/api/v1/scheduled-transfers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    },
+    listNotifications: async (unread = false, signal?: AbortSignal): Promise<AppNotification[]> =>
+      parseNotifications(await client.request(`/api/v1/notifications?unread=${unread ? 'true' : 'false'}`, { signal })),
+    // Badge de la cloche : un compteur serveur (COUNT), pas la liste des 100 dernières.
+    getUnreadCount: async (signal?: AbortSignal): Promise<number> => {
+      const o = (await client.request('/api/v1/notifications/unread-count', { signal })) as { count?: unknown }
+      if (typeof o?.count !== 'number' || !Number.isInteger(o.count) || o.count < 0) {
+        throw new ApiError(0, 'invalid_response', 'Compteur de notifications invalide.')
+      }
+      return o.count
+    },
+    markNotificationRead: async (id: string): Promise<AppNotification> =>
+      parseNotification(await client.request(`/api/v1/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' })),
+    markAllNotificationsRead: async (): Promise<number> => {
+      const r = (await client.request('/api/v1/notifications/read-all', { method: 'POST' })) as { updated?: unknown } | null
+      return typeof r?.updated === 'number' ? r.updated : 0
     },
     getSpending: async (period: 'week' | 'month', offset = 0, signal?: AbortSignal): Promise<Spending> =>
       parseSpending(await client.request(`/api/v1/stats/spending?period=${period}&offset=${Math.min(0, Math.trunc(offset))}`, { signal })),

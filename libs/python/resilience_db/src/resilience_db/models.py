@@ -12,6 +12,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -280,3 +281,41 @@ class ScheduledRun(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+
+NOTIFICATION_TYPES = (
+    "transfer_sent",
+    "transfer_received",
+    "transfer_rejected",
+    "limit_80",
+    "card_frozen",
+    "card_unfrozen",
+    "scheduled_executed",
+    "scheduled_failed",
+)
+
+
+class Notification(Base):
+    """Notification in-app (#49). Rétention bornée par client (cf. payment_api.notifications)."""
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        CheckConstraint(
+            "type IN ({})".format(", ".join(f"'{t}'" for t in NOTIFICATION_TYPES)),
+            name="ck_notifications_type",
+        ),
+        Index("ix_notifications_user_id_id", "user_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    type: Mapped[str] = mapped_column(String(24), nullable=False)
+    title: Mapped[str] = mapped_column(String(80), nullable=False)
+    body: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        server_default=func.now(),
+        nullable=False,
+    )
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

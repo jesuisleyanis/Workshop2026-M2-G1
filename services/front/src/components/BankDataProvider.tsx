@@ -3,6 +3,8 @@ import { BankDataContext, type BankData } from '../hooks/bank-data-context'
 import { useAccounts } from '../hooks/useAccounts'
 import { useBeneficiaries } from '../hooks/useBeneficiaries'
 import { useLimits } from '../hooks/useLimits'
+import { useUnreadCount } from '../hooks/useUnreadCount'
+import { NOTIFICATIONS_POLL_MS } from '../lib/notifications'
 import { useTransactions } from '../hooks/useTransactions'
 import { labelStore } from '../lib/labels'
 
@@ -15,6 +17,8 @@ export function BankDataProvider({ children }: { children: ReactNode }) {
   const transactions = useTransactions()
   const beneficiaries = useBeneficiaries()
   const limits = useLimits()
+  const unreadCount = useUnreadCount()
+  const { reload: reloadUnread } = unreadCount
   const { reload: reloadAccounts } = accounts
   const { reload: reloadTransactions } = transactions
   const { reload: reloadBeneficiaries, error: beneficiariesError } = beneficiaries
@@ -32,12 +36,18 @@ export function BankDataProvider({ children }: { children: ReactNode }) {
     }, REFRESH_MS)
     return () => clearInterval(id)
   }, [reloadAccounts, reloadTransactions, reloadBeneficiaries, beneficiariesError, reloadLimits])
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') reloadUnread()
+    }, NOTIFICATIONS_POLL_MS)
+    return () => clearInterval(id)
+  }, [reloadUnread])
   const [labels, setLabels] = useState(labelStore.all)
   const saveLabel = useCallback((txId: string, label: string) => setLabels(labelStore.save(txId, label)), [])
 
   const value = useMemo<BankData>(
-    () => ({ accounts, transactions, beneficiaries, limits, labels, saveLabel }),
-    [accounts, transactions, beneficiaries, limits, labels, saveLabel],
+    () => ({ accounts, transactions, beneficiaries, limits, unreadCount, labels, saveLabel }),
+    [accounts, transactions, beneficiaries, limits, unreadCount, labels, saveLabel],
   )
   return <BankDataContext.Provider value={value}>{children}</BankDataContext.Provider>
 }

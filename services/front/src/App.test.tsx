@@ -968,3 +968,119 @@ describe('Front - virements programmés (#48)', () => {
     expect(posts(f).every(([u]) => String(u).endsWith('/api/v1/scheduled-transfers'))).toBe(true)
   })
 })
+
+describe('Front - notifications (#49)', () => {
+  const now = new Date()
+  const iso = (daysAgo: number) => new Date(now.getTime() - daysAgo * 86_400_000).toISOString()
+  const N = (id: number, over: Record<string, unknown> = {}) => ({
+    id, type: 'transfer_received', title: `Virement reçu ${id}`, body: `Vous avez reçu ${id},00 €`, created_at: iso(0), read_at: null, ...over,
+  })
+  const base = {
+    'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+    'GET /api/v1/transactions': () => jsonResponse([]),
+  }
+
+  it('page ouverte : le sondage du badge rafraîchit aussi la liste', async () => {
+    loginAsStored()
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    let list = [N(1)]
+    stubFetch({
+      ...base,
+      'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: list.length }),
+      'GET /api/v1/notifications?unread=false': () => jsonResponse(list),
+    })
+    try {
+      renderApp('/notifications')
+      expect(await screen.findByText('Virement reçu 1')).toBeInTheDocument()
+      list = [N(2), N(1)]
+      act(() => vi.advanceTimersByTime(30_000))
+      expect(await screen.findByText('Virement reçu 2')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('badge : nombre de non-lues, libellé accessible, « 9+ » au-delà de 9, absent à 0', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: 3 }) })
+    const { unmount } = renderApp('/')
+    expect(await screen.findByRole('button', { name: 'Notifications, 3 non lues' })).toBeInTheDocument()
+    expect(screen.getByTestId('bell-badge')).toHaveTextContent('3')
+    unmount()
+    stubFetch({ ...base, 'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: 12 }) })
+    const second = renderApp('/')
+    await waitFor(() => expect(screen.getByTestId('bell-badge')).toHaveTextContent('9+'))
+    second.unmount()
+    stubFetch({ ...base, 'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: 0 }) })
+    renderApp('/')
+    await screen.findByTestId('balance')
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument()
+    expect(screen.queryByTestId('bell-badge')).not.toBeInTheDocument()
+  })
+
+  it('page : groupée par jour, clic sur une non-lue = POST /read et marque visuelle retirée', async () => {
+    loginAsStored()
+    let unread = [N(1), N(2, { created_at: iso(1), type: 'card_frozen', title: 'Carte gelée' })]
+    const f = stubFetch({
+      ...base,
+      'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: unread.length }),
+      'GET /api/v1/notifications?unread=false': () => jsonResponse([N(1), N(2, { created_at: iso(1), type: 'card_frozen', title: 'Carte gelée' }), N(3, { created_at: iso(1), read_at: iso(1), title: 'Ancienne' })]),
+      'POST /api/v1/notifications/1/read': () => {
+        unread = unread.filter((n) => n.id !== 1)
+        return jsonResponse(N(1, { read_at: iso(0) }))
+      },
+    })
+    renderApp('/')
+    await userEvent.click(await screen.findByRole('button', { name: 'Notifications, 2 non lues' }))
+    expect(await screen.findByRole('region', { name: "Aujourd'hui" })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Hier' })).toHaveTextContent('Carte gelée')
+    expect(screen.getAllByTestId('unread-dot')).toHaveLength(2)
+    await userEvent.click(screen.getByRole('button', { name: 'Non lue : Virement reçu 1' }))
+    await waitFor(() => expect(screen.getAllByTestId('unread-dot')).toHaveLength(1))
+    expect(screen.getByRole('button', { name: 'Virement reçu 1' })).toBeInTheDocument()
+    expect(f.mock.calls.some(([u, i]) => String(u).endsWith('/api/v1/notifications/1/read') && (i as RequestInit).method === 'POST')).toBe(true)
+    expect(await screen.findByRole('button', { name: 'Notifications, 1 non lue' })).toBeInTheDocument()
+  })
+
+  it('« Tout marquer comme lu » : POST read-all puis plus aucune non-lue', async () => {
+    loginAsStored()
+    let done = false
+    const f = stubFetch({
+      ...base,
+      'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: done ? 0 : 1 }),
+      'GET /api/v1/notifications?unread=false': () => jsonResponse([N(1, done ? { read_at: iso(0) } : {})]),
+      'POST /api/v1/notifications/read-all': () => {
+        done = true
+        return jsonResponse({ updated: 1 })
+      },
+    })
+    renderApp('/notifications')
+    await userEvent.click(await screen.findByRole('button', { name: /Tout marquer comme lu/ }))
+    expect(await screen.findByText('Tout est lu')).toBeInTheDocument()
+    expect(screen.queryByTestId('unread-dot')).not.toBeInTheDocument()
+    expect(f.mock.calls.some(([u]) => String(u).endsWith('/api/v1/notifications/read-all'))).toBe(true)
+    expect(await screen.findByRole('button', { name: 'Notifications' })).toBeInTheDocument()
+  })
+
+  it('type inconnu affiché sans casser la liste ; texte jamais interprété comme HTML', async () => {
+    loginAsStored()
+    stubFetch({
+      ...base,
+      'GET /api/v1/notifications?unread=false': () => jsonResponse([N(1, { type: 'crypto_alert', title: '<b>Nouveau</b>' }), N(2)]),
+    })
+    renderApp('/notifications')
+    expect(await screen.findByText('<b>Nouveau</b>')).toBeInTheDocument()
+    expect(screen.getByText('Virement reçu 2')).toBeInTheDocument()
+  })
+
+  it('vide puis erreur : états dédiés', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/notifications?unread=false': () => jsonResponse([]) })
+    const { unmount } = renderApp('/notifications')
+    expect(await screen.findByText('Aucune notification')).toBeInTheDocument()
+    unmount()
+    stubFetch({ ...base, 'GET /api/v1/notifications?unread=false': () => jsonResponse({ error: { code: 'db_unavailable', message: 'x' } }, 503) })
+    renderApp('/notifications')
+    expect(await screen.findByRole('button', { name: 'Réessayer' })).toBeInTheDocument()
+  })
+})

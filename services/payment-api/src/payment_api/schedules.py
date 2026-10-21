@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from payment_api.ledger import Rejection, check_amount_and_accounts, transfer
+from payment_api.notifications import euros, notify
 from payment_api.observability import log_event
 
 MAX_ACTIVE_PER_USER = 20
@@ -205,10 +206,31 @@ def run_due(
     return done
 
 
-def _fail(session: Session, run_id: int, code: str, s, username: str | None, log) -> None:
+def _notice(s: ScheduledTransfer, run_on: date):
+    """Avis de l'émetteur pour une échéance : remplace « émis »/« refusé » du ledger."""
+
+    def notice(outcome: str) -> tuple[str, str, str]:
+        if outcome == "sent":
+            return (
+                "scheduled_executed",
+                "Virement programmé exécuté",
+                f"{euros(s.amount_cents)} vers le compte n°{s.dst_account}.",
+            )
+        reason = outcome.replace("_", " ")
+        body = f"{euros(s.amount_cents)} vers le compte n°{s.dst_account} le {run_on:%d/%m/%Y}"
+        return "scheduled_failed", "Virement programmé non exécuté", f"{body} ({reason})."
+
+    return notice
+
+
+def _fail(
+    session: Session, run_id: int, code: str, s, username: str | None, log, *, notify_owner: bool
+) -> None:
     session.rollback()
     run = session.get(ScheduledRun, run_id)
     run.status, run.error_code = "failed", code
+    if notify_owner:  # refus solde/plafond : l'avis est déjà écrit avec la transaction refusée
+        notify(session, s.owner_user_id, *_notice(s, run.run_on)(code))
     session.commit()
     transactions_total.labels(result="rejected").inc()
     log_event(
@@ -224,7 +246,7 @@ def _execute(session: Session, run: ScheduledRun, owner_id: int, log, now) -> No
     s = session.get(ScheduledTransfer, run.scheduled_id)
     owner = session.get(User, owner_id)
     if owner is None:
-        _fail(session, run.id, "account_not_found", s, None, log)
+        _fail(session, run.id, "account_not_found", s, None, log, notify_owner=False)
         return
     try:
         tx = transfer(
@@ -236,15 +258,17 @@ def _execute(session: Session, run: ScheduledRun, owner_id: int, log, now) -> No
             f"sched-{s.id}-{run.run_on.isoformat()}",
             s.category,
             now(),
+            sender_notice=_notice(s, run.run_on),  # dans la transaction du virement
         )
     except Rejection as rej:
-        _fail(session, run.id, rej.code, s, owner.username, log)
+        persisted = rej.code in ("insufficient_funds", "limit_exceeded")  # avis déjà écrit
+        _fail(session, run.id, rej.code, s, owner.username, log, notify_owner=not persisted)
         return
     except SQLAlchemyError:
         # BDD en incident après la réservation : échec enregistré si elle répond encore,
         # puis l'erreur remonte (journalisée par run_due) — jamais silencieux.
         with contextlib.suppress(SQLAlchemyError):
-            _fail(session, run.id, "internal_error", s, owner.username, log)
+            _fail(session, run.id, "internal_error", s, owner.username, log, notify_owner=True)
         raise
     run = session.get(ScheduledRun, run.id)
     run.status, run.transaction_id = "executed", tx.id

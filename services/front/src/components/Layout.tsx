@@ -8,6 +8,7 @@ import { useServiceStatus } from '../hooks/useServiceStatus'
 import { formatClock, sessionPct, useSecondsLeft } from '../hooks/useSecondsLeft'
 import { ShellContext, type Shell } from '../hooks/shell-context'
 import { initials } from '../lib/bank'
+import { badgeText, bellLabel } from '../lib/notifications'
 import { BankDataProvider } from './BankDataProvider'
 import { Icon, type IconName } from './icons'
 import { Brand } from './ui'
@@ -44,6 +45,7 @@ const SUBSCREENS: { prefix: string; title: string; parent: string }[] = [
   { prefix: '/limits', title: 'Plafonds de virement', parent: '/profile' },
   { prefix: '/cards', title: 'Cartes', parent: '/profile' },
   { prefix: '/scheduled', title: 'Virements programmés', parent: '/profile' },
+  { prefix: '/notifications', title: 'Notifications', parent: '/' },
 ]
 
 export function Layout() {
@@ -105,6 +107,7 @@ function Shell() {
             ) : (
               <h1 className={`m-0 min-w-0 flex-1 truncate font-semibold tracking-[-0.02em] ${isDesktop ? 'text-[28px]' : 'text-[22px]'}`}>{title}</h1>
             )}
+            <Bell onOpen={() => navigate('/notifications')} />
             <button
               type="button"
               aria-label="Profil"
@@ -218,6 +221,23 @@ function Sidebar({ pathname, activeTab, expiresAt }: { pathname: string; activeT
   )
 }
 
+/** Cloche D13 : badge des non-lues (en erreur ou à zéro : pas de badge, rien ne casse). */
+function Bell({ onOpen }: { onOpen: () => void }) {
+  const { unreadCount } = useBankData()
+  const count = unreadCount.data ?? 0
+  const badge = badgeText(count)
+  return (
+    <button type="button" aria-label={bellLabel(count)} onClick={onOpen} className="round-btn relative flex-none">
+      <Icon name="bell" />
+      {badge && (
+        <span aria-hidden data-testid="bell-badge" className="absolute -top-1 -right-1 grid h-5 min-w-5 place-items-center rounded-full bg-ko-fg px-1 text-[11px] font-bold text-white">
+          {badge}
+        </span>
+      )}
+    </button>
+  )
+}
+
 /**
  * Bandeau D6 : visible pendant l'incident, « Service rétabli » à la reprise. La détection vient du
  * rafraîchissement 15 s des données (BankDataProvider) ; la reprise est sondée toutes les 5 s sur
@@ -226,7 +246,7 @@ function Sidebar({ pathname, activeTab, expiresAt }: { pathname: string; activeT
  */
 function ServiceBanner({ isDesktop }: { isDesktop: boolean }) {
   const status = useServiceStatus()
-  const { accounts, transactions, beneficiaries, limits } = useBankData()
+  const { accounts, transactions, beneficiaries, limits, unreadCount } = useBankData()
   const prev = useRef(status)
 
   useEffect(() => {
@@ -246,9 +266,10 @@ function ServiceBanner({ isDesktop }: { isDesktop: boolean }) {
       transactions.reload()
       beneficiaries.reload()
       limits.reload()
+      unreadCount.reload()
     }
     prev.current = status
-  }, [status, accounts, transactions, beneficiaries, limits])
+  }, [status, accounts, transactions, beneficiaries, limits, unreadCount])
 
   if (status === 'ok') return null
   const margin = isDesktop ? 'mx-10 mb-3' : 'mx-3 mb-2.5'

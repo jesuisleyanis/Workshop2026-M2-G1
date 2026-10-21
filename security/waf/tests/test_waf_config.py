@@ -42,6 +42,7 @@ def test_only_public_routes_are_proxied():
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
                               "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/stats/spending",
                               "^/api/v1/transactions/[0-9]+$", "/api/v1/limits", "/api/v1/cards", "/api/v1/scheduled-transfers",
+                              "/api/v1/notifications",
                               "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
@@ -80,6 +81,12 @@ def test_scheduled_transfers_route_is_rate_limited_per_ip():
     conf = _directives(NGINX)
     assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=schedules_per_ip:\d+m\s+rate=\d+r/m;", conf)
     assert re.search(r"location /api/v1/scheduled-transfers\s+\{\s*limit_req zone=schedules_per_ip", conf)
+
+
+def test_notifications_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=notifications_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/notifications\s+\{\s*limit_req zone=notifications_per_ip", conf)
 
 
 def test_cards_route_is_rate_limited_per_ip():

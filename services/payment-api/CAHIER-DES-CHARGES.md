@@ -31,6 +31,7 @@ API métier de la plateforme de paiement **fictive** : consultation des comptes,
 | `POST /api/v1/cards/{id}/freeze` · `/unfreeze` | JWT | Gel / dégel idempotents ; carte d'autrui = `404 card_not_found` |
 | `PATCH /api/v1/cards/{id}` | JWT | Réglages partiels bornés (plafond 0–10 000 €, sans contact, paiement en ligne) ; champ inconnu → `422` ; carte gelée → `409 card_frozen` |
 | `GET`·`POST /api/v1/scheduled-transfers`, `PATCH`·`DELETE /{id}` | JWT | Virements programmés (#48) : création validée (dates, montants, comptes), pause/reprise, annulation ; exécutés par la tâche de fond `schedules.run_due` |
+| `GET /api/v1/notifications?unread=` · `POST /{id}/read` · `POST /read-all` | JWT | Notifications in-app (#49) : virements émis/reçus/refusés, plafond 80 %, carte, virements programmés ; lecture idempotente, cloisonnée |
 | `GET /api/v1/limits` | JWT | Plafond mensuel par compte (#46) : plafond (`null` = aucun), consommé du mois, restant, date de remise à zéro |
 | `GET /api/v1/stats/spending?period=week\|month&offset=0` | JWT | Dépenses d'une période (#44 ; `offset` ∈ [-24, 0]) : total, parts par catégorie (décroissant), série journalière complète. Dépense = virement `created` vers un compte d'un autre client ; périodes UTC `[start, end)` ; **agrégation SQL** (coût borné quel que soit l'historique) |
 | `GET /api/v1/beneficiaries` | JWT | Bénéficiaires de l'utilisateur (#43), triés par nom |
