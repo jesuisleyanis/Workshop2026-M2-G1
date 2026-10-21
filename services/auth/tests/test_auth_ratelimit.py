@@ -128,12 +128,13 @@ def test_other_route_limits_do_not_pollute_the_brute_force_metric(client, log_li
     assert "10 per 1 minute" in e["message"] and "/api/v1/register" in e["message"]
 
 
-def test_register_integrity_error_other_than_username_is_not_username_taken(client, monkeypatch):
+def test_register_retries_on_a_fake_iban_collision(client, monkeypatch):
     from authkit import PASSWORD
 
     import auth_service.main as m
 
-    monkeypatch.setattr(m, "new_fake_iban", lambda: "FR76 DUPLICATE")
+    ibans = iter(["FR76 DUPLICATE", "FR76 DUPLICATE", "FR76 FRESH"])
+    monkeypatch.setattr(m, "new_fake_iban", lambda: next(ibans))
     assert (
         client.post(
             "/api/v1/register", json={"username": "dupiban01", "password": PASSWORD}
@@ -141,4 +142,14 @@ def test_register_integrity_error_other_than_username_is_not_username_taken(clie
         == 201
     )
     r = client.post("/api/v1/register", json={"username": "dupiban02", "password": PASSWORD})
-    assert r.status_code == 503 and r.json()["error"]["code"] != "username_taken"
+    assert r.status_code == 201, "collision d'IBAN : nouvel essai, pas de 503 db_error"
+
+
+@pytest.mark.parametrize("factor", [0.3, 0.5, 0.7, 0.1])
+def test_tightened_budget_is_exact(client, registered, factor):
+    import math
+
+    client.post("/internal/tighten-rate-limit", json={"factor": factor}, headers=HDR)
+    allowed = max(1, math.floor(3 * factor))  # baseline 3/minute en test
+    codes = _hammer(client, allowed + 1)
+    assert codes == [401] * allowed + [429], f"exactement {allowed} essais"

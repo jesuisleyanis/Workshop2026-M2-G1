@@ -188,25 +188,30 @@ def create_app(
     def register(request: Request, body: RegisterRequest, session=Depends(get_session)):
         if session.scalar(select(User.id).where(User.username == body.username)) is not None:
             raise ApiError(409, "username_taken", "Username already exists")
-        user = User(username=body.username, password_hash=hash_password(body.password))
-        user.accounts.append(
-            Account(
-                iban_fake=new_fake_iban(),
-                balance_cents=settings.register_initial_balance_cents,
-                currency="EUR",
-                monthly_limit_cents=settings.register_monthly_limit_cents,
+        # IBAN fictif aléatoire : une collision (UNIQUE) est un aléa métier, pas un incident BDD.
+        # On retente avec un nouvel IBAN plutôt que de renvoyer un 503 db_error (faux signal ML).
+        for attempt in range(1, 4):
+            user = User(username=body.username, password_hash=hash_password(body.password))
+            user.accounts.append(
+                Account(
+                    iban_fake=new_fake_iban(),
+                    balance_cents=settings.register_initial_balance_cents,
+                    currency="EUR",
+                    monthly_limit_cents=settings.register_monthly_limit_cents,
+                )
             )
-        )
-        session.add(user)
-        try:
-            session.commit()
-        except IntegrityError:
-            session.rollback()
-            # Course sur le même username : 409. Toute autre violation (collision d'IBAN…)
-            # remonte en db_error au lieu de refuser à tort un identifiant libre.
-            if session.scalar(select(User.id).where(User.username == body.username)) is not None:
-                raise ApiError(409, "username_taken", "Username already exists")
-            raise
+            session.add(user)
+            try:
+                session.commit()
+                break
+            except IntegrityError:
+                session.rollback()
+                # Course sur le même username : 409.
+                taken = select(User.id).where(User.username == body.username)
+                if session.scalar(taken) is not None:
+                    raise ApiError(409, "username_taken", "Username already exists")
+                if attempt == 3:
+                    raise
         return UserOut(id=user.id, username=user.username)
 
     @app.post("/api/v1/login", response_model=TokenOut)
