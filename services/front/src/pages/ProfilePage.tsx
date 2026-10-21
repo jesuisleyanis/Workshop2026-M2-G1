@@ -5,14 +5,12 @@ import { SERVICES } from '../components/Layout'
 import { ConfirmDialog } from '../components/ui'
 import { useAuth } from '../hooks/useAuth'
 import { useBankData } from '../hooks/useBankData'
-import { useCards } from '../hooks/useCards'
 import { formatClock, sessionPct, useSecondsLeft } from '../hooks/useSecondsLeft'
 import { avatarTone, initials } from '../lib/bank'
 
 export function ProfilePage() {
   const { username, expiresAt, logout } = useAuth()
   const { accounts, beneficiaries, limits } = useBankData()
-  const cards = useCards()
   const navigate = useNavigate()
   const left = useSecondsLeft(expiresAt)
   const [confirm, setConfirm] = useState(false)
@@ -21,13 +19,8 @@ export function ProfilePage() {
   const subs: Record<string, string> = {
     '/rib': plural(accounts.data?.length ?? 0, 'compte'),
     '/beneficiaries': plural(beneficiaries.data?.length ?? 0, 'bénéficiaire'),
-    '/cards': cards.data
-      ? cards.data.length === 1
-        ? `1 carte · ${cards.data[0]!.status === 'frozen' ? 'gelée' : 'active'}`
-        : plural(cards.data.length, 'carte')
-      : cards.error
-        ? 'Indisponible pour le moment'
-        : '',
+    // Libellé fixe : pas de GET /api/v1/cards à chaque ouverture du Profil (écran Cartes seul).
+    '/cards': 'Geler, plafond de paiement',
     '/limits': limits.data ? (limits.data.some((l) => l.limit !== null) ? 'Plafond mensuel' : 'Sans plafond') : limits.error ? 'Indisponible pour le moment' : '',
   }
 

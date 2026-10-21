@@ -29,7 +29,10 @@ const expiry = (c: Card) => `${String(c.expiryMonth).padStart(2, '0')}/${String(
 /** D11 — Cartes : visuel, gel / dégel confirmé, plafond de paiement, sans contact, paiement en ligne (#47). */
 export function CardsPage() {
   const cards = useCards()
-  const [replaced, setReplaced] = useState<Record<string, Card>>({})
+  // Réponse du serveur après une action, valable pour CE chargement seulement : un rechargement
+  // (nouvelle référence de données) l'emporte toujours sur ces copies locales.
+  const [replaced, setReplaced] = useState<{ data: Card[] | null; map: Record<string, Card> }>({ data: null, map: {} })
+  const overrides = replaced.data === cards.data ? replaced.map : {}
 
   if (cards.error && !cards.data) return <ErrorState error={cards.error} onRetry={cards.reload} />
   if (!cards.data) return <LoadingState label="Chargement des cartes…" />
@@ -38,8 +41,16 @@ export function CardsPage() {
   return (
     <div className="mx-auto flex w-full max-w-[620px] flex-col gap-6">
       {cards.data.map((c) => {
-        const card = replaced[c.id] ?? c
-        return <CardPanel key={card.id} card={card} onChange={(next) => setReplaced((m) => ({ ...m, [next.id]: next }))} />
+        const card = overrides[c.id] ?? c
+        // key avec le plafond : une valeur changée hors du panneau (rechargement) le remonte,
+        // jamais d'« Enregistrer » qui réécrirait une valeur périmée.
+        return (
+          <CardPanel
+            key={`${card.id}:${card.paymentLimit}`}
+            card={card}
+            onChange={(next) => setReplaced((r) => ({ data: cards.data, map: { ...(r.data === cards.data ? r.map : {}), [next.id]: next } }))}
+          />
+        )
       })}
     </div>
   )
@@ -148,7 +159,7 @@ function CardPanel({ card, onChange }: { card: Card; onChange: (c: Card) => void
       {confirm && (
         <ConfirmDialog
           title={frozen ? 'Dégeler la carte ?' : 'Geler la carte ?'}
-          text={frozen ? 'La carte pourra de nouveau être utilisée pour payer.' : 'Tous les paiements avec cette carte seront refusés jusqu’au dégel. Vous pourrez la dégeler à tout moment.'}
+          text={frozen ? 'La carte repassera à l’état « Active » et ses réglages seront de nouveau modifiables.' : 'La carte passera à l’état « Gelée » et ses réglages seront verrouillés jusqu’au dégel (démonstration : aucun paiement par carte n’est simulé). Vous pourrez la dégeler à tout moment.'}
           confirmLabel={frozen ? 'Dégeler' : 'Geler'}
           icon="lock"
           danger={!frozen}

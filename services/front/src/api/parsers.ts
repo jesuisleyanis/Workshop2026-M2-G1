@@ -180,11 +180,23 @@ export function parseCard(v: unknown): Card {
     holder: str(o, 'holder', 'carte'),
     expiryMonth: num(o, 'expiry_month', 'carte'),
     expiryYear: num(o, 'expiry_year', 'carte'),
-    status: o.status === 'frozen' ? 'frozen' : 'active',
+    status: cardStatus(o.status),
     paymentLimit: num(o, 'payment_limit_cents', 'carte') / 100,
-    contactless: o.contactless === true,
-    onlinePayments: o.online_payments === true,
+    contactless: bool(o, 'contactless', 'carte'),
+    onlinePayments: bool(o, 'online_payments', 'carte'),
   }
+}
+
+/** Échec fermé : un statut inconnu n'est jamais affiché « Active » (carte peut-être inutilisable). */
+function cardStatus(v: unknown): Card['status'] {
+  if (v === 'active' || v === 'frozen') return v
+  throw new ApiError(0, 'invalid_response', 'Statut de carte inconnu.')
+}
+
+function bool(o: Obj, key: string, what: string): boolean {
+  const v = o[key]
+  if (typeof v === 'boolean') return v
+  throw new ApiError(0, 'invalid_response', `Champ « ${key} » invalide (${what}).`)
 }
 
 export function parseCards(v: unknown): Card[] {
