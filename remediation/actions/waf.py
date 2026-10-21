@@ -41,10 +41,22 @@ def resolve_source_ip(params: dict[str, Any], ctx: ActionContext) -> str:
     if not raw:
         raise ActionError("aucune IP source dans l'événement (champ source_ip absent)")
     ip = _canonical_ip(str(raw))
-    protected = {_canonical_ip(p) for p in ctx.settings.never_block_ips}
-    if ip in protected or ip.is_loopback or ip.is_unspecified or ip.is_multicast:
+    if is_protected(ip, ctx.settings.never_block_ips) or ip.is_loopback or ip.is_unspecified or ip.is_multicast:
         raise ActionError(f"refus de bloquer l'adresse protégée {ip}")
     return str(ip)
+
+
+def is_protected(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, never_block: tuple[str, ...]) -> bool:
+    """`never_block` accepte des IP ET des plages CIDR : les réseaux Docker internes (services, dont la
+    remédiation elle-même via verify_tx, et la passerelle par laquelle Docker Desktop fait entrer TOUS les
+    clients externes) ne doivent jamais être bloqués."""
+    for entry in never_block:
+        net = ipaddress.ip_network(entry.strip(), strict=False)
+        if net.version == 6 and net.prefixlen == 128 and net.network_address.ipv4_mapped:
+            net = ipaddress.ip_network(net.network_address.ipv4_mapped)
+        if ip.version == net.version and ip in net:
+            return True
+    return False
 
 
 class _WafDeny(Action):

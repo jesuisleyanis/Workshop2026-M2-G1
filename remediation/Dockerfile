@@ -31,6 +31,7 @@ ENV PYTHONUNBUFFERED=1 \
     ANSIBLE_PRIVATE_DATA_DIR=/tmp/ansible-runner \
     ANSIBLE_HOME=/tmp/.ansible \
     ANSIBLE_LOCAL_TEMP=/tmp/.ansible/tmp \
+    ANSIBLE_REMOTE_TMP=/tmp/.ansible/tmp \
     PG_BACKUP_DIR=/opt/backups \
     WAF_DENY_FILE=/etc/resilience/waf-deny/blocked_ips.conf \
     DOCKER_PROXY_URL=http://docker-socket-proxy:2375

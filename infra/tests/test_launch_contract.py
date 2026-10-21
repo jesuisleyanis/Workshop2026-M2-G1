@@ -190,3 +190,24 @@ def test_local_ui_overlay_publishes_only_on_loopback():
     assert set(overlay) == {"dashboard"}
     for port in overlay["dashboard"]["ports"]:
         assert str(port).startswith("127.0.0.1:"), port
+
+
+def test_remediation_reaches_the_waf_on_its_container_port_and_protects_the_edge_gateway():
+    rem = SERVICES["remediation"]["environment"]
+    # Le WAF non-root écoute 8443 DANS le conteneur : https://waf (443) = verify_tx toujours KO.
+    assert rem["BASE_URL"] == "https://waf:8443"
+    # Sous Docker Desktop, tous les clients externes ont l'IP d'une passerelle d'un réseau du WAF :
+    # chacune doit avoir un sous-réseau fixe ET être protégée (sinon bloquer = couper tout le monde).
+    protected = rem["NEVER_BLOCK_IPS"].split(",")
+    excluded = SERVICES["detector"]["environment"]["SOURCE_IP_EXCLUDE"].split(",")
+    for net in SERVICES["waf"]["networks"]:
+        subnet = COMPOSE["networks"][net]["ipam"]["config"][0]["subnet"]
+        # réseau ENTIER : passerelle (tous les clients externes) ET services (verify_tx de la remédiation)
+        assert subnet in protected, f"réseau {net} non protégé contre le blocage"
+        assert subnet in excluded, f"réseau {net} candidat comme IP source"
+
+
+def test_ansible_temp_dirs_are_writable_in_the_read_only_remediation_image():
+    dockerfile = (ROOT / "remediation" / "Dockerfile").read_text(encoding="utf-8")
+    for var in ("ANSIBLE_LOCAL_TEMP=/tmp/", "ANSIBLE_REMOTE_TMP=/tmp/"):
+        assert var in dockerfile, var  # sinon « Failed to create temporary directory »

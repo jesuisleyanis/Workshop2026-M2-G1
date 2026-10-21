@@ -233,6 +233,18 @@ async def test_waf_never_blocks_protected_or_missing_ips(make_env):
     assert env3.runner.calls == []
 
 
+async def test_waf_never_blocks_an_ip_inside_a_protected_network(make_env):
+    # Constaté le 21/10 : le detector a désigné l'IP de la remédiation elle-même (trafic verify_tx) ;
+    # bloquée, chaque vérification suivante aurait échoué. Les réseaux Docker internes sont protégés.
+    from conftest import make_settings
+
+    env = make_env(verify=[True], settings=make_settings(never_block_ips=("127.0.0.1", "172.31.0.0/24")))
+    sub = await env.run(make_event("service_flood", source_ip="172.31.0.9"))
+    first = env.incident(sub.incident_id)["actions"][0]
+    assert first["result"] == "failure" and "protégée" in first["detail"]
+    assert env.runner.calls == []
+
+
 async def test_restart_refuses_service_outside_allow_list(make_env):
     from conftest import make_settings
 

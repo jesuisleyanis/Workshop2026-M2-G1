@@ -21,8 +21,20 @@ x-pylimits: &pylimits
   cpus: 0.75
 
 networks:
+  # Sous-réseaux FIXES pour les réseaux du WAF (edge, app) : sous Docker Desktop (Windows/WSL2), le WAF
+  # voit tous les clients externes avec l'IP d'une passerelle Docker (constaté : celle d'`app`) — l'IP
+  # réelle du PC attaquant est masquée. Passerelles connues = protégées par NEVER_BLOCK_IPS de la
+  # remédiation : bloquer une passerelle couperait TOUS les clients.
   edge:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1
   app:   # non `internal` : seul réseau avec sortie (pull d'images, modèles Ollama). Aucun `ports:`.
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+          gateway: 172.31.0.1
   data:
     internal: true
   obs:
@@ -231,6 +243,8 @@ services:
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
       # Attente longue sur le collector : chaque collecte est scorée dès qu'elle existe.
       FEATURES_WAIT_SECONDS: "5"
+      # Réseaux Docker du WAF : jamais désignés comme IP source (trafic interne, passerelle).
+      SOURCE_IP_EXCLUDE: "172.30.0.0/24,172.31.0.0/24"
       # Seuil imposé (décision équipe 21/10) au lieu du seuil calibré (0,708 sur le poste de dev) :
       # plus sensible aux attaques à faible débit du PC attaquant, au prix de rares faux positifs
       # (~2/h mesurés sur la baseline de dev). Vide = seuil de la calibration : ANOMALY_THRESHOLD= make up
@@ -263,6 +277,10 @@ services:
       # de la liste blanche haproxy (5 couples). Ce montage sert cette médiation ; le moteur
       # de remédiation, lui, ne monte jamais le socket et parle HTTP au proxy.
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    # HAProxy tourne en utilisateur `haproxy` (non-root) ; le socket est root:root 0660. Sans le groupe
+    # propriétaire, chaque appel échouait (503, statut SC--) : AUCUN restart_service ne pouvait réussir.
+    # Groupe seulement (pas d'uid 0) : la restriction effective reste la liste blanche haproxy (5 couples).
+    group_add: ["0"]
     mem_limit: 64m
 
   remediation:
@@ -278,7 +296,7 @@ services:
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       AUTH_URL: http://auth:8002
       # verify_tx : rejoué à travers le WAF (réseau app, cert auto-signé) avec le jeu fictif seedé
-      BASE_URL: https://waf
+      BASE_URL: https://waf:8443   # WAF non-root : écoute 8443 dans le conteneur (443 = port publié côté hôte)
       VERIFY_PASSWORD: ${SEED_PASSWORD}
       # restore_pg_dump : playbook pg_restore.yml dans ce conteneur (client PG 16, réseau data)
       POSTGRES_HOST: postgres
@@ -287,6 +305,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       # waf_block_ip : deny-list partagée + SIGHUP du service `waf` via le proxy
       WAF_SERVICE: waf
+      # Jamais bloquées : boucle locale, PC hôte (hotspot) et réseaux du WAF ENTIERS (cf. networks) :
+      # passerelle par laquelle Docker Desktop fait entrer tous les clients, et services internes
+      # (dont la remédiation elle-même, via verify_tx).
+      NEVER_BLOCK_IPS: "127.0.0.1,::1,192.168.137.1,172.30.0.0/24,172.31.0.0/24"
     volumes:
       - waf-deny:/etc/resilience/waf-deny:rw                 # écrite par waf_deny_ip.yml
       - ../../infra/ansible/backups:/opt/backups:ro          # dumps sains (pg_backup.yml côté hôte)
