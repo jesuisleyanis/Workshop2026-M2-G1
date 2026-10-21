@@ -40,9 +40,16 @@ def test_api_upstreams_target_service_ports():
 def test_only_public_routes_are_proxied():
     locations = re.findall(r"location\s+(?:=\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
-                              "/api/v1/status", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
+                              "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
+
+
+def test_crs_allows_delete_but_not_put_or_patch():
+    # #43 : DELETE /api/v1/beneficiaries/{id}. Sans ALLOWED_METHODS, la règle CRS 911100 le bloque.
+    m = re.search(r'ALLOWED_METHODS="([^"]+)"', DOCKERFILE)
+    assert m, "ALLOWED_METHODS doit être fixé dans l'image WAF"
+    assert set(m.group(1).split()) == {"GET", "HEAD", "POST", "OPTIONS", "DELETE"}
 
 
 def test_public_status_route_is_exact_rate_limited_and_read_only():
