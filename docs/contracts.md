@@ -330,7 +330,7 @@ Montants en **centimes entiers**. Aucune nouvelle route n'ajoute de label de mé
 | `GET /api/v1/accounts` | JWT | `[{id, iban_fake, balance_cents, currency}]` |
 | `POST /api/v1/transactions` | JWT | `{src_account, dst_account, amount_cents}` → `201 TransactionOut` ; refus métier tracés (`transaction_rejected`) |
 | `GET /api/v1/transactions?limit=` | JWT | Historique de l'utilisateur, plus récent d'abord |
-| `GET /api/v1/status` | **aucune** | `200 {"status":"ok","checked_at":"<iso Z>"}` / `503 {"status":"degraded",…}` si la BDD est injoignable. **Aucun détail interne** (ni version, ni hôte, ni exception). Cache serveur `STATUS_CACHE_S` (2 s) + `limit_req` WAF par IP (2 r/s, rafale 5), GET seul. Alimente le bandeau « Service perturbé → rétabli » (#42). |
+| `GET /api/v1/status` | **aucune** | `200 {"status":"ok","checked_at":"<iso Z>"}` / `503 {"status":"degraded",…}` si la BDD est injoignable. **Aucun détail interne** (ni version, ni hôte, ni exception). Cache serveur à vol unique `STATUS_CACHE_S` (2 s, borné 0,5–30 s) + `limit_req` WAF par IP (2 r/s, rafale 5), GET seul. **Exclue des métriques HTTP §2** comme `/ready` (sonde, pas trafic métier : n'altère pas les features ML). Un `200` ne prouve que l'accès BDD : le front confirme la reprise par une route métier (#42). |
 
 ---
 
