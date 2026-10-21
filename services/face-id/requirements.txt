@@ -2,8 +2,16 @@
 fastapi==0.146.0
 uvicorn==0.54.0
 pydantic==2.14.1
-resilience-common
-resilience-db
+# Les libs du monorepo resilience_common / resilience_db s'installent depuis libs/python/
+# (--no-deps, cf. Dockerfile) : JAMAIS par leur nom ici, pip irait les chercher sur PyPI.
+# Leurs dépendances runtime sont donc épinglées explicitement (mêmes versions qu'auth).
+SQLAlchemy==2.1.5
+alembic==1.20.0
+psycopg[binary]==3.3.6
+passlib==1.7.4
+bcrypt==4.0.1
+prometheus-client==0.26.0
+prometheus-fastapi-instrumentator==8.1.0
 # Backend de reconnaissance réel (installé en recette sur le PC Hôte, non requis pour les tests).
 # Décommenter pour RECOGNIZER_BACKEND=insightface :
 # insightface==0.7.3
