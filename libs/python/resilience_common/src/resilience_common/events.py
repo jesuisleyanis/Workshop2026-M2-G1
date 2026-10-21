@@ -6,11 +6,12 @@ Le détecteur ML émet un AnomalyEvent vers le moteur de remédiation
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime, timezone
 from enum import Enum
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 SCHEMA_VERSION = "1.0"
 
@@ -104,3 +105,13 @@ class AnomalyEvent(BaseModel):
     incident_type: IncidentType
     features_top: list[FeatureTop] = Field(default_factory=list)
     evidence: Evidence | None = None
+    #: IP source dominante de l'incident (champ ADDITIF, optionnel — contrat §3) : renseignée par le
+    #: detector quand une IP domine les logs WAF de la fenêtre, sinon absente. Elle alimente les
+    #: actions de blocage (`source: from_event`) : une seule IP littérale, jamais de nom ni de réseau
+    #: (la valeur finit dans une conf Nginx -> aucune injection possible).
+    source_ip: str | None = None
+
+    @field_validator("source_ip")
+    @classmethod
+    def _single_ip_literal(cls, v: str | None) -> str | None:
+        return None if v is None else str(ipaddress.ip_address(v.strip()))

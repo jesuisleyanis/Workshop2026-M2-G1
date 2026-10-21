@@ -159,7 +159,8 @@ services:
     user: "1883:1883"
     networks: [app]
     # Seule l'interface du point d'accès est joignable par l'ESP8266.
-    ports: ["1883:1883"]
+    # IP du point d'accès SEULEMENT (jamais 0.0.0.0) : `make up-iot` exige le hotspot actif.
+    ports: ["192.168.137.1:1883:1883"]
     environment:
       MQTT_AUTH_PASSWORD: ${MQTT_AUTH_PASSWORD:-}
       MQTT_LED_PASSWORD: ${MQTT_LED_PASSWORD:-}
@@ -210,6 +211,11 @@ services:
     networks: [app, obs]
     environment:
       PROMETHEUS_URL: http://prometheus:9090
+      # Détection < 5 s (docs/plan-amelioration-detection.md) : une collecte par seconde, features en
+      # rate()[5s]. Ces deux valeurs DÉFINISSENT les fenêtres du modèle : les changer impose de
+      # recapturer la baseline et de recalibrer (ml/training/README.md §6) — les captures les relisent ici.
+      PROM_RATE_WINDOW: 5s
+      COLLECT_INTERVAL_SECONDS: "1"
     depends_on: [prometheus]
     read_only: true
     tmpfs: ["/tmp"]
@@ -223,6 +229,9 @@ services:
       # URL COMPLÈTE de l'endpoint (le detector POSTe tel quel, cf. ml/detector/core.py)
       REMEDIATION_URL: http://remediation:8005/events
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
+      # Attente longue sur le collector : chaque collecte est scorée dès qu'elle existe.
+      FEATURES_WAIT_SECONDS: "5"
+      POLL_INTERVAL_SECONDS: "1"
     depends_on:
       collector: { condition: service_started }
       remediation: { condition: service_healthy }
@@ -255,9 +264,10 @@ services:
   remediation:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: remediation/Dockerfile }
-    # app : API + proxy Docker + WAF (verify_tx) ; data : pg_restore (correction de corruption).
+    # app : API + proxy Docker + WAF (verify_tx) ; data : pg_restore (correction de corruption) ;
+    # obs : lecture Loki de `confirm_waf_block` (CDC remédiation, dépendance Loki), réseau interne.
     # Jamais sur edge, aucun `ports:`.
-    networks: [app, data]
+    networks: [app, data, obs]
     environment:
       DOCKER_PROXY_URL: http://docker-socket-proxy:2375
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}

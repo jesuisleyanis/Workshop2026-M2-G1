@@ -1,6 +1,8 @@
 """Service FastAPI du collector (port interne 8004, réseau `app`).
 
 Routes : GET /health, /ready, /metrics et GET /api/v1/features (consommé par le detector).
+`/api/v1/features?after=<seq>&wait=<s>` = attente longue : la réponse part dès qu'une collecte
+plus récente que `seq` existe (ou après `wait` s, plafonné à 10 s) — détection sans latence de relève.
 Aucun secret ; n'écoute que sur le réseau interne (publication de port interdite par le compose).
 """
 
@@ -10,7 +12,7 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 from prometheus_client import REGISTRY, Counter, Gauge
 from resilience_common import get_logger
@@ -80,8 +82,9 @@ def create_app(collector: Collector | None = None, start_loop: bool = True) -> F
         return {"status": "ready"}
 
     @app.get("/api/v1/features")
-    async def features():
-        snap = collector.fresh()
+    async def features(after: int | None = Query(default=None, ge=0),
+                       wait: float = Query(default=0.0, ge=0.0, le=10.0)):
+        snap = collector.fresh() if after is None else await collector.wait_newer(after, wait)
         if snap is None:
             # 503 explicite : le detector doit traiter « pas de données » comme tel.
             return JSONResponse(

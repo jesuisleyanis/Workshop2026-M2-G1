@@ -19,7 +19,7 @@ Point d'accès : partage de connexion Windows **`RESILIENCE-G1`**, sous-réseau 
 | `edge` | non | waf | **80, 443** (HTTP/HTTPS) |
 | `app` | non | front, payment-api, auth, mosquitto (`iot`), collector, detector, remediation, docker-socket-proxy, dashboard, assistant | **1883** sur `192.168.137.1` pour Mosquitto (`iot`) |
 | `data` | **oui** | postgres, pg-exporter, remediation (uniquement pour `pg_restore` : correction de corruption) | aucun |
-| `obs` | oui | prometheus, loki, promtail, grafana, alertmanager, cadvisor, waf-exporter | aucun (accès via tunnel/port-forward local pour le dev) |
+| `obs` | oui | prometheus, loki, promtail, grafana, alertmanager, cadvisor, waf-exporter, collector, detector, remediation (lecture Loki : `confirm_waf_block`) | aucun (accès via tunnel/port-forward local pour le dev) |
 
 - `data` et `obs` sont en `internal: true` : Postgres, secrets et observabilité ne sont **jamais** joignables depuis le hotspot ni ne sortent vers Internet.
 - `app` n'est **pas** `internal` : c'est le seul réseau avec sortie (pull d'images, modèles Ollama). Mosquitto est la seule exception à l'absence de port publié sur ce réseau, et seulement dans le profil `iot`.

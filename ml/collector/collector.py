@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 import httpx
@@ -95,6 +95,7 @@ class Snapshot:
     ts: datetime
     missing: tuple[str, ...] = ()
     monotonic: float = field(default_factory=time.monotonic, compare=False)
+    seq: int = 0  # numéro de collecte (croissant) : le detector ne score jamais deux fois le même
 
     def to_json(self) -> dict:
         return {
@@ -103,6 +104,7 @@ class Snapshot:
             "ts": self.ts.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
             "missing": list(self.missing),
             "window_seconds": WINDOW_SECONDS,
+            "seq": self.seq,
         }
 
 
@@ -158,6 +160,11 @@ class Collector:
         self.last_error: str | None = None
         self.collections_ok = 0
         self.collections_failed = 0
+        self.seq = 0
+        # Réveille les attentes longues (detector) à chaque collecte ; créée à la demande car une
+        # Condition asyncio est liée à la boucle qui l'utilise (une seule en production).
+        self._new: asyncio.Condition | None = None
+        self._new_loop: asyncio.AbstractEventLoop | None = None
 
     async def collect(self) -> Snapshot:
         """Une collecte. Lève CollectError (Prometheus KO) ou NoData (rien à lire)."""
@@ -173,14 +180,38 @@ class Collector:
     async def tick(self) -> Snapshot | None:
         """Collecte + mise à jour de l'état ; ne lève jamais (la boucle doit survivre)."""
         try:
-            self.latest = await self.collect()
+            snap = await self.collect()
+            self.seq += 1
+            self.latest = replace(snap, seq=self.seq)
             self.last_error = None
             self.collections_ok += 1
+            cond = self._condition()
+            async with cond:
+                cond.notify_all()
             return self.latest
         except (CollectError, NoData) as exc:
             self.last_error = str(exc)
             self.collections_failed += 1
             return None
+
+    async def wait_newer(self, after: int, timeout: float) -> Snapshot | None:
+        """Attente longue : le premier snapshot frais de numéro > `after`, ou après `timeout`
+        secondes le dernier snapshot frais (éventuellement le même). Supprime la latence de
+        relève côté detector : il est servi dès la fin de la collecte."""
+        if self.seq <= after:
+            cond = self._condition()
+            async with cond:
+                try:
+                    await asyncio.wait_for(cond.wait_for(lambda: self.seq > after), timeout)
+                except asyncio.TimeoutError:
+                    pass
+        return self.fresh()
+
+    def _condition(self) -> asyncio.Condition:
+        loop = asyncio.get_running_loop()
+        if self._new is None or self._new_loop is not loop:
+            self._new, self._new_loop = asyncio.Condition(), loop
+        return self._new
 
     def fresh(self) -> Snapshot | None:
         """Le dernier snapshot s'il est assez récent, sinon None."""

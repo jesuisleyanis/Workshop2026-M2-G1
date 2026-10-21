@@ -11,7 +11,7 @@ Prometheus ──PromQL──► collector ──GET /api/v1/features──► d
 | Dossier | Rôle | Doc |
 |---|---|---|
 | `shared/` | définition figée du vecteur de features, z-scores, heuristique de routage `incident_type` | [README](shared/README.md) · [CDC](shared/CAHIER-DES-CHARGES.md) |
-| `collector/` | interroge Prometheus toutes les 15 s, expose le vecteur | [README](collector/README.md) · [CDC](collector/CAHIER-DES-CHARGES.md) |
+| `collector/` | interroge Prometheus chaque seconde (`rate[5s]`), sert chaque vecteur dès sa collecte | [README](collector/README.md) · [CDC](collector/CAHIER-DES-CHARGES.md) |
 | `training/` | dataset baseline simulé, entraînement IsolationForest, artefacts versionnés | [README](training/README.md) · [CDC](training/CAHIER-DES-CHARGES.md) |
 | `detector/` | score temps réel, métrique, AnomalyEvent vers la remédiation | [README](detector/README.md) · [CDC](detector/CAHIER-DES-CHARGES.md) |
 

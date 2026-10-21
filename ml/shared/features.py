@@ -43,8 +43,9 @@ FEATURE_NAMES: tuple[str, ...] = (
 N_FEATURES: int = len(FEATURE_NAMES)
 FEATURE_INDEX: dict[str, int] = {name: i for i, name in enumerate(FEATURE_NAMES)}
 
-#: Fenêtre d'agrégation du vecteur côté contrat (secondes).
-WINDOW_SECONDS: int = 15
+#: Fenêtre d'agrégation du vecteur côté contrat (secondes) = PROM_RATE_WINDOW du collector ;
+#: un vecteur par seconde (COLLECT_INTERVAL_SECONDS). Détection < 5 s : docs/plan-amelioration-detection.md.
+WINDOW_SECONDS: int = 5
 
 # Plancher de l'écart-type utilisé pour le z-score. Sans lui, une feature quasi
 # constante en baseline (ex. db_errors_per_s ~ 0) produirait des z astronomiques

@@ -148,3 +148,22 @@ def test_stale_calibration_raises_in_python_api(setup):
     with pytest.raises(StaleCalibrationError):
         train(real=load_csv(normal_csv), n_estimators=50,
               calibration={"threshold": 0.6, "model_fingerprint": "autre"})
+
+
+def test_confirmation_rule_matches_the_detector():
+    from ml.training.calibrate import fires
+
+    scores = np.array([0.5, 0.75, 0.6, 0.75, 0.76, 0.95, 0.5])
+    # 2 fenêtres consécutives >= 0.7, ou une seule >= 0.9 (seuil haut)
+    assert fires(scores, 0.7, 0.9, confirm=2).tolist() == [False, False, False, False, True, True, False]
+    assert fires(scores, 0.7, None, confirm=1).tolist() == (scores >= 0.7).tolist()
+
+
+def test_report_carries_high_threshold_and_confirmation(setup):
+    _, normal_csv, attacks_csv, model, _ = setup
+    rep = calibrate(model, load_csv(normal_csv), load_csv(attacks_csv, min_rows=1), confirm=2)
+    weakest = min(r["peak_min"] for r in rep["attacks"].values())
+    assert rep["confirm_windows"] == 2
+    assert rep["threshold"] < rep["threshold_high"] < weakest
+    with pytest.raises(ValueError, match="confirm"):
+        calibrate(model, load_csv(normal_csv), load_csv(attacks_csv, min_rows=1), confirm=0)

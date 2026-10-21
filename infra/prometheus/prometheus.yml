@@ -1,7 +1,7 @@
 # Prometheus — scrape des services RESILIENCE-ALPHA (métriques du contrat §2)
 global:
   scrape_interval: 10s
-  evaluation_interval: 10s
+  evaluation_interval: 5s    # règles SOC : chemin de secours plus réactif (lot 6)
 
 # Fonction SOC → remédiation (I6, ticket #13) : règles Prometheus (miroir des règles Grafana) évaluées
 # ici, routées par Alertmanager (profil `full`) vers POST /events/alertmanager du moteur.
@@ -17,11 +17,19 @@ alerting:
 
 scrape_configs:
   - job_name: payment-api
+    # Signaux de détection rapide (docs/plan-amelioration-detection.md, lot 2) : 1 scrape/s ;
+    # les features ML sont des rate()[5s] (>= 4 échantillons). Endpoints /metrics légers.
+    scrape_interval: 1s
+    scrape_timeout: 900ms
     metrics_path: /metrics
     static_configs:
       - targets: ["payment-api:8001"]
 
   - job_name: auth
+    # Signaux de détection rapide (docs/plan-amelioration-detection.md, lot 2) : 1 scrape/s ;
+    # les features ML sont des rate()[5s] (>= 4 échantillons). Endpoints /metrics légers.
+    scrape_interval: 1s
+    scrape_timeout: 900ms
     metrics_path: /metrics
     static_configs:
       - targets: ["auth:8002"]
@@ -37,12 +45,18 @@ scrape_configs:
       - targets: ["remediation:8005"]
 
   - job_name: waf-exporter
+    # Signaux de détection rapide (docs/plan-amelioration-detection.md, lot 2) : 1 scrape/s ;
+    # les features ML sont des rate()[5s] (>= 4 échantillons). Endpoints /metrics légers.
+    scrape_interval: 1s
+    scrape_timeout: 900ms
     # Conteneur dédié (security/waf/Dockerfile.exporter) qui suit l'audit log ModSecurity du WAF.
     static_configs:
       - targets: ["waf-exporter:9188"]
 
   # Profil full :
   - job_name: cadvisor
+    # CPU/RAM : 5 s suffisent (cAdvisor est coûteux et ces features ne détectent pas les premières)
+    scrape_interval: 5s
     static_configs:
       - targets: ["cadvisor:8080"]
 

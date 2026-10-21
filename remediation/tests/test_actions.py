@@ -162,7 +162,10 @@ async def test_confirm_waf_block_reads_loki_only():
     res = await build_action("confirm_waf_block", {}).execute(ctx_for(client(net), event=make_event("web_attack")))
     assert res.ok and res.data["confirmed"] is True
     assert {r.method for r in net.requests} == {"GET"}
-    assert "203.0.113.7" in net.requests[0].url.params["query"]
+    query = net.requests[0].url.params["query"]
+    assert "203.0.113.7" in query
+    # Sélecteur réel des logs waf_blocked : émis par le conteneur waf-exporter (label Promtail).
+    assert query.startswith('{service="waf-exporter", event="waf_blocked"}')
     net.loki_values = []
     res = await build_action("confirm_waf_block", {}).execute(ctx_for(client(net)))
     assert res.ok and res.data["confirmed"] is False

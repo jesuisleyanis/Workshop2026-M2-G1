@@ -23,7 +23,7 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install "/tmp/resilience_comm
 WORKDIR /src
 
 FROM builder AS trainer
-ARG MODEL_VERSION=1.1.0
+ARG MODEL_VERSION=1.2.0
 WORKDIR /build
 COPY ml/__init__.py ml/__init__.py
 COPY ml/shared ml/shared
