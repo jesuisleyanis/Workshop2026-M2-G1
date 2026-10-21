@@ -9,6 +9,7 @@ const tx = (id: string, from: string, to: string, amount: number, createdAt: str
   amount,
   currency: 'EUR',
   status,
+  category: 'transfer',
   label: null,
   createdAt,
   requestId: null,

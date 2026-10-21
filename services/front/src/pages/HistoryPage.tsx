@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { CategoryPicker } from '../components/CategoryPicker'
 import { Icon } from '../components/icons'
 import { EmptyState, ErrorState, LoadingState, Segmented, TxRow } from '../components/ui'
 import { useShell } from '../hooks/shell-context'
 import { useBankData } from '../hooks/useBankData'
 import { useTxViews } from '../hooks/useTxViews'
 import { groupByDay, historyCsv, signed, type TxView } from '../lib/bank'
+import { categoryLabel } from '../lib/categories'
+import type { Category } from '../types/api'
 
 type St = 'all' | 'ok' | 'rej'
 type Dir = 'all' | 'debit' | 'credit'
@@ -20,7 +23,8 @@ const DIRS = [
   ['credit', 'Crédits'],
 ] as const
 
-function matches(v: TxView, q: string, st: St, dir: Dir): boolean {
+function matches(v: TxView, q: string, st: St, dir: Dir, cat: Category | null): boolean {
+  if (cat && v.tx.category !== cat) return false
   if (st === 'ok' && v.rejected) return false
   if (st === 'rej' && !v.rejected) return false
   if (dir === 'debit' && v.delta >= 0) return false
@@ -37,21 +41,23 @@ export function HistoryPage() {
   const [q, setQ] = useState('')
   const [st, setSt] = useState<St>('all')
   const [dir, setDir] = useState<Dir>('all')
+  const [cat, setCat] = useState<Category | null>(null)
   const [sheet, setSheet] = useState(false)
 
   if (transactions.error && !views) return <ErrorState error={transactions.error} onRetry={transactions.reload} />
   if (!views) return <LoadingState label="Chargement des opérations…" />
   if (views.length === 0) return <EmptyState title="Aucune opération" text="Vos opérations apparaîtront ici dès le premier paiement." icon="history" />
 
-  const list = views.filter((v) => matches(v, q, st, dir))
+  const list = views.filter((v) => matches(v, q, st, dir, cat))
   const groups = groupByDay(list)
   const count = `${list.length} opération${list.length > 1 ? 's' : ''}`
-  const active = [st !== 'all' && { label: st === 'ok' ? 'Effectués' : 'Refusés', rm: () => setSt('all') }, dir !== 'all' && { label: dir === 'debit' ? 'Débits' : 'Crédits', rm: () => setDir('all') }].filter(
+  const active = [st !== 'all' && { label: st === 'ok' ? 'Effectués' : 'Refusés', rm: () => setSt('all') }, dir !== 'all' && { label: dir === 'debit' ? 'Débits' : 'Crédits', rm: () => setDir('all') }, cat && { label: categoryLabel(cat), rm: () => setCat(null) }].filter(
     (x): x is { label: string; rm: () => void } => !!x,
   )
   const resetFilters = () => {
     setSt('all')
     setDir('all')
+    setCat(null)
   }
 
   function exportCsv() {
@@ -91,6 +97,7 @@ export function HistoryPage() {
             <Segmented label="Statut" options={STATUS} value={st} onChange={setSt} className="bg-[#e6e8eb]" />
             <Segmented label="Sens" options={DIRS} value={dir} onChange={setDir} className="bg-[#e6e8eb]" />
           </div>
+          <CategoryPicker label="Catégorie" value={cat} onChange={setCat} allLabel="Toutes" />
         </>
       ) : (
         <>
@@ -163,7 +170,7 @@ export function HistoryPage() {
       ))}
 
       {sheet && !isDesktop && (
-        <FilterSheet count={list.length} st={st} dir={dir} setSt={setSt} setDir={setDir} onReset={resetFilters} onClose={() => setSheet(false)} />
+        <FilterSheet count={list.length} st={st} dir={dir} cat={cat} setSt={setSt} setDir={setDir} setCat={setCat} onReset={resetFilters} onClose={() => setSheet(false)} />
       )}
     </div>
   )
@@ -173,16 +180,20 @@ function FilterSheet({
   count,
   st,
   dir,
+  cat,
   setSt,
   setDir,
+  setCat,
   onReset,
   onClose,
 }: {
   count: number
   st: St
   dir: Dir
+  cat: Category | null
   setSt: (v: St) => void
   setDir: (v: Dir) => void
+  setCat: (v: Category | null) => void
   onReset: () => void
   onClose: () => void
 }) {
@@ -214,6 +225,10 @@ function FilterSheet({
           <section className="flex flex-col gap-2.5">
             <h3 className="m-0 text-sm font-semibold text-ink-2">Sens</h3>
             <Segmented label="Sens" options={DIRS} value={dir} onChange={setDir} stretch />
+          </section>
+          <section className="flex flex-col gap-2.5">
+            <h3 className="m-0 text-sm font-semibold text-ink-2">Catégorie</h3>
+            <CategoryPicker label="Catégorie" value={cat} onChange={setCat} allLabel="Toutes" wrap />
           </section>
         </div>
         <div className="grid flex-none grid-cols-[auto_minmax(0,1fr)] gap-2.5 border-t border-mute px-5 pt-3 pb-5">

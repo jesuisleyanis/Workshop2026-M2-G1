@@ -1,5 +1,6 @@
 import { ApiError } from './errors'
-import type { Account, Beneficiary, LoginResponse, ServiceHealth, Transaction, TransactionStatus } from '../types/api'
+import type { Account, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
+import { isCategory } from '../lib/categories'
 
 type Obj = Record<string, unknown>
 
@@ -78,6 +79,10 @@ function parseStatus(v: unknown): TransactionStatus {
   return v === 'rejected' ? 'rejected' : 'created'
 }
 
+function parseCategory(v: unknown): Category {
+  return isCategory(v) ? v : 'transfer'
+}
+
 export function parseTransaction(v: unknown): Transaction {
   const o = asObj(v, 'transaction')
   // Contrat payment-api (TransactionOut) : { id, src_account, dst_account, amount_cents, status }.
@@ -90,6 +95,8 @@ export function parseTransaction(v: unknown): Transaction {
     amount,
     currency: optStr(o, 'currency') ?? 'EUR',
     status: parseStatus(o.status),
+    // Un serveur antérieur à #44 n'envoie pas de catégorie : même défaut que payment-api.
+    category: parseCategory(o.category),
     label: optStr(o, 'label'),
     createdAt: optStr(o, 'created_at') ?? '',
     requestId: optStr(o, 'request_id'),
@@ -118,4 +125,23 @@ export function parseBeneficiary(v: unknown): Beneficiary {
 
 export function parseBeneficiaries(v: unknown): Beneficiary[] {
   return list(v, 'beneficiaries', 'bénéficiaires').map(parseBeneficiary)
+}
+
+export function parseSpending(v: unknown): Spending {
+  const o = asObj(v, 'dépenses')
+  const period = o.period === 'month' ? 'month' : 'week'
+  return {
+    period,
+    start: str(o, 'start', 'dépenses'),
+    end: str(o, 'end', 'dépenses'),
+    total: num(o, 'total_cents', 'dépenses') / 100,
+    byCategory: list(o.by_category ?? [], 'by_category', 'dépenses par catégorie').map((c) => {
+      const r = asObj(c, 'catégorie')
+      return { category: parseCategory(r.category), amount: num(r, 'amount_cents', 'catégorie') / 100, share: num(r, 'share', 'catégorie') }
+    }),
+    byDay: list(o.by_day ?? [], 'by_day', 'dépenses par jour').map((d) => {
+      const r = asObj(d, 'jour')
+      return { date: str(r, 'date', 'jour'), amount: num(r, 'amount_cents', 'jour') / 100 }
+    }),
+  }
 }

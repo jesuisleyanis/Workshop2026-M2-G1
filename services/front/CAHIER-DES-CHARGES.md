@@ -28,14 +28,15 @@ Le front est un **site statique** (build Vite) servi par nginx **derrière le WA
 | F14 | Statistiques : dépenses par jour (semaine/mois, navigation), opérations de la période | `StatsPage`, `lib/bank.ts` |
 | F15 | Bandeau d'état du service (#42) : « perturbé » sur réseau/timeout/5xx de **n'importe quel** appel (dont le rafraîchissement 15 s des données), puis sonde `GET /api/v1/status` (public, sans jeton) toutes les 5 s tant que le service est perturbé ; « rétabli » seulement quand `GET /api/v1/accounts` répond aussi (un 200 de la sonde, ou un 429 du WAF, ne vaut pas reprise : `reportRecovery: false`), puis rechargement des données et auto-masquage. Aucune sonde en régime normal (pas de trafic ajouté à la baseline ML) | `lib/serviceStatus.ts`, `Layout`, `BankDataProvider`, `api.getStatus` |
 | F16 | Bénéficiaires (#43, D7) : liste + recherche nom/IBAN, ajout (nom + IBAN ; erreurs « IBAN inconnu », « déjà enregistré », « votre propre compte »), suppression confirmée, « Envoyer » ; ils alimentent « Envoyer à » et l'écran Envoyer (avant les comptes déjà crédités) | `BeneficiariesPage`, `lib/bank.recipients`, `BankDataProvider` |
+| F17 | Catégories de dépenses (#44, D8) : 9 catégories (icône + gris), sélecteur réutilisable (`aria-pressed`, flèches) dans Envoyer (desktop + étape « Détails » mobile, défaut « Virement », non envoyé au POST car défaut serveur), filtre de l'historique (desktop + feuille mobile + pastille), catégorie sur la fiche opération ; Statistiques : section « Catégories » (parts %, total) **calculée par payment-api** (`GET /api/v1/stats/spending`) pour la période en cours seulement — sur une période passée, mention explicite ; accueil : 1re catégorie du mois (« Alimentation 73 % »), masquée si vide/erreur. Catégorie absente/inconnue d'un ancien serveur = « Virement » | `lib/categories.ts`, `CategoryPicker`, `useSpending`, `SendPage`, `HistoryPage`, `StatsPage`, `HomePage` |
 
 ### Design
 
 Maquettes Claude Design « Banque Résilience » (D1–D16, desktop 1280 et mobile 390, prompt `design/CLAUDE-DESIGN-PROMPT.md`) :
 noir & blanc, cartes de compte « nuit », grands rayons, ombres douces. Jetons, animations et utilitaires
 (`card`, `field`, `search`, `btn-primary`, `btn-ghost`, `round-btn`, `tnum`) dans `src/index.css` (`@theme` Tailwind v4).
-Écrans livrés : D1, D2, D3, D4, D5, D6, D7 (bénéficiaires), D9 (détail + RIB), D16. Les écrans D8, D10–D15 attendent leurs routes
-backend (#44–#51) : aucune donnée n'est inventée côté front.
+Écrans livrés : D1, D2, D3, D4, D5, D6, D7 (bénéficiaires), D8 (catégories), D9 (détail + RIB), D16. Les écrans D10–D15 attendent leurs routes
+backend (#45–#51) : aucune donnée n'est inventée côté front.
 Polices **auto-hébergées** (`@fontsource`) : la CSP (`style-src 'self'`) interdit les CDN de polices.
 Écart volontaire à la maquette : les raccourcis « comptes de démonstration » ne remplissent que l'**identifiant** —
 aucun mot de passe n'est embarqué dans le bundle, servi publiquement derrière le WAF (donc lisible depuis le PC Attaquant).

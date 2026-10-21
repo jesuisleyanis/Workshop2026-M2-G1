@@ -506,3 +506,90 @@ describe('Front - bénéficiaires (#43)', () => {
     expect(f.mock.calls.some(([, i]) => (i as RequestInit | undefined)?.method === 'DELETE')).toBe(false)
   })
 })
+
+describe('Front - catégories (#44)', () => {
+  const SPENDING = {
+    period: 'month',
+    start: '2026-10-01',
+    end: '2026-11-01',
+    total_cents: 10000,
+    by_category: [
+      { category: 'food', amount_cents: 7300, share: 0.73 },
+      { category: 'transport', amount_cents: 2700, share: 0.27 },
+    ],
+    by_day: [],
+  }
+  const EMPTY = { ...SPENDING, period: 'week', total_cents: 0, by_category: [] }
+
+  it('envoi : la catégorie choisie est au récapitulatif et dans le POST', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'POST /api/v1/transactions': () => jsonResponse({ ...CREATED, category: 'food' }, 201),
+    })
+    renderApp('/send')
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const picker = screen.getByRole('group', { name: 'Catégorie du virement' })
+    expect(within(picker).getByRole('button', { name: 'Virement' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(within(picker).getByRole('button', { name: 'Alimentation' }))
+    await user.click(screen.getByRole('button', { name: /^Envoyer 50,00/ }))
+    expect(screen.getByText('Catégorie').nextSibling).toHaveTextContent('Alimentation')
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
+    expect(await screen.findByRole('heading', { name: 'Virement envoyé' })).toBeInTheDocument()
+    expect(bodyOf(f)).toEqual({ src_account: 1, dst_account: 77, amount_cents: 5000, category: 'food' })
+  })
+
+  it('historique : filtre par catégorie, pastille retirable', async () => {
+    loginAsStored()
+    const txs = [{ ...TXS[0], category: 'food' }, { ...TXS[1], category: 'transport' }]
+    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse(txs) })
+    renderApp('/history', { desktop: false })
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Filtres' }))
+    const sheet = screen.getByRole('dialog', { name: 'Filtres' })
+    await user.click(within(within(sheet).getByRole('group', { name: 'Catégorie' })).getByRole('button', { name: 'Transport' }))
+    await user.click(within(sheet).getByRole('button', { name: 'Afficher 1 opération' }))
+    expect(screen.getByText('1 opération')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retirer le filtre Transport' }))
+    expect(screen.getByText('2 opérations')).toBeInTheDocument()
+  })
+
+  it('statistiques : parts par catégorie de la période en cours, puis état vide', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/stats/spending?period=week': () => jsonResponse(EMPTY),
+      'GET /api/v1/stats/spending?period=month': () => jsonResponse(SPENDING),
+    })
+    renderApp('/stats')
+    expect(await screen.findByText('Aucune dépense cette semaine.')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Mois' }))
+    const list = await screen.findByRole('list', { name: 'Dépenses par catégorie' })
+    const rows = within(list).getAllByRole('listitem')
+    expect(rows[0]).toHaveTextContent(/Alimentation.*73,00\s€.*73 %/)
+    expect(rows[1]).toHaveTextContent(/Transport.*27 %/)
+    await userEvent.click(screen.getByRole('button', { name: 'Période précédente' }))
+    expect(screen.getByText('Répartition de la période en cours (ce mois-ci).')).toBeInTheDocument()
+    expect(f.mock.calls.some(([u]) => String(u).includes('period=month'))).toBe(true)
+  })
+
+  it('accueil : tuile Dépenses avec la 1re catégorie du mois ; rien si erreur', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/stats/spending?period=month': () => jsonResponse(SPENDING),
+    })
+    const { unmount } = renderApp('/')
+    expect(await screen.findByTestId('top-category')).toHaveTextContent('Alimentation 73 %')
+    unmount()
+    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
+    renderApp('/')
+    await screen.findByTestId('balance')
+    expect(screen.queryByTestId('top-category')).not.toBeInTheDocument()
+  })
+})

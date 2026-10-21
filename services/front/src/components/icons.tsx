@@ -25,6 +25,12 @@ const PATHS = {
   swap: 'M4 8h14l-3-3M20 16H6l3 3',
   inArrow: 'M17 7 7 17M7 9v8h8',
   outArrow: 'M7 17 17 7M9 7h8v8',
+  food: 'M7 3v8M5 3v5a2 2 0 0 0 4 0V3M7 11v10M17 21V3c-2 1.5-3 4-3 7v4h3',
+  bag: 'M5 8h14l-1 13H6zM9 8V6a3 3 0 0 1 6 0v2',
+  car: 'M5 16l1.5-6h11L19 16M3 16h18v4H3zM7 20v1M17 20v1M7.5 18h.01M16.5 18h.01',
+  repeat: 'M17 2l3 3-3 3M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3M20 13v2a4 4 0 0 1-4 4H4',
+  heart: 'M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z',
+  star: 'M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z',
 } as const
 
 export type IconName = keyof typeof PATHS
