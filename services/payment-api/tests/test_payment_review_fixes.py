@@ -149,3 +149,39 @@ def test_uncapped_service_accounts_keep_the_per_transfer_rule(client, db, world)
             TX, headers=stale, json={"src_account": 1, "dst_account": 3, "amount_cents": 40_000}
         )
         assert r.status_code == 201, "verify_tx / trafic normal jamais bloqués par le cumul"
+
+
+def test_balance_check_uses_the_locked_row_not_a_stale_identity_map(engine, world):
+    """Un Account déjà chargé en session ne doit pas masquer un débit concurrent (double dépense)."""
+    from resilience_db.models import User
+
+    from payment_api.ledger import Rejection, transfer
+
+    factory = make_session_factory(engine)
+    with factory() as a:
+        stale = a.get(Account, 2)  # 5,00 € lus AVANT le verrou
+        assert stale.balance_cents == 500
+        with factory() as b:  # débit concurrent commité entre-temps
+            b.get(Account, 2).balance_cents = 100
+            b.commit()
+        alice = a.query(User).filter_by(username="alice").one()
+        with pytest.raises(Rejection) as exc:
+            transfer(a, alice, 2, 3, 400, None)
+        assert exc.value.code == "insufficient_funds", "solde relu sous verrou : 1 € < 4 €"
+
+
+def test_splitting_scheduled_transfers_still_requires_step_up(client, db, world):
+    db.get(Account, 1).balance_cents = 10_000_000
+    db.commit()
+    stale = bearer(make_token("alice", auth_time=int(time.time()) - 3600))
+    body = {
+        "src_account": 1,
+        "dst_account": 3,
+        "amount_cents": 30_000,
+        "frequency": "monthly",
+        "start_on": datetime.now(UTC).date().isoformat(),
+    }
+    S = "/api/v1/scheduled-transfers"
+    assert client.post(S, headers=stale, json=body).status_code == 201
+    r = client.post(S, headers=stale, json=body)  # 2 × 300 € ouverts > 500 €
+    assert r.status_code == 403 and r.json()["error"]["code"] == "step_up_required"

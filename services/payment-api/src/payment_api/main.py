@@ -160,31 +160,21 @@ def create_app(
             raise ApiError(401, "invalid_token", "Invalid token", {"WWW-Authenticate": "Bearer"})
         return user
 
-    def require_recent_auth(
-        amount_cents: int, request: Request, user: User, src: Account | None = None, session=None
-    ) -> None:
-        """Step-up (#51) : gros montant -> mot de passe vérifié il y a moins de N secondes.
-
-        `auth_time` vient du JWT déjà vérifié par current_user (pas de second décodage). Anti-
-        fractionnement : sur un compte plafonné, le seuil porte sur le montant PLUS les virements
-        vers des tiers des dernières 24 h (plusieurs 499 € avec un jeton volé ne passent pas).
-        Comptes de service (sans plafond : verify_tx, trafic normal) : montant seul, aucune requête.
-        """
-        total = amount_cents
-        if (
-            amount_cents <= settings.step_up_threshold_cents
-            and src is not None
-            and src.user_id == user.id
-            and src.monthly_limit_cents is not None
-        ):
-            t = now()
-            total += session.scalar(
-                select(func.coalesce(func.sum(Transaction.amount_cents), 0)).where(
-                    Transaction.src_account == src.id,
-                    *stats.spend_scope(user.id, t - timedelta(hours=24), t + timedelta(seconds=1)),
-                )
+    def spent_last_24h(session, src: Account, user: User) -> int:
+        t = now()
+        return session.scalar(
+            select(func.coalesce(func.sum(Transaction.amount_cents), 0)).where(
+                Transaction.src_account == src.id,
+                *stats.spend_scope(user.id, t - timedelta(hours=24), t + timedelta(seconds=1)),
             )
-        if total <= settings.step_up_threshold_cents:
+        )
+
+    def require_recent_auth(
+        amount_cents: int, request: Request, user: User, already_cents: int = 0
+    ) -> None:
+        """Step-up (#51) : `amount_cents + already_cents` au-delà du seuil -> mot de passe vérifié
+        il y a moins de N secondes. `auth_time` vient du JWT déjà vérifié par current_user."""
+        if amount_cents + already_cents <= settings.step_up_threshold_cents:
             return
         auth_time = getattr(request.state, "auth_time", None)
         age = now().timestamp() - auth_time if isinstance(auth_time, int | float) else None
@@ -275,9 +265,16 @@ def create_app(
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
-        require_recent_auth(
-            body.amount_cents, request, user, session.get(Account, body.src_account), session
-        )
+        require_recent_auth(body.amount_cents, request, user)
+
+        def anti_splitting(src: Account) -> None:
+            # Appelé par le ledger SOUS le verrou de la source : des virements concurrents de 499 €
+            # se sérialisent, chacun voit les précédents. Comptes de service (sans plafond :
+            # verify_tx, trafic normal) : montant seul, aucune requête ajoutée.
+            if src.monthly_limit_cents is not None:
+                already = spent_last_24h(session, src, user)
+                require_recent_auth(body.amount_cents, request, user, already)
+
         try:
             tx = transfer(
                 session,
@@ -288,6 +285,7 @@ def create_app(
                 request_id_var.get(),
                 body.category,
                 now(),
+                guard=anti_splitting,
             )
         except Rejection as rej:
             transactions_total.labels(result="rejected").inc()
@@ -458,8 +456,11 @@ def create_app(
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
-        # Un virement permanent au-delà du seuil est aussi sensible qu'un virement immédiat.
-        require_recent_auth(body.amount_cents, request, user)
+        # Un virement permanent au-delà du seuil est aussi sensible qu'un virement immédiat ; les
+        # programmations déjà ouvertes sur ce compte comptent (pas de fractionnement en N × 499 €).
+        require_recent_auth(
+            body.amount_cents, request, user, schedules.open_amount(session, user, body.src_account)
+        )
         try:
             s = schedules.create(session, user, body, now().astimezone(UTC).date())
         except Rejection as rej:
@@ -495,7 +496,12 @@ def create_app(
             schedule_id,
             body.status,
             now().astimezone(UTC).date(),
-            before_resume=lambda sched: require_recent_auth(sched.amount_cents, request, user),
+            before_resume=lambda sched: require_recent_auth(
+                sched.amount_cents,
+                request,
+                user,
+                schedules.open_amount(session, user, sched.src_account, exclude=sched.id),
+            ),
         )
         _audit("scheduled_transfer_changed", f"Schedule {s.id} {s.status}", 200, user)
         return _schedule_out(s)

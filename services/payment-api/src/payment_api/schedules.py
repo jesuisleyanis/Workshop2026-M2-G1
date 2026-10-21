@@ -90,6 +90,18 @@ def create(session: Session, user: User, body, today: date) -> ScheduledTransfer
     return s
 
 
+def open_amount(session: Session, user: User, src_account: int, exclude: int | None = None) -> int:
+    """Somme des programmations actives d'un compte (anti-fractionnement du step-up, #51)."""
+    q = select(func.coalesce(func.sum(ScheduledTransfer.amount_cents), 0)).where(
+        ScheduledTransfer.owner_user_id == user.id,
+        ScheduledTransfer.src_account == src_account,
+        ScheduledTransfer.status == "active",
+    )
+    if exclude is not None:
+        q = q.where(ScheduledTransfer.id != exclude)
+    return session.scalar(q)
+
+
 def owned(session: Session, user: User, schedule_id: int) -> ScheduledTransfer:
     s = session.get(ScheduledTransfer, schedule_id, with_for_update=True)
     if s is None or s.owner_user_id != user.id:
