@@ -105,12 +105,19 @@ def _first_on_or_after(s: ScheduledTransfer, day: date) -> date | None:
 
 
 def set_status(
-    session: Session, user: User, schedule_id: int, status: str, today: date
+    session: Session,
+    user: User,
+    schedule_id: int,
+    status: str,
+    today: date,
+    before_resume: Callable[[ScheduledTransfer], None] | None = None,
 ) -> ScheduledTransfer:
     s = owned(session, user, schedule_id)
     if s.status in ("cancelled", "completed"):
         raise Rejection(409, "schedule_closed", "This scheduled transfer is closed")
     if status == "active" and s.status == "paused":
+        if before_resume is not None:
+            before_resume(s)  # step-up (#51) : peut lever, rien n'est modifié
         # Reprise : seules les échéances À VENIR comptent, jamais celles manquées pendant la pause.
         s.next_run_on = _first_on_or_after(s, today)
         if s.next_run_on is None:

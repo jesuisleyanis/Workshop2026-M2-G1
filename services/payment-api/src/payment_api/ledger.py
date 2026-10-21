@@ -105,7 +105,9 @@ def transfer(
                 category=category,
             )
         )
-        if dst.user_id != src.user_id:  # entre ses propres comptes : pas de notification
+        # Entre ses propres comptes : pas de « virement refusé »… sauf avis explicite de l'appelant
+        # (virement programmé : le client doit savoir que son épargne mensuelle a échoué).
+        if dst.user_id != src.user_id or sender_notice is not None:
             notify(session, src.user_id, *notice(code))
         session.commit()
         return Rejection(status, code, message)

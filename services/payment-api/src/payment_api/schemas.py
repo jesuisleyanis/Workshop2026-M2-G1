@@ -30,8 +30,10 @@ class TransactionIn(BaseModel):
     # StrictInt : pas de float ni de bool déguisé ; les montants sont des entiers en centimes.
     # Les bornes métier (montant > 0, ...) sont vérifiées dans le ledger afin d'être
     # tracées (event transaction_rejected + métrique) plutôt que rejetées en 422 muet.
-    src_account: StrictInt
-    dst_account: StrictInt
+    # Bornés à l'INTEGER Postgres : au-delà, un DataError deviendrait un faux db_error (503)
+    # exploitable par n'importe quel client pour déclencher la détection ML et la remédiation.
+    src_account: StrictInt = Field(ge=1, le=2**31 - 1)
+    dst_account: StrictInt = Field(ge=1, le=2**31 - 1)
     amount_cents: StrictInt
     # Facultatif (#44) : verify_tx et le trafic normal historique n'en envoient pas.
     category: TransactionCategory = TransactionCategory.TRANSFER

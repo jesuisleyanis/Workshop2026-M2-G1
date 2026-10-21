@@ -19,8 +19,8 @@ from resilience_common.logging import get_logger
 from resilience_common.metrics import db_errors_total, instrument, transactions_total
 from resilience_db.config import make_engine, make_session_factory
 from resilience_db.migrate import upgrade
-from resilience_db.models import Account, Transaction, User
-from sqlalchemy import Engine, or_, select, text
+from resilience_db.models import Account, Transaction, TransactionStatus, User
+from sqlalchemy import Engine, and_, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -307,7 +307,17 @@ def create_app(
         own_ids = set(session.scalars(select(Account.id).where(Account.user_id == user.id)))
         rows = session.scalars(
             select(Transaction)
-            .where(or_(Transaction.src_account.in_(own_ids), Transaction.dst_account.in_(own_ids)))
+            .where(
+                or_(
+                    Transaction.src_account.in_(own_ids),
+                    # Reçu : seulement s'il a abouti. Le refus d'un tiers (solde, plafond) ne
+                    # regarde que lui — même règle que le relevé (#50).
+                    and_(
+                        Transaction.dst_account.in_(own_ids),
+                        Transaction.status == TransactionStatus.CREATED.value,
+                    ),
+                )
+            )
             .order_by(Transaction.id.desc())
             .limit(limit)
         ).all()
@@ -326,7 +336,11 @@ def create_app(
             .join(dst, dst.id == Transaction.dst_account)
             .where(Transaction.id == transaction_id)
         ).first()  # une seule requête : l'opération et ses deux titulaires
-        if row is None or user.id not in (row[1], row[2]):
+        # Refus d'un tiers vers moi : invisible pour moi, comme un id inconnu.
+        visible = row is not None and (
+            row[1] == user.id or (row[2] == user.id and row[0].status == "created")
+        )
+        if not visible:
             # Ni émetteur ni destinataire : même 404 qu'un id inconnu (pas 403, anti-énumération),
             # mais tracé côté SOC (balayage d'ids = tentative d'IDOR).
             log_event(
@@ -455,13 +469,20 @@ def create_app(
 
     @app.patch("/api/v1/scheduled-transfers/{schedule_id}", response_model=ScheduleOut)
     def set_schedule_status(
+        request: Request,
         schedule_id: DbId,
         body: ScheduleStatusIn,
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
+        # Reprendre un gros virement permanent relance des débits : même step-up qu'à la création.
         s = schedules.set_status(
-            session, user, schedule_id, body.status, now().astimezone(UTC).date()
+            session,
+            user,
+            schedule_id,
+            body.status,
+            now().astimezone(UTC).date(),
+            before_resume=lambda sched: require_recent_auth(sched.amount_cents, request, user),
         )
         _audit("scheduled_transfer_changed", f"Schedule {s.id} {s.status}", 200, user)
         return _schedule_out(s)
