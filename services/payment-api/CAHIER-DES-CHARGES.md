@@ -26,6 +26,7 @@ API métier de la plateforme de paiement **fictive** : consultation des comptes,
 | `GET /api/v1/accounts` | JWT | Comptes de l'utilisateur : `[{id, iban_fake, balance_cents, currency}]` |
 | `POST /api/v1/transactions` | JWT | `{src_account, dst_account, amount_cents}` → `201` transaction. Refus : `409 insufficient_funds`, `422 invalid_amount / amount_too_large / same_account / currency_mismatch`, `404 account_not_found / destination_not_found` |
 | `GET /api/v1/transactions?limit=50` | JWT | Historique (transactions touchant un compte de l'utilisateur), plus récentes d'abord, `limit` 1–200 |
+| `GET /api/v1/status` | **aucune** | État public pour le bandeau client (#42) : `200 {status:"ok", checked_at}` / `503 {status:"degraded", checked_at}`. Rien d'autre (pas de version, d'hôte ni d'exception). Cache `STATUS_CACHE_S` = 2 s : **au plus une requête BDD par fenêtre**, quel que soit le trafic (pas d'amplification) ; le WAF limite en plus par IP |
 | `GET /health` | — | Liveness |
 | `GET /ready` | — | `200` si la DB répond ; `503 db_unavailable` sinon |
 | `GET /metrics` | — (réseau interne) | Prometheus |
