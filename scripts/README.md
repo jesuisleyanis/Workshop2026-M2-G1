@@ -20,7 +20,7 @@ ne fait que l'appliquer. Toutes les données sont fictives.
 |---|---|---|---|
 | `demo01` … `demo05` | `SEED_PASSWORD` (commun, SOPS → `.env`) | 1 compte EUR chacun, IBAN fictif `FR76 0000 0000 000N 0000 0000 000` | **1 000,00 €** (100 000 centimes) |
 
-| `tiers01` … `tiers04` | aléatoire, jeté (**non connectables**) | 1 compte EUR chacun, IBAN `FR76 0000 0000 9NNN 0000 0000 000` (tiers fictifs : Léa Martin, Boulangerie du Port…) | 0 € |
+| `tiers01` … `tiers04` | aléatoire, jeté (**non connectables**) | 1 compte EUR chacun, IBAN `FR76 9999 0000 000N 0000 0000 000` (tiers fictifs : Léa Martin, Boulangerie du Port…) | 0 € |
 
 Chaque `demoNN` a **5 à 8 bénéficiaires** (#43) : jusqu'à 4 autres clients de démo + les 4 tiers.
 
