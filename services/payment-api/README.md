@@ -99,6 +99,7 @@ pytest services/payment-api
 
 - **Transaction de contrôle (`verify_tx`)** : login `auth` → `POST /api/v1/transactions` entre deux comptes seedés → attendre `201` (code retour 0) / sinon 1.
 - **Alertes Loki** : `{service="payment-api"} | json | event="db_error"` ; ratio `transaction_rejected` / `transaction_created`.
+- **Catégories (#44)** : `category` n'ajoute aucun label de métrique ni de feature ML ; le trafic normal (`scripts/gen_normal_traffic.py`) envoie des catégories variées **sans changer** sa séquence d'actions (catégorie dérivée du montant), donc le vecteur §2 du collector (débits, ratios 4xx/5xx, latence) est inchangé — pas de faux positif attendu du détecteur. À confirmer en recette en rejouant le trafic normal contre le modèle (`ml/`). Après la migration `0004`, **refaire `pg_backup.yml`** : un dump antérieur restaurerait un schéma sans `category`.
 - **`GET /api/v1/status`** (public, via WAF) : `503 degraded` ⇔ même test BDD que `/ready` (`_db_reachable`), servi par un cache **à vol unique** (`status.py`) : un seul rafraîchissement à la fois, les requêtes concurrentes reçoivent la dernière valeur. Effet sur la baseline ML : **aucun** — la route est exclue de `resilience_http_*` comme `/ready` (les features du collector agrègent tous les chemins, des 503 servis en cache fausseraient le ratio 5xx et la latence) ; elle reste visible dans les logs WAF. Le front ne l'appelle qu'en mode « perturbé » (5 s par client).
 - **`/ready` 503** ⇒ la DB est injoignable (`/health` reste 200 : le conteneur n'est pas tué à tort, la remédiation décide).
 
