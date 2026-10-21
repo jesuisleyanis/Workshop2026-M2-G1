@@ -2,9 +2,11 @@ import { useNavigate } from 'react-router-dom'
 import { Icon } from '../components/icons'
 import { AccountCard, Avatar, Card, EmptyState, ErrorState, H2, LoadingState, TxRow } from '../components/ui'
 import { useBankData } from '../hooks/useBankData'
+import { useSpending } from '../hooks/useSpending'
 import { useShell } from '../hooks/shell-context'
 import { useTxViews } from '../hooks/useTxViews'
 import { recipients, spendingPeriod } from '../lib/bank'
+import { categoryLabel, formatShare } from '../lib/categories'
 import { formatMoney } from '../lib/format'
 import type { SendRouteState } from './SendPage'
 
@@ -13,6 +15,9 @@ export function HomePage() {
   const { views } = useTxViews()
   const { toast } = useShell()
   const navigate = useNavigate()
+  const spending = useSpending('month')
+  // Part de la 1re catégorie du mois (maquette « Alimentation 73 % ») ; rien si vide ou en erreur.
+  const topCategory = spending.data?.byCategory[0]
 
   if (accounts.error && !accounts.data) return <ErrorState error={accounts.error} onRetry={accounts.reload} />
   if (!accounts.data) return <LoadingState label="Chargement des comptes…" />
@@ -94,8 +99,14 @@ export function HomePage() {
                   <Icon name="chart" size={28} />
                 </span>
                 <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="tnum text-[26px] font-bold tracking-[-0.02em]">{formatMoney(month.total)}</span>
+                  {/* Total serveur quand il est connu : même base que la part affichée dessous. */}
+                  <span className="tnum text-[26px] font-bold tracking-[-0.02em]">{formatMoney(spending.data?.total ?? month.total)}</span>
                   <span className="text-[13px] text-[#efeaff]">dépensés en {month.label.toLowerCase()}</span>
+                  {topCategory && (
+                    <span data-testid="top-category" className="text-[13px] font-semibold text-white">
+                      {categoryLabel(topCategory.category)} {formatShare(topCategory.share)}
+                    </span>
+                  )}
                 </span>
               </button>
               <button type="button" onClick={() => navigate('/stats')} className="flex min-h-[108px] flex-col items-center justify-center gap-2 rounded-[22px] border-0 bg-page p-3">

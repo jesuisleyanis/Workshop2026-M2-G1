@@ -1,12 +1,21 @@
 """Tests du module partagé : migrations == modèles, seed idempotent, config sans secret en dur."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from resilience_db import Base, build_database_url, make_engine, make_session_factory
 from resilience_db.migrate import upgrade
-from resilience_db.models import Account, Beneficiary, FaceEnrollment, User
+from resilience_db.models import (
+    Account,
+    Beneficiary,
+    FaceEnrollment,
+    Transaction,
+    TransactionCategory,
+    User,
+)
 from resilience_db.passwords import hash_password, verify_password
-from resilience_db.seed import PAYEES, demo_iban, payee_iban, seed_demo_data
-from sqlalchemy import inspect
+from resilience_db.seed import HISTORY, PAYEES, demo_iban, payee_iban, seed_demo_data
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
 
@@ -160,3 +169,80 @@ def test_password_from_file(monkeypatch, tmp_path):
 def test_payee_ibans_never_collide_with_demo_ibans():
     demo = {demo_iban(n) for n in range(1, 10_000)}
     assert not demo & {payee_iban(i) for i in range(1, len(PAYEES) + 1)}
+
+
+def test_transaction_category_defaults_to_transfer_and_is_bounded(tmp_path):
+    # Via la migration (pas create_all) : défaut serveur + CHECK réellement posés en base.
+    engine = make_engine(f"sqlite:///{tmp_path}/m.db")
+    upgrade(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "s3cret-pass", users=2)
+        a, b = s.query(Account).order_by(Account.id).limit(2).all()
+        tx = Transaction(src_account=a.id, dst_account=b.id, amount_cents=1, status="created")
+        s.add(tx)
+        s.commit()
+        assert tx.category == "transfer"
+        s.execute(
+            text(
+                "INSERT INTO transactions (src_account, dst_account, amount_cents, status) "
+                "VALUES (:a, :b, 1, 'created')"
+            ),
+            {"a": a.id, "b": b.id},
+        )
+        s.commit()
+        assert s.execute(text("SELECT category FROM transactions ORDER BY id DESC")).scalar() == (
+            "transfer"
+        ), "défaut serveur : un INSERT sans catégorie reste valide"
+        s.add(
+            Transaction(
+                src_account=a.id, dst_account=b.id, amount_cents=1, status="created", category="x"
+            )
+        )
+        with pytest.raises(IntegrityError):
+            s.commit()
+    from importlib import import_module
+
+    mig = import_module("resilience_db.migrations.versions.0004_transaction_category")
+    assert set(mig.CATEGORIES) == {c.value for c in TransactionCategory}, "migration = modèle"
+
+
+def test_seed_history_is_categorised_and_only_for_new_clients():
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "s3cret-pass", users=2)
+        assert s.query(Transaction).count() == 2 * len(HISTORY)
+        seed_demo_data(s, "s3cret-pass", users=3)  # demo03 nouveau, demo01/02 déjà servis ce mois
+        assert s.query(Transaction).count() == 3 * len(HISTORY)
+        cats = {t.category for t in s.query(Transaction)}
+        assert len(cats) >= 6 and cats <= {c.value for c in TransactionCategory}
+        demo = s.query(User).filter_by(username="demo01").one()
+        assert demo.accounts[0].balance_cents == 100_000, "solde de démo inchangé (verify_tx)"
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        datetime(2026, 11, 1, 0, 30, tzinfo=UTC),  # dimanche 1er, juste après minuit
+        datetime(2026, 10, 19, 9, 0, tzinfo=UTC),  # lundi
+        datetime(2026, 10, 31, 22, 0, tzinfo=UTC),
+    ],
+)
+def test_seed_history_always_lands_in_current_week_and_month(now):
+    from resilience_db.seed import WEEK_ENTRIES, seed_history
+
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "s3cret-pass", users=1)
+        s.query(Transaction).delete()
+        s.commit()
+        assert seed_history(s, ["demo01"], now=now) == len(HISTORY)
+        assert seed_history(s, ["demo01"], now=now) == 0, "idempotent dans le mois"
+        dates = [
+            t.created_at.replace(tzinfo=UTC) for t in s.query(Transaction).order_by(Transaction.id)
+        ]
+    month_start = now.replace(day=1, hour=0, minute=0)
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0)
+    assert all(month_start <= d <= now for d in dates)
+    assert all(d >= week_start for d in dates[:WEEK_ENTRIES])

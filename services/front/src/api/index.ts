@@ -1,9 +1,9 @@
 import { API_BASE } from '../config'
 import { createApiClient, type ApiClient } from './client'
-import { parseAccounts, parseBeneficiaries, parseBeneficiary, parseLogin, parseServiceHealth, parseTransaction, parseTransactions } from './parsers'
+import { parseAccounts, parseBeneficiaries, parseBeneficiary, parseLogin, parseServiceHealth, parseSpending, parseTransaction, parseTransactions } from './parsers'
 import { tokenStore } from './tokenStore'
 import { serviceStatus } from '../lib/serviceStatus'
-import type { Account, Beneficiary, LoginRequest, LoginResponse, NewBeneficiary, ServiceHealth, Transaction, TransferRequest } from '../types/api'
+import type { Account, Beneficiary, LoginRequest, LoginResponse, NewBeneficiary, ServiceHealth, Spending, Transaction, TransferRequest } from '../types/api'
 
 /** Endpoints métier /api/v1 (docs/contracts.md : préfixe /api/v1, JWT Bearer). */
 export function createEndpoints(client: ApiClient) {
@@ -37,9 +37,12 @@ export function createEndpoints(client: ApiClient) {
             src_account: Number(req.from_account),
             dst_account: Number(req.to_account),
             amount_cents: Math.round(req.amount * 100),
+            ...(req.category ? { category: req.category } : {}),
           },
         }),
       ),
+    getSpending: async (period: 'week' | 'month', offset = 0, signal?: AbortSignal): Promise<Spending> =>
+      parseSpending(await client.request(`/api/v1/stats/spending?period=${period}&offset=${Math.min(0, Math.trunc(offset))}`, { signal })),
   }
 }
 

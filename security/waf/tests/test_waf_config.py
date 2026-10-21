@@ -40,7 +40,8 @@ def test_api_upstreams_target_service_ports():
 def test_only_public_routes_are_proxied():
     locations = re.findall(r"location\s+(?:=\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
-                              "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
+                              "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/stats/spending",
+                              "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
 
@@ -63,6 +64,14 @@ def test_delete_is_denied_everywhere_except_one_beneficiary():
                   "DELETE:/api/v1/accounts", "DELETE:/api/v1/auth/session", "DELETE:/"):
         assert denied.search(probe), probe
     assert not denied.search("GET:/api/v1/accounts") and not denied.search("POST:/api/v1/beneficiaries")
+
+
+def test_spending_stats_route_is_rate_limited_and_read_only():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=stats_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    block = re.search(r"location = /api/v1/stats/spending \{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block and "limit_req zone=stats_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
 
 
 def test_beneficiaries_route_is_rate_limited_per_ip():

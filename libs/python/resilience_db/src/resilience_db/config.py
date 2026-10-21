@@ -58,9 +58,7 @@ def make_engine(url: URL | str | None = None) -> Engine:
     if url.get_backend_name() == "sqlite":
         kwargs: dict = {"connect_args": {"check_same_thread": False}}
         if url.database in (None, "", ":memory:"):
-            kwargs["poolclass"] = (
-                StaticPool  # une seule base en mémoire pour tous les threads
-            )
+            kwargs["poolclass"] = StaticPool  # une seule base en mémoire pour tous les threads
         engine = create_engine(url, **kwargs)
 
         @event.listens_for(engine, "connect")
@@ -68,9 +66,7 @@ def make_engine(url: URL | str | None = None) -> Engine:
             dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
         return engine
-    return create_engine(
-        url, pool_pre_ping=True, pool_size=5, max_overflow=5, pool_timeout=5
-    )
+    return create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5, pool_timeout=5)
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:

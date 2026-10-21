@@ -43,6 +43,47 @@ describe('endpoints /api/v1', () => {
     expect(f.mock.calls[2]).toEqual(['/api/v1/beneficiaries/5', expect.objectContaining({ method: 'DELETE' })])
   })
 
+  it('transactions : catégorie absente => « transfer », inconnue => « other », masquée (reçu) => null', () => {
+    const base = { id: 1, src_account: 1, dst_account: 2, amount_cents: 100, status: 'created' }
+    expect(parseTransaction(base).category).toBe('transfer')
+    expect(parseTransaction({ ...base, category: 'casino' }).category).toBe('other')
+    expect(parseTransaction({ ...base, category: null }).category).toBeNull()
+    expect(parseTransaction({ ...base, category: 'health' }).category).toBe('health')
+  })
+
+  it('createTransaction : category envoyée seulement si fournie', async () => {
+    const { api, f } = endpointsWith(() => jsonResponse({ id: 1, src_account: 1, dst_account: 2, amount_cents: 100, status: 'created' }, 201))
+    await api.createTransaction({ from_account: '1', to_account: '2', amount: 1, category: 'food' })
+    await api.createTransaction({ from_account: '1', to_account: '2', amount: 1 })
+    const bodies = f.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string))
+    expect(bodies[0]).toEqual({ src_account: 1, dst_account: 2, amount_cents: 100, category: 'food' })
+    expect(bodies[1]).not.toHaveProperty('category')
+  })
+
+  it('getSpending : GET /api/v1/stats/spending?period=, centimes -> euros', async () => {
+    const { api, f } = endpointsWith(() =>
+      jsonResponse({
+        period: 'week',
+        offset: -1,
+        start: '2026-10-19',
+        end: '2026-10-26',
+        total_cents: 1250,
+        by_category: [{ category: 'food', amount_cents: 1250, share: 1 }],
+        by_day: [{ date: '2026-10-19', amount_cents: 1250 }],
+      }),
+    )
+    expect(await api.getSpending('week', -1)).toEqual({
+      period: 'week',
+      offset: -1,
+      start: '2026-10-19',
+      end: '2026-10-26',
+      total: 12.5,
+      byCategory: [{ category: 'food', amount: 12.5, share: 1 }],
+      byDay: [{ date: '2026-10-19', amount: 12.5 }],
+    })
+    expect((f.mock.calls[0] as unknown as [string])[0]).toBe('/api/v1/stats/spending?period=week&offset=-1')
+  })
+
   it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {
     const { api, f } = endpointsWith(() =>
       jsonResponse([{ id: 1, iban_fake: 'FR76 0000 0001', balance_cents: 125050, currency: 'EUR' }]),

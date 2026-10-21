@@ -33,6 +33,9 @@ export interface Account {
 /** `result` des métriques resilience_transactions_total : created | rejected. */
 export type TransactionStatus = 'created' | 'rejected'
 
+/** Catégorie de dépense portée par la transaction (payment-api, #44). Défaut serveur : `transfer`. */
+export type Category = 'food' | 'shopping' | 'transport' | 'subscriptions' | 'health' | 'leisure' | 'housing' | 'transfer' | 'other'
+
 export interface Transaction {
   id: string
   fromAccount: string
@@ -40,6 +43,8 @@ export interface Transaction {
   amount: number
   currency: string
   status: TransactionStatus
+  /** Choisie par l'émetteur ; null pour un virement reçu (payment-api la masque). */
+  category: Category | null
   label: string | null
   createdAt: string
   /** `request_id` de la requête de création (référence affichée au client, corrélée aux logs). */
@@ -52,6 +57,21 @@ export interface TransferRequest {
   amount: number
   currency?: string
   label?: string
+  /** Facultatif : absent, payment-api enregistre `transfer`. */
+  category?: Category
+}
+
+/** GET /api/v1/stats/spending?period=week|month&offset=-n (#44) : dépenses d'une période (UTC), en euros. */
+export interface Spending {
+  period: 'week' | 'month'
+  /** 0 = période en cours, -1 = précédente… */
+  offset: number
+  /** YYYY-MM-DD ; `end` exclusif. */
+  start: string
+  end: string
+  total: number
+  byCategory: { category: Category; amount: number; share: number }[]
+  byDay: { date: string; amount: number }[]
 }
 
 /** GET /api/v1/status (payment-api, public) : 200 ok, 503 degraded. */

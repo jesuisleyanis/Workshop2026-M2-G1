@@ -11,12 +11,13 @@ from __future__ import annotations
 import os
 import secrets
 import sys
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from resilience_db.config import make_engine, make_session_factory, read_secret
-from resilience_db.models import Account, Beneficiary, User
+from resilience_db.models import Account, Beneficiary, Transaction, User
 from resilience_db.passwords import hash_password
 
 DEFAULT_USERS = 5
@@ -31,6 +32,20 @@ PAYEES = (
     ("tiers03", "SCI Horizon — loyer"),
     ("tiers04", "Club de sport Atlas"),
 )
+# Historique de dépenses catégorisées (#44) : (index du tiers, catégorie, centimes). Placé
+# dans la semaine et le mois COURANTS au moment du seed (cf. seed_history), pour que l'écran
+# Statistiques ne soit jamais vide en démo, même si `make seed` est rejoué le 1er du mois.
+HISTORY = (
+    (1, "food", 1250),
+    (0, "leisure", 2400),
+    (1, "food", 860),
+    (3, "subscriptions", 2999),
+    (1, "shopping", 4590),
+    (0, "transport", 1800),
+    (3, "health", 2500),
+    (2, "housing", 5000),
+)
+WEEK_ENTRIES = 3  # les 3 premières tombent dans la semaine ISO courante
 DEMO_NAMES = ("Camille Durand", "Nathan Petit", "Inès Moreau", "Lucas Girard", "Chloé Fontaine")
 
 
@@ -79,7 +94,70 @@ def seed_demo_data(
         created.append(username)
     session.commit()
     seed_beneficiaries(session, users=users)
+    seed_history(session, [demo_username(n) for n in range(1, users + 1)])
     return created
+
+
+def _history_dates(now: datetime) -> list[datetime]:
+    """Dates réparties entre le début de la période et `now` (jamais dans le futur)."""
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    week_start = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    recent_from = max(month_start, week_start)
+    dates = []
+    for i in range(len(HISTORY)):
+        lo, n, k = (
+            (recent_from, WEEK_ENTRIES, i)
+            if i < WEEK_ENTRIES
+            else (month_start, len(HISTORY) - WEEK_ENTRIES, i - WEEK_ENTRIES)
+        )
+        dates.append(now - (now - lo) * (k + 1) / (n + 1))
+    return dates
+
+
+def seed_history(session: Session, usernames: list[str], now: datetime | None = None) -> int:
+    """Dépenses vers les tiers fictifs pour chaque client SANS dépense dans le mois courant.
+
+    Idempotent à l'échelle du mois : rejouer `make seed` (ou `attacks/reset.sh`) avant la démo
+    remplit le mois en cours une seule fois. Le solde du client reste celui du seed ; les tiers
+    sont crédités. `usernames` : clients concernés (tous les demoNN du seed).
+    """
+    now = now or datetime.now(UTC)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    payees = [account for _, account in _ensure_payees(session)]
+    payee_ids = [a.id for a in payees]
+    count = 0
+    for username in usernames:
+        user = session.scalar(select(User).where(User.username == username))
+        if user is None or not user.accounts:
+            continue
+        src = user.accounts[0]
+        already = session.scalar(
+            select(Transaction.id).where(
+                Transaction.src_account == src.id,
+                Transaction.dst_account.in_(payee_ids),
+                Transaction.created_at >= month_start,
+            )
+        )
+        if already is not None:
+            continue
+        for (payee, category, amount), at in zip(HISTORY, _history_dates(now), strict=True):
+            dst = payees[payee % len(payees)]
+            dst.balance_cents += amount
+            session.add(
+                Transaction(
+                    src_account=src.id,
+                    dst_account=dst.id,
+                    amount_cents=amount,
+                    status="created",
+                    category=category,
+                    created_at=at,
+                )
+            )
+            count += 1
+    session.commit()
+    return count
 
 
 def _ensure_payees(session: Session) -> list[tuple[str, Account]]:

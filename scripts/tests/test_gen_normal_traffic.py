@@ -80,6 +80,7 @@ def test_client_logs_in_learns_account_then_transfers_to_a_peer():
                              ("bad_transfer", 404), ("bad_login", 401)}
     transfers = [p for _, path, p, _ in api.calls if path == "/api/v1/transactions" and p]
     assert all(p["src_account"] != p["dst_account"] for p in transfers)
+    assert all(p["category"] == gen.pick_category(p["amount_cents"]) for p in transfers)
 
 
 def test_no_transfer_before_account_is_known():
@@ -221,3 +222,10 @@ def test_deliberate_typo_never_pauses_the_session():
     token = c.token
     assert c.login(1.0, password="faux") == 401
     assert c.token == token and c.ready(1.0) and c.login_failures == 0
+
+
+def test_transfers_carry_varied_valid_categories_without_changing_the_rng_stream():
+    counts = Counter(gen.pick_category(a) for a in range(1, 501))
+    assert set(counts) == {name for name, _ in gen.CATEGORY_MIX}, "toutes les catégories servies"
+    assert abs(sum(w for _, w in gen.CATEGORY_MIX) - 1) < 1e-9
+    assert counts["food"] > counts["housing"], "pondération respectée"

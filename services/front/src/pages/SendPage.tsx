@@ -3,16 +3,18 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { ApiError } from '../api/errors'
 import { Icon } from '../components/icons'
+import { CategoryPicker } from '../components/CategoryPicker'
 import { AccountCard, Alert, Avatar, Card, EmptyState, ErrorState, H2, LoadingState } from '../components/ui'
 import { useBackOverride, useShell } from '../hooks/shell-context'
 import { useBankData } from '../hooks/useBankData'
 import { useTxViews } from '../hooks/useTxViews'
 import { accountBadge, accountName, last4, recipients, type Recipient } from '../lib/bank'
+import { categoryLabel } from '../lib/categories'
 import { copyText } from '../lib/clipboard'
 import { userMessage } from '../lib/errorMessages'
 import { formatMoney } from '../lib/format'
 import { parseAmount, validateTransfer } from '../lib/validation'
-import type { Account, Transaction } from '../types/api'
+import type { Account, Category, Transaction } from '../types/api'
 
 /** Pré-remplissage : destinataire (accueil, « Envoyer à ») et/ou compte à débiter. */
 export interface SendRouteState {
@@ -48,6 +50,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
   const [to, setTo] = useState<string | null>(prefill.to ?? null)
   const [amt, setAmt] = useState('50')
   const [label, setLabel] = useState('')
+  const [category, setCategory] = useState<Category>('transfer')
   const [q, setQ] = useState('')
   const [all, setAll] = useState(false)
   const [step, setStep] = useState<Step>('form')
@@ -110,7 +113,8 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
     if (!to) return
     setStep('sending')
     try {
-      const tx = await api.createTransaction({ from_account: src.id, to_account: to, amount })
+      // « Virement » = défaut serveur : inutile de l'envoyer (corps identique à avant #44).
+      const tx = await api.createTransaction({ from_account: src.id, to_account: to, amount, ...(category !== 'transfer' ? { category } : {}) })
       if (label.trim()) saveLabel(tx.id, label.trim())
       setOutcome(tx.status === 'rejected' ? { kind: 'refused', error: null } : { kind: 'success', tx })
     } catch (e) {
@@ -134,6 +138,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
     setTo(null)
     setAmt('50')
     setLabel('')
+    setCategory('transfer')
     setOutcome(null)
     goStep(1)
   }
@@ -143,6 +148,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
   const recapRows: [string, string][] = [
     ['Depuis', `${accountName(src.id)} •••• ${last4(src.iban, src.id)}`],
     ['Vers', toRec ? `${toRec.name}${toRec.own ? ' (vous)' : ''}` : '—'],
+    ['Catégorie', categoryLabel(category)],
     ['Libellé', label.trim() || '—'],
     ['Exécution', 'Immédiate'],
   ]
@@ -237,6 +243,12 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
       <input value={label} onChange={(e) => setLabel(e.target.value.slice(0, 140))} placeholder="Ex. Remboursement dîner" className="field" />
     </label>
   )
+  const categoryField = (
+    <div className="flex flex-col gap-2">
+      <span className="text-sm font-semibold">Catégorie</span>
+      <CategoryPicker label="Catégorie du virement" value={category} onChange={(c) => setCategory(c ?? 'transfer')} wrap={isDesktop} />
+    </div>
+  )
 
   // ── Desktop : formulaire en une page puis récapitulatif ──
   if (isDesktop) {
@@ -330,6 +342,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
         </Card>
 
         <Card aria-label="Détails du virement" className="gap-3.5 p-5">
+          {categoryField}
           {labelField}
         </Card>
 
@@ -444,7 +457,8 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
       {ms === 3 && (
         <div className={`flex flex-col gap-4 ${anim}`}>
           {toChip}
-          <section aria-label="Libellé" className="flex flex-col gap-3.5 rounded-3xl bg-white p-[18px] shadow-card">
+          <section aria-label="Détails" className="flex flex-col gap-3.5 rounded-3xl bg-white p-[18px] shadow-card">
+            {categoryField}
             {labelField}
           </section>
           {errBox}

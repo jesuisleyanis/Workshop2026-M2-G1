@@ -6,6 +6,7 @@ import { copyText } from '../lib/clipboard'
 import { useBankData } from '../hooks/useBankData'
 import { useTxViews } from '../hooks/useTxViews'
 import { accountName, signed } from '../lib/bank'
+import { categoryLabel } from '../lib/categories'
 import { formatMoney, formatTime } from '../lib/format'
 
 export function TxDetailPage() {
@@ -31,6 +32,7 @@ export function TxDetailPage() {
     ['Date et heure', when],
     ['Compte débité', accountName(tx.fromAccount)],
     ['Compte crédité', accountName(tx.toAccount)],
+    ...(tx.category ? [['Catégorie', categoryLabel(tx.category)] as [string, string]] : []),
     ['Libellé', v.title],
   ]
   const amount = direction === 'internal' ? formatMoney(tx.amount, tx.currency) : signed(v.delta, tx.currency)
