@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -21,6 +21,7 @@ from sqlalchemy import Engine, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from payment_api import beneficiaries
 from payment_api.config import SERVICE_NAME, Settings
 from payment_api.ledger import Rejection, transfer
 from payment_api.observability import (
@@ -31,7 +32,14 @@ from payment_api.observability import (
     log_event,
     request_id_var,
 )
-from payment_api.schemas import AccountOut, ServiceStatusOut, TransactionIn, TransactionOut
+from payment_api.schemas import (
+    AccountOut,
+    BeneficiaryIn,
+    BeneficiaryOut,
+    ServiceStatusOut,
+    TransactionIn,
+    TransactionOut,
+)
 from payment_api.security import missing_token, username_from_token
 from payment_api.status import StatusCache
 
@@ -46,6 +54,11 @@ def _migrate_with_retry(engine: Engine, log: logging.Logger, attempts: int = 5) 
                 raise
             log.warning("DB not ready for migrations (attempt %d/%d)", attempt, attempts)
             time.sleep(2)
+
+
+# Identifiant en chemin borné à l'INTEGER Postgres : au-delà, la BDD lèverait une DataError,
+# traduite en 503 db_unavailable + db_errors_total, soit un faux signal d'incident pour le ML.
+DbId = Path(ge=1, le=2**31 - 1)
 
 
 def _db_reachable(session) -> bool:
@@ -217,5 +230,31 @@ def create_app(
             .order_by(Transaction.id.desc())
             .limit(limit)
         ).all()
+
+    # ---------------------------------------------------------------- bénéficiaires (#43)
+    @app.get("/api/v1/beneficiaries", response_model=list[BeneficiaryOut])
+    def list_beneficiaries(user: User = Depends(current_user), session=Depends(get_session)):
+        return beneficiaries.list_for(session, user)
+
+    @app.post("/api/v1/beneficiaries", response_model=BeneficiaryOut, status_code=201)
+    def add_beneficiary(
+        body: BeneficiaryIn, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        try:
+            return beneficiaries.add(session, user, body.display_name, body.iban_fake)
+        except Rejection as rej:
+            raise ApiError(rej.status, rej.code, rej.message)
+
+    @app.delete("/api/v1/beneficiaries/{beneficiary_id}", status_code=204)
+    def delete_beneficiary(
+        beneficiary_id: int = DbId,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        try:
+            beneficiaries.remove(session, user, beneficiary_id)
+        except Rejection as rej:
+            raise ApiError(rej.status, rej.code, rej.message)
+        return Response(status_code=204)
 
     return app
