@@ -15,14 +15,14 @@ Le front est un **site statique** (build Vite) servi par nginx **derrière le WA
 | F1 | Page de connexion appelant `POST /api/v1/login`, stockage du JWT | `LoginPage`, `AuthProvider`, `api/tokenStore.ts` (sessionStorage) |
 | F2 | Accueil : « Bonjour », carrousel de comptes, solde total, « Envoyer à », dépenses du mois, opérations récentes | `HomePage` |
 | F3 | Envoi `POST /api/v1/transactions` : desktop = formulaire une page + récapitulatif ; mobile = assistant 4 étapes + « glisser pour envoyer » ; écrans de résultat (envoyé / refusé solde / refusé / erreur 5xx + réessai / statut inconnu sur timeout-réseau, sans réessai pour éviter un double débit) | `SendPage`, `lib/validation.ts` |
-| F4 | Historique groupé par jour, recherche, filtres statut/sens (feuille sur mobile), export CSV, détail d'opération + référence `request_id` | `HistoryPage`, `TxDetailPage`, `lib/bank.ts` |
+| F4 | Historique groupé par jour, recherche, filtres statut/sens (feuille sur mobile), export CSV, détail d'opération + référence `request_id` copiable ; opération hors des 50 dernières (lien direct) chargée par `GET /api/v1/transactions/{id}` (#45, 404 = « introuvable »), comptes affichés avec **IBAN masqué** (`maskIban`) | `HistoryPage`, `TxDetailPage`, `lib/bank.ts`, `lib/format.ts` |
 | F5 | Auth Bearer sur toutes les routes métier | `api/client.ts` |
 | F6 | Gestion des erreurs (corps `{error:{code,message,request_id}}`, 401, 409 `insufficient_funds`, 429, réseau, timeout) | `api/errors.ts`, `components/ui.tsx` (`ErrorState`), `lib/errorMessages.ts` |
 | F7 | États de chargement (squelettes), vides et de réessai sur chaque écran | `components/ui.tsx`, `hooks/useResource.ts`, `BankDataProvider` |
 | F8 | Déconnexion sur 401 et à l'expiration du JWT (15 min), compte à rebours de session, déconnexion confirmée | `AuthProvider` + `setUnauthorizedHandler`, `Layout`, `ProfilePage` |
 | F9 | Base d'API configurable (`VITE_API_BASE`) | `config.ts` |
 | F10 | Image durcie : non-root, healthcheck, statique | `Dockerfile`, `docker/` |
-| F11 | RIB par compte : IBAN fictif, copier / partager / imprimer | `RibPage` |
+| F11 | RIB par compte (#45) : titulaire, IBAN et BIC fictifs, copier / partager (Web Share API, repli copie) / imprimer (CSS `@media print`, compatible CSP) | `RibPage` |
 | F12 | Libellé de virement (absent de l'API) conservé localement | `lib/labels.ts` (localStorage, par id de transaction) |
 | F13 | Shell responsive : barre latérale ≥ 1024 px, barre d'onglets en dessous | `Layout`, `hooks/useMediaQuery.ts` |
 | F14 | Statistiques : dépenses par jour (semaine/mois, navigation), opérations de la période | `StatsPage`, `lib/bank.ts` |

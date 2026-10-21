@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { amountToInput, formatDate, formatIban, formatMoney, shortIban } from './format'
+import { amountToInput, formatDate, formatIban, formatMoney, maskIban, shortIban } from './format'
 
 describe('format', () => {
   it('formate les montants en EUR fr-FR', () => {
@@ -16,5 +16,13 @@ describe('format', () => {
   })
   it('montant -> valeur de champ', () => {
     expect(amountToInput(1250.5)).toBe('1250,50')
+  })
+})
+
+describe('maskIban (#45)', () => {
+  it('garde pays + clé et le 4e groupe, masque le reste', () => {
+    expect(maskIban('FR76 0000 0000 0001 0000 0000 000')).toBe('FR76 •••• •••• 0001 •••• •••• •••')
+    expect(maskIban('FR7612345678901234567890')).toBe('FR76 •••• •••• 9012 •••• ••••')
+    expect(maskIban('FR76 A1')).toBe('FR76 A1')
   })
 })

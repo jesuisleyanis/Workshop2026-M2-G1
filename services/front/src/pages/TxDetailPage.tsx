@@ -1,25 +1,57 @@
+import { useCallback } from 'react'
 import { useParams } from 'react-router-dom'
+import { api } from '../api'
+import { ApiError } from '../api/errors'
 import { Icon } from '../components/icons'
 import { EmptyState, ErrorState, LoadingState } from '../components/ui'
 import { useShell } from '../hooks/shell-context'
 import { copyText } from '../lib/clipboard'
 import { useBankData } from '../hooks/useBankData'
+import { useResource } from '../hooks/useResource'
 import { useTxViews } from '../hooks/useTxViews'
-import { accountName, signed } from '../lib/bank'
+import { accountName, signed, txView, type TxView } from '../lib/bank'
 import { categoryLabel } from '../lib/categories'
-import { formatMoney, formatTime } from '../lib/format'
+import { formatMoney, formatTime, maskIban } from '../lib/format'
+import type { Account, Beneficiary } from '../types/api'
+
+const NOT_FOUND = <EmptyState title="Opération introuvable" text="Cette opération n’existe plus ou n’est pas accessible." icon="history" />
+
+/** « Compte n°1 · FR76 •••• •••• 0001 … » : mes comptes et mes bénéficiaires ont un IBAN connu. */
+function accountLine(id: string, accounts: Account[], beneficiaries: Beneficiary[]): string {
+  const own = accounts.find((a) => a.id === id)
+  if (own?.iban) return `${accountName(id)} · ${maskIban(own.iban)}`
+  const b = beneficiaries.find((x) => x.accountId === id)
+  return b ? `${b.name} · ${maskIban(b.iban)}` : accountName(id)
+}
 
 export function TxDetailPage() {
-  const { id } = useParams()
+  const { id = '' } = useParams()
   const { transactions } = useBankData()
   const { views } = useTxViews()
-  const { toast } = useShell()
 
   if (transactions.error && !views) return <ErrorState error={transactions.error} onRetry={transactions.reload} />
   if (!views) return <LoadingState label="Chargement de l’opération…" />
   const v = views.find((x) => x.tx.id === id)
-  if (!v) return <EmptyState title="Opération introuvable" text="Cette opération n’existe plus ou n’est pas accessible." icon="history" />
+  // Hors des 50 dernières (lien direct, opération ancienne) : GET /api/v1/transactions/{id} (#45).
+  return v ? <TxDetail view={v} /> : <FetchedTxDetail id={id} />
+}
 
+function FetchedTxDetail({ id }: { id: string }) {
+  const { labels } = useBankData()
+  const { mine } = useTxViews()
+  const tx = useResource(useCallback((signal: AbortSignal) => api.getTransaction(id, signal), [id]))
+  if (tx.error && !tx.data) {
+    if (tx.error instanceof ApiError && (tx.error.status === 404 || tx.error.status === 422)) return NOT_FOUND
+    return <ErrorState error={tx.error} onRetry={tx.reload} />
+  }
+  if (!tx.data) return <LoadingState label="Chargement de l’opération…" />
+  return <TxDetail view={txView(tx.data, mine, labels[tx.data.id])} />
+}
+
+function TxDetail({ view: v }: { view: TxView }) {
+  const { accounts, beneficiaries } = useBankData()
+  const { toast } = useShell()
+  const line = (accId: string) => accountLine(accId, accounts.data ?? [], beneficiaries.data ?? [])
   const { tx, rejected, direction } = v
   const date = tx.createdAt ? new Date(tx.createdAt) : null
   const when =
@@ -30,8 +62,8 @@ export function TxDetailPage() {
   const rows: [string, string][] = [
     ['Sens', direction === 'internal' ? 'Virement interne' : direction === 'out' ? 'Débit (sortant)' : 'Crédit (entrant)'],
     ['Date et heure', when],
-    ['Compte débité', accountName(tx.fromAccount)],
-    ['Compte crédité', accountName(tx.toAccount)],
+    ['Compte débité', line(tx.fromAccount)],
+    ['Compte crédité', line(tx.toAccount)],
     ...(tx.category ? [['Catégorie', categoryLabel(tx.category)] as [string, string]] : []),
     ['Libellé', v.title],
   ]

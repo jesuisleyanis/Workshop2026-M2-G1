@@ -597,3 +597,33 @@ describe('Front - catégories (#44)', () => {
     expect(screen.queryByTestId('top-category')).not.toBeInTheDocument()
   })
 })
+
+describe('Front - détail d’opération (#45)', () => {
+  it('lien direct vers une opération absente de la liste : GET /api/v1/transactions/{id}, comptes masqués', async () => {
+    loginAsStored()
+    const old = { id: 500, src_account: 1, dst_account: 42, amount_cents: 1234, status: 'created', created_at: '2026-09-02T10:00:00Z', request_id: 'req-old', category: 'health' }
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse([{ id: 1, iban_fake: 'FR76 0000 0000 0001 0000 0000 000', balance_cents: 1000, currency: 'EUR' }]),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/beneficiaries': () => jsonResponse([{ id: 5, display_name: 'Léa Martin', account_id: 42, iban_fake: 'FR76 9999 0000 0001 0000 0000 000', created_at: null }]),
+      'GET /api/v1/transactions/500': () => jsonResponse(old),
+    })
+    renderApp('/operations/500')
+    expect(await screen.findByTestId('tx-amount')).toHaveTextContent(/12,34/)
+    expect(screen.getByText('Compte n°1 · FR76 •••• •••• 0001 •••• •••• •••')).toBeInTheDocument()
+    expect(screen.getByText('Léa Martin · FR76 •••• •••• 0001 •••• •••• •••')).toBeInTheDocument()
+    expect(screen.getByText('Santé')).toBeInTheDocument()
+    expect(screen.getByText('req-old')).toBeInTheDocument()
+  })
+
+  it('opération d’un tiers ou inconnue (404) : « Opération introuvable », sans fuite', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/transactions/77': () => jsonResponse({ error: { code: 'transaction_not_found', message: 'x' } }, 404),
+    })
+    renderApp('/operations/77')
+    expect(await screen.findByText('Opération introuvable')).toBeInTheDocument()
+  })
+})
