@@ -7,6 +7,8 @@ Python du dépôt est bien couvert, qu'un process pytest est lancé par composan
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from pathlib import Path
 
@@ -49,8 +51,12 @@ def test_one_pytest_process_per_component_and_failures_propagate() -> None:
 
 def test_every_vitest_app_is_covered_by_test_front() -> None:
     recipe = _recipe("test-front")
-    for pkg in ROOT.glob("*/**/package.json"):
-        rel = pkg.parent.relative_to(ROOT).as_posix()
-        if "node_modules" in rel or '"vitest' not in pkg.read_text(encoding="utf-8"):
+    for top, dirs, files in os.walk(ROOT):
+        dirs[:] = [d for d in dirs if d not in {"node_modules", ".git", "dist"}]
+        if "package.json" not in files or Path(top) == ROOT:
             continue
+        scripts = json.loads((Path(top) / "package.json").read_text(encoding="utf-8")).get("scripts", {})
+        if "vitest" not in scripts.get("test", ""):
+            continue
+        rel = Path(top).relative_to(ROOT).as_posix()
         assert re.search(rf"for app in [^;]*\b{re.escape(rel)}\b", recipe), f"{rel} non couvert par make test-front"
