@@ -32,7 +32,7 @@ export function TxDetailPage() {
     ['Date et heure', when],
     ['Compte débité', accountName(tx.fromAccount)],
     ['Compte crédité', accountName(tx.toAccount)],
-    ['Catégorie', categoryLabel(tx.category)],
+    ...(tx.category ? [['Catégorie', categoryLabel(tx.category)] as [string, string]] : []),
     ['Libellé', v.title],
   ]
   const amount = direction === 'internal' ? formatMoney(tx.amount, tx.currency) : signed(v.delta, tx.currency)

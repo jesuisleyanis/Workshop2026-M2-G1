@@ -43,7 +43,8 @@ export interface Transaction {
   amount: number
   currency: string
   status: TransactionStatus
-  category: Category
+  /** Choisie par l'émetteur ; null pour un virement reçu (payment-api la masque). */
+  category: Category | null
   label: string | null
   createdAt: string
   /** `request_id` de la requête de création (référence affichée au client, corrélée aux logs). */
@@ -60,9 +61,11 @@ export interface TransferRequest {
   category?: Category
 }
 
-/** GET /api/v1/stats/spending?period=week|month (#44) : dépenses de la période en cours (UTC), en euros. */
+/** GET /api/v1/stats/spending?period=week|month&offset=-n (#44) : dépenses d'une période (UTC), en euros. */
 export interface Spending {
   period: 'week' | 'month'
+  /** 0 = période en cours, -1 = précédente… */
+  offset: number
   /** YYYY-MM-DD ; `end` exclusif. */
   start: string
   end: string

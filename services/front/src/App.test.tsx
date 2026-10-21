@@ -557,13 +557,14 @@ describe('Front - catégories (#44)', () => {
     expect(screen.getByText('2 opérations')).toBeInTheDocument()
   })
 
-  it('statistiques : parts par catégorie de la période en cours, puis état vide', async () => {
+  it('statistiques : parts par catégorie de la période affichée, puis état vide', async () => {
     loginAsStored()
     const f = stubFetch({
       'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
       'GET /api/v1/transactions': () => jsonResponse(TXS),
-      'GET /api/v1/stats/spending?period=week': () => jsonResponse(EMPTY),
-      'GET /api/v1/stats/spending?period=month': () => jsonResponse(SPENDING),
+      'GET /api/v1/stats/spending?period=week&offset=0': () => jsonResponse(EMPTY),
+      'GET /api/v1/stats/spending?period=month&offset=0': () => jsonResponse(SPENDING),
+      'GET /api/v1/stats/spending?period=month&offset=-1': () => jsonResponse({ ...EMPTY, period: 'month', offset: -1 }),
     })
     renderApp('/stats')
     expect(await screen.findByText('Aucune dépense cette semaine.')).toBeInTheDocument()
@@ -572,9 +573,10 @@ describe('Front - catégories (#44)', () => {
     const rows = within(list).getAllByRole('listitem')
     expect(rows[0]).toHaveTextContent(/Alimentation.*73,00\s€.*73 %/)
     expect(rows[1]).toHaveTextContent(/Transport.*27 %/)
+    // Période précédente : la répartition suit la période affichée (offset=-1), pas le mois en cours.
     await userEvent.click(screen.getByRole('button', { name: 'Période précédente' }))
-    expect(screen.getByText('Répartition de la période en cours (ce mois-ci).')).toBeInTheDocument()
-    expect(f.mock.calls.some(([u]) => String(u).includes('period=month'))).toBe(true)
+    expect(await screen.findByText('Aucune dépense sur cette période.')).toBeInTheDocument()
+    expect(f.mock.calls.some(([u]) => String(u).endsWith('period=month&offset=-1'))).toBe(true)
   })
 
   it('accueil : tuile Dépenses avec la 1re catégorie du mois ; rien si erreur', async () => {
@@ -582,10 +584,12 @@ describe('Front - catégories (#44)', () => {
     stubFetch({
       'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
       'GET /api/v1/transactions': () => jsonResponse([]),
-      'GET /api/v1/stats/spending?period=month': () => jsonResponse(SPENDING),
+      'GET /api/v1/stats/spending?period=month&offset=0': () => jsonResponse(SPENDING),
     })
     const { unmount } = renderApp('/')
     expect(await screen.findByTestId('top-category')).toHaveTextContent('Alimentation 73 %')
+    // Total et part sur la même base (serveur), même si l'historique local ne montre rien.
+    expect(screen.getByText(/dépensés en/).previousElementSibling).toHaveTextContent(/100,00\s€/)
     unmount()
     stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
     renderApp('/')

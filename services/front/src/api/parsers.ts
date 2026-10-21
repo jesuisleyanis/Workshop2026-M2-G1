@@ -79,8 +79,14 @@ function parseStatus(v: unknown): TransactionStatus {
   return v === 'rejected' ? 'rejected' : 'created'
 }
 
+/** Absente (serveur antérieur à #44) : « Virement » ; inconnue (serveur plus récent) : « Autre ». */
 function parseCategory(v: unknown): Category {
-  return isCategory(v) ? v : 'transfer'
+  if (v === undefined) return 'transfer'
+  return isCategory(v) ? v : 'other'
+}
+
+function parseTxCategory(v: unknown): Category | null {
+  return v === null ? null : parseCategory(v)
 }
 
 export function parseTransaction(v: unknown): Transaction {
@@ -96,7 +102,7 @@ export function parseTransaction(v: unknown): Transaction {
     currency: optStr(o, 'currency') ?? 'EUR',
     status: parseStatus(o.status),
     // Un serveur antérieur à #44 n'envoie pas de catégorie : même défaut que payment-api.
-    category: parseCategory(o.category),
+    category: parseTxCategory(o.category),
     label: optStr(o, 'label'),
     createdAt: optStr(o, 'created_at') ?? '',
     requestId: optStr(o, 'request_id'),
@@ -132,6 +138,7 @@ export function parseSpending(v: unknown): Spending {
   const period = o.period === 'month' ? 'month' : 'week'
   return {
     period,
+    offset: typeof o.offset === 'number' ? o.offset : 0,
     start: str(o, 'start', 'dépenses'),
     end: str(o, 'end', 'dépenses'),
     total: num(o, 'total_cents', 'dépenses') / 100,

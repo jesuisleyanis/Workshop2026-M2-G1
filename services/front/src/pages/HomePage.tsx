@@ -99,7 +99,8 @@ export function HomePage() {
                   <Icon name="chart" size={28} />
                 </span>
                 <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="tnum text-[26px] font-bold tracking-[-0.02em]">{formatMoney(month.total)}</span>
+                  {/* Total serveur quand il est connu : même base que la part affichée dessous. */}
+                  <span className="tnum text-[26px] font-bold tracking-[-0.02em]">{formatMoney(spending.data?.total ?? month.total)}</span>
                   <span className="text-[13px] text-[#efeaff]">dépensés en {month.label.toLowerCase()}</span>
                   {topCategory && (
                     <span data-testid="top-category" className="text-[13px] font-semibold text-white">

@@ -102,7 +102,7 @@ export function StatsPage() {
         </div>
       </Card>
 
-      <CategoriesCard mode={mode} past={offset < 0} />
+      <CategoriesCard mode={mode} offset={offset} />
 
       <Card aria-labelledby="h-pop" className="gap-1 px-3 pt-[18px] pb-2.5">
         <H2 id="h-pop" className="px-2 pb-2">
@@ -118,10 +118,10 @@ export function StatsPage() {
   )
 }
 
-/** D8 : répartition par catégorie, calculée par payment-api pour la période en cours (pas de calcul local inventé). */
-function CategoriesCard({ mode, past }: { mode: StatsMode; past: boolean }) {
-  const spending = useSpending(mode)
-  const current = mode === 'week' ? 'cette semaine' : 'ce mois-ci'
+/** D8 : répartition par catégorie de la période affichée, calculée par payment-api (pas de calcul local inventé). */
+function CategoriesCard({ mode, offset }: { mode: StatsMode; offset: number }) {
+  const spending = useSpending(mode, offset)
+  const current = offset < 0 ? 'sur cette période' : mode === 'week' ? 'cette semaine' : 'ce mois-ci'
   let body
   if (spending.error && !spending.data) {
     body = (
@@ -170,7 +170,6 @@ function CategoriesCard({ mode, past }: { mode: StatsMode; past: boolean }) {
         <H2 id="h-cat">Catégories</H2>
         {spending.data && spending.data.total > 0 && <span className="tnum text-sm font-semibold text-ink-2">{formatMoney(spending.data.total)}</span>}
       </div>
-      {past && <p className="m-0 px-2 text-[13px] text-ink-3">Répartition de la période en cours ({current}).</p>}
       {body}
     </Card>
   )

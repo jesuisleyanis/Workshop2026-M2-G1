@@ -24,7 +24,8 @@ const DIRS = [
 ] as const
 
 function matches(v: TxView, q: string, st: St, dir: Dir, cat: Category | null): boolean {
-  if (cat && v.tx.category !== cat) return false
+  // La catégorie qualifie une dépense : un virement reçu n'en a pas (masquée par l'API).
+  if (cat && (v.direction !== 'out' || v.tx.category !== cat)) return false
   if (st === 'ok' && v.rejected) return false
   if (st === 'rej' && !v.rejected) return false
   if (dir === 'debit' && v.delta >= 0) return false

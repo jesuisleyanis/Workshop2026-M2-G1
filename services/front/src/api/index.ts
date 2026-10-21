@@ -41,8 +41,8 @@ export function createEndpoints(client: ApiClient) {
           },
         }),
       ),
-    getSpending: async (period: 'week' | 'month', signal?: AbortSignal): Promise<Spending> =>
-      parseSpending(await client.request(`/api/v1/stats/spending?period=${period}`, { signal })),
+    getSpending: async (period: 'week' | 'month', offset = 0, signal?: AbortSignal): Promise<Spending> =>
+      parseSpending(await client.request(`/api/v1/stats/spending?period=${period}&offset=${Math.min(0, Math.trunc(offset))}`, { signal })),
   }
 }
 
