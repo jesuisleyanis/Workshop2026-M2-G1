@@ -19,7 +19,7 @@ PROFILES_DEMO := --profile demo --profile ml
 PROFILES_FULL := $(PROFILES_DEMO) --profile full
 PROFILES_ALL  := $(PROFILES_FULL) --profile iot --profile attack --profile ai
 
-.PHONY: help up up-full up-iot build start start-full ps down reset-grafana check-env seed verify demo attack stop-attack reset \
+.PHONY: help up up-full up-iot build start start-full ui ps down reset-grafana check-env seed verify demo attack stop-attack reset \
         test test-py test-front audit package decrypt model retrain-detector bench \
         traffic train capture-baseline capture-attack capture-remote calibrate ml-tools test-ml
 
@@ -87,6 +87,12 @@ start: check-env ## Relance la stack démo SANS rebuild (images déjà construit
 
 start-full: check-env ## Relance la stack complète SANS rebuild
 	$(COMPOSE) $(PROFILES_FULL) up -d
+
+# Supervision locale : dashboard publié sur le loopback du PC hôte uniquement (surcouche Compose).
+UI_COMPOSE = $(COMPOSE) -f infra/compose/docker-compose.ui-local.yml
+ui: check-env ## Ouvre le dashboard sur http://127.0.0.1:8081 (PC hôte seulement, jamais sur le hotspot)
+	$(UI_COMPOSE) $(PROFILES_FULL) up -d dashboard
+	@echo "Dashboard : http://127.0.0.1:8081"
 
 ps: ## État des conteneurs (tous profils)
 	$(COMPOSE) $(PROFILES_ALL) ps

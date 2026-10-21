@@ -180,3 +180,13 @@ def test_dependencies_with_a_healthcheck_are_awaited_healthy() -> None:
             assert deps[dep].get("condition") == "service_healthy", (
                 f"{name} -> {dep} : service_healthy attendu"
             )
+
+
+def test_local_ui_overlay_publishes_only_on_loopback():
+    # make ui : le dashboard (vue d'ensemble du SI) n'est publié que sur 127.0.0.1, jamais sur le hotspot.
+    overlay = yaml.safe_load(
+        (ROOT / "infra" / "compose" / "docker-compose.ui-local.yml").read_text(encoding="utf-8")
+    )["services"]
+    assert set(overlay) == {"dashboard"}
+    for port in overlay["dashboard"]["ports"]:
+        assert str(port).startswith("127.0.0.1:"), port

@@ -71,6 +71,9 @@ COMPOSE="docker compose -f infra/compose/docker-compose.yml --env-file .env"
 `make up*` déchiffre d'abord les secrets (`make decrypt`) et échoue clairement si `.env` est absent.
 Les services démarrent dans l'ordre de santé : postgres *healthy* → payment-api/auth *healthy* → WAF, etc.
 
+**Dashboard de supervision** : `make ui` puis http://127.0.0.1:8081 (publié sur le loopback du PC hôte
+uniquement, jamais sur le hotspot ; un `make up*` ultérieur le dépublie, relancer `make ui`).
+
 Accès : front via le WAF sur `https://localhost` (certificat auto-signé). Seul le WAF publie des ports HTTP ;
 dashboard, Grafana et API internes ne sont pas publiés (voir [`dashboard/README.md`](../dashboard/README.md) pour une
 publication `127.0.0.1` en dev).
