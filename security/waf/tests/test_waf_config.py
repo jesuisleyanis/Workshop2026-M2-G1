@@ -146,3 +146,15 @@ def test_waf_exporter_image_is_non_root_and_bundles_shared_lib():
     assert re.search(r"^USER 10006:10006", EXPORTER_DOCKERFILE, re.M)
     assert "libs/python/resilience_common" in EXPORTER_DOCKERFILE
     assert 'CMD ["python", "/app/waf_exporter.py"]' in EXPORTER_DOCKERFILE
+
+
+def test_api_routes_are_rate_limited_by_the_waf():
+    # Protection préventive de la disponibilité, indépendante de l'IP (masquée sous Docker Desktop).
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone \$binary_remote_addr zone=api:\d+m rate=\d+r/s;", conf)
+    assert "limit_req_status 429;" in conf
+    for route in ("/api/v1/accounts", "/api/v1/transactions", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"):
+        line = next(ln for ln in NGINX.splitlines() if f"location {route}" in ln)
+        assert "limit_req zone=api" in line, route
+    # /healthz (sonde du WAF) n'est jamais limitée
+    assert "limit_req" not in next(ln for ln in NGINX.splitlines() if "location = /healthz" in ln)
