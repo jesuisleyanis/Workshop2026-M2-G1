@@ -145,6 +145,12 @@ au-dessus du normal), soit par le **garde-fou** (z ≥ 15 ; cas de `db_errors_pe
 normal donc invisibles pour une IsolationForest). Code `1` : un passage n'est détecté par aucun des deux, ou un
 faux positif apparaît au normal. Détails : [`ml/training/README.md` §6](../ml/training/README.md).
 
+**Seuil de détection** : imposé à **0,65** par le compose (`ANOMALY_THRESHOLD`, décision équipe du 21/10), plus
+bas que le seuil calibré (0,708 sur le poste de dev) pour capter les attaques à faible débit du PC attaquant —
+~2 fausses alertes/h mesurées sur la baseline de dev. Autre valeur : `ANOMALY_THRESHOLD=0.7 make up` ; seuil
+calibré : `ANOMALY_THRESHOLD= make up`. Après la calibration sur le PC hôte, revoir ce choix au vu du rapport
+(`ml/training/data/calibration.report.json` : niveau tenu du normal, des attaques).
+
 Les CSV versionnés au 21/10 viennent du poste de développement (fenêtres 5 s, pas 1 s) : **provisoires**, à
 remplacer par une capture sur le PC hôte.
 

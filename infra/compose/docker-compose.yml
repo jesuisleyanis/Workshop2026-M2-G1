@@ -231,6 +231,10 @@ services:
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
       # Attente longue sur le collector : chaque collecte est scorée dès qu'elle existe.
       FEATURES_WAIT_SECONDS: "5"
+      # Seuil imposé (décision équipe 21/10) au lieu du seuil calibré (0,708 sur le poste de dev) :
+      # plus sensible aux attaques à faible débit du PC attaquant, au prix de rares faux positifs
+      # (~2/h mesurés sur la baseline de dev). Vide = seuil de la calibration : ANOMALY_THRESHOLD= make up
+      ANOMALY_THRESHOLD: ${ANOMALY_THRESHOLD-0.65}
       POLL_INTERVAL_SECONDS: "1"
     depends_on:
       collector: { condition: service_started }
