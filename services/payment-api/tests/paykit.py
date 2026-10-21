@@ -14,7 +14,14 @@ def sample(name: str, **labels) -> float:
 
 def make_token(sub="alice", secret=JWT_SECRET, ttl=timedelta(minutes=15), **overrides) -> str:
     now = datetime.now(UTC)
-    claims = {"sub": sub, "iat": now, "exp": now + ttl, **overrides}
+    # Comme un login réel : `auth_time` = maintenant (#51, step-up des gros virements).
+    claims = {
+        "sub": sub,
+        "iat": now,
+        "exp": now + ttl,
+        "auth_time": int(now.timestamp()),
+        **overrides,
+    }
     claims = {k: v for k, v in claims.items() if v is not None}
     return jwt.encode(claims, secret, algorithm="HS256")
 
