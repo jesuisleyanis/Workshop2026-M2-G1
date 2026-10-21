@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { ProtectedRoute } from './components/ProtectedRoute'
+import { BeneficiariesPage } from './pages/BeneficiariesPage'
 import { HistoryPage } from './pages/HistoryPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
@@ -22,6 +23,7 @@ export function App() {
           <Route path="history" element={<HistoryPage />} />
           <Route path="operations/:id" element={<TxDetailPage />} />
           <Route path="rib" element={<RibPage />} />
+          <Route path="beneficiaries" element={<BeneficiariesPage />} />
           <Route path="profile" element={<ProfilePage />} />
           {/* Anciennes routes (liens existants, scripts de démo). */}
           <Route path="transfer" element={<Navigate to="/send" replace />} />

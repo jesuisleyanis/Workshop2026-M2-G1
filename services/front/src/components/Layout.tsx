@@ -28,12 +28,16 @@ const TABS: Screen[] = [
 ]
 
 /** Services (barre latérale desktop, menu Profil sur mobile). Les autres arrivent avec leurs tickets backend. */
-export const SERVICES: Screen[] = [{ path: '/rib', label: 'RIB', icon: 'bank', title: 'Relevé d’identité bancaire' }]
+export const SERVICES: Screen[] = [
+  { path: '/beneficiaries', label: 'Bénéficiaires', icon: 'user', title: 'Bénéficiaires' },
+  { path: '/rib', label: 'RIB', icon: 'bank', title: 'Relevé d’identité bancaire' },
+]
 
 /** Écrans hors onglets : titre + onglet parent (retour). */
 const SUBSCREENS: { prefix: string; title: string; parent: string }[] = [
   { prefix: '/operations/', title: 'Détail de l’opération', parent: '/history' },
   { prefix: '/rib', title: 'Relevé d’identité bancaire', parent: '/profile' },
+  { prefix: '/beneficiaries', title: 'Bénéficiaires', parent: '/profile' },
 ]
 
 export function Layout() {

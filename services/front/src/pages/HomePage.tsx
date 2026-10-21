@@ -4,12 +4,12 @@ import { AccountCard, Avatar, Card, EmptyState, ErrorState, H2, LoadingState, Tx
 import { useBankData } from '../hooks/useBankData'
 import { useShell } from '../hooks/shell-context'
 import { useTxViews } from '../hooks/useTxViews'
-import { accountBadge, recipients, spendingPeriod } from '../lib/bank'
+import { recipients, spendingPeriod } from '../lib/bank'
 import { formatMoney } from '../lib/format'
 import type { SendRouteState } from './SendPage'
 
 export function HomePage() {
-  const { accounts } = useBankData()
+  const { accounts, beneficiaries } = useBankData()
   const { views } = useTxViews()
   const { toast } = useShell()
   const navigate = useNavigate()
@@ -21,7 +21,7 @@ export function HomePage() {
   const list = accounts.data
   const total = list.reduce((s, a) => s + a.balance, 0)
   // Le compte débité par défaut (1er) n'est pas un destinataire possible.
-  const people = recipients(list, views ?? [], list[0]!.id).slice(0, 6)
+  const people = recipients(list, views ?? [], list[0]!.id, beneficiaries.data ?? []).slice(0, 6)
   const month = spendingPeriod(views ?? [], 'month', 0)
   const addAccount = () => toast('Ouverture de compte indisponible dans la démonstration')
   const sendTo = (to?: string) => navigate('/send', { state: { to } satisfies SendRouteState })
@@ -75,8 +75,8 @@ export function HomePage() {
               </button>
               {people.map((p, i) => (
                 <button key={p.id} type="button" aria-label={`Envoyer à ${p.name}`} onClick={() => sendTo(p.id)} className="flex w-[60px] flex-none flex-col items-center gap-1.5 border-0 bg-transparent p-0">
-                  <Avatar text={accountBadge(p.id)} index={i} />
-                  <span className="max-w-[60px] truncate text-xs text-ink-2">n°{p.id}</span>
+                  <Avatar text={p.badge} index={i} />
+                  <span className="max-w-[60px] truncate text-xs text-ink-2">{p.short}</span>
                 </button>
               ))}
             </div>

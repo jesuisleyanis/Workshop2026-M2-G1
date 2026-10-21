@@ -1,5 +1,5 @@
 import { ApiError } from './errors'
-import type { Account, LoginResponse, ServiceHealth, Transaction, TransactionStatus } from '../types/api'
+import type { Account, Beneficiary, LoginResponse, ServiceHealth, Transaction, TransactionStatus } from '../types/api'
 
 type Obj = Record<string, unknown>
 
@@ -103,4 +103,19 @@ export function parseTransactions(v: unknown): Transaction[] {
 export function parseServiceHealth(v: unknown): ServiceHealth {
   const o = asObj(v, 'état du service')
   return { status: o.status === 'ok' ? 'ok' : 'degraded', checkedAt: str(o, 'checked_at', 'état du service') }
+}
+
+export function parseBeneficiary(v: unknown): Beneficiary {
+  const o = asObj(v, 'bénéficiaire')
+  return {
+    id: str(o, 'id', 'bénéficiaire'),
+    name: str(o, 'display_name', 'bénéficiaire'),
+    accountId: str(o, 'account_id', 'bénéficiaire'),
+    iban: str(o, 'iban_fake', 'bénéficiaire'),
+    createdAt: optStr(o, 'created_at'),
+  }
+}
+
+export function parseBeneficiaries(v: unknown): Beneficiary[] {
+  return list(v, 'beneficiaries', 'bénéficiaires').map(parseBeneficiary)
 }

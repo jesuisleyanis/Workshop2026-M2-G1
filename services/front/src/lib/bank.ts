@@ -1,5 +1,5 @@
 import { formatMoney } from './format'
-import type { Account, Transaction } from '../types/api'
+import type { Account, Beneficiary, Transaction } from '../types/api'
 
 /**
  * Vues métier dérivées de /accounts et /transactions (fonctions pures, testées dans bank.test.ts).
@@ -182,19 +182,28 @@ export interface Recipient {
   name: string
   mask: string
   own: boolean
+  /** Texte de l'avatar : initiales d'un bénéficiaire, sinon « #12 ». */
+  badge: string
+  /** Libellé court (rangée « Envoyer à ») : prénom du bénéficiaire, sinon « n°12 ». */
+  short: string
 }
 
-/** Destinataires connus : mes autres comptes puis les comptes externes déjà crédités (en attendant les bénéficiaires, #43). */
-export function recipients(accounts: Account[], views: TxView[], excludeId?: string): Recipient[] {
+/** Destinataires connus : mes autres comptes, mes bénéficiaires (#43), puis les comptes externes déjà crédités. */
+export function recipients(accounts: Account[], views: TxView[], excludeId?: string, beneficiaries: Beneficiary[] = []): Recipient[] {
   const out: Recipient[] = accounts
     .filter((a) => a.id !== excludeId)
-    .map((a) => ({ id: a.id, name: accountName(a.id), mask: `•••• ${last4(a.iban, a.id)} · vous`, own: true }))
+    .map((a) => ({ id: a.id, name: accountName(a.id), mask: `•••• ${last4(a.iban, a.id)} · vous`, own: true, badge: accountBadge(a.id), short: `n°${a.id}` }))
   const seen = new Set(accounts.map((a) => a.id))
+  for (const b of beneficiaries) {
+    if (seen.has(b.accountId)) continue
+    seen.add(b.accountId)
+    out.push({ id: b.accountId, name: b.name, mask: b.iban, own: false, badge: initials(b.name), short: b.name.split(' ')[0]! })
+  }
   for (const v of views) {
     const id = v.tx.toAccount
     if (v.direction !== 'out' || seen.has(id)) continue
     seen.add(id)
-    out.push({ id, name: accountName(id), mask: `Compte n°${id}`, own: false })
+    out.push({ id, name: accountName(id), mask: `Compte n°${id}`, own: false, badge: accountBadge(id), short: `n°${id}` })
   }
   return out
 }

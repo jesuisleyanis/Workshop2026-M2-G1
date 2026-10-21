@@ -10,12 +10,16 @@ import { avatarTone, initials } from '../lib/bank'
 
 export function ProfilePage() {
   const { username, expiresAt, logout } = useAuth()
-  const { accounts } = useBankData()
+  const { accounts, beneficiaries } = useBankData()
   const navigate = useNavigate()
   const left = useSecondsLeft(expiresAt)
   const [confirm, setConfirm] = useState(false)
   const name = username ?? 'Client'
-  const subs: Record<string, string> = { '/rib': `${accounts.data?.length ?? 0} compte${(accounts.data?.length ?? 0) > 1 ? 's' : ''}` }
+  const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? 's' : ''}`
+  const subs: Record<string, string> = {
+    '/rib': plural(accounts.data?.length ?? 0, 'compte'),
+    '/beneficiaries': plural(beneficiaries.data?.length ?? 0, 'bénéficiaire'),
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-[620px] flex-col gap-4">

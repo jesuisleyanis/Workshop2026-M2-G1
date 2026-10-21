@@ -63,6 +63,17 @@ describe('bank — vues client', () => {
     ])
   })
 
+  it('destinataires : les bénéficiaires passent avant l’historique, nommés et sans doublon', () => {
+    const views = [txView(tx('1', '1', '9', 1, ''), mine), txView(tx('2', '1', '42', 1, ''), mine)]
+    const lea = { id: '5', name: 'Léa Martin', accountId: '42', iban: 'FR76 9001', createdAt: null }
+    const out = recipients([acc('1'), acc('2')], views, '1', [lea])
+    expect(out.map((r) => [r.id, r.name, r.badge, r.short])).toEqual([
+      ['2', 'Compte n°2', '#2', 'n°2'],
+      ['42', 'Léa Martin', 'LM', 'Léa'],
+      ['9', 'Compte n°9', '#9', 'n°9'],
+    ])
+  })
+
   it('CSV : neutralise les formules et échappe les guillemets', () => {
     expect(csvCell('=SUM(A1)')).toBe(`"'=SUM(A1)"`)
     expect(csvCell('-2+3')).toBe(`"'-2+3"`)
