@@ -40,9 +40,21 @@ def test_api_upstreams_target_service_ports():
 def test_only_public_routes_are_proxied():
     locations = re.findall(r"location\s+(?:=\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
-                              "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
+                              "/api/v1/status", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
+
+
+def test_public_status_route_is_exact_rate_limited_and_read_only():
+    # #42 : route sans auth -> correspondance exacte (pas de préfixe ouvert sur payment-api),
+    # limite par IP, GET seulement.
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=status_per_ip:\d+m\s+rate=\d+r/s;", conf)
+    block = re.search(r"location = /api/v1/status\s*\{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block, "location exacte /api/v1/status absente"
+    body = block.group(1)
+    assert "limit_req zone=status_per_ip" in body and "proxy_pass http://payment_api;" in body
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", body)
 
 
 # --------------------------------------------------------------------------- #6 Dockerfile / non-root / TLS

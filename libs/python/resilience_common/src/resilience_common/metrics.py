@@ -121,7 +121,8 @@ mttr_seconds = Gauge(
 # prometheus-fastapi-instrumentator — voir instrument() ci-dessous.
 
 
-_EXCLUDED_PATHS = frozenset({"/metrics", "/health", "/ready"})
+# /api/v1/status : sonde publique du bandeau client (#42), même statut que /ready.
+_EXCLUDED_PATHS = frozenset({"/metrics", "/health", "/ready", "/api/v1/status"})
 
 
 def instrument(app, service: str) -> None:

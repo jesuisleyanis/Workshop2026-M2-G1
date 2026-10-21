@@ -10,6 +10,7 @@ Ce document définit les quatre interfaces transverses que le sujet impose de ma
 3. [Schéma d'événement d'anomalie](#3-schéma-dévénement-danomalie)
 4. [Table de décision incident → action](#4-table-de-décision-incident--action)
 5. [Consigne Additionnelle 1 — authentification renforcée du back-office](#5-consigne-additionnelle-1--authentification-renforcée-du-back-office)
+6. [API client `payment-api` (app bancaire, via le WAF)](#6-api-client-payment-api-app-bancaire-via-le-waf)
 
 Plus les conventions d'API REST et les codes de retour.
 
@@ -313,6 +314,23 @@ le contrat MQTT ; l'API HTTP est une commande directe de l'objet sur le réseau 
 
 - `users.role` : `customer` (défaut) | `operator` | `admin`. Le back-office exige `operator`/`admin`.
 - Table `face_enrollments` : `user_id` (FK `users.id`, **unique**), `embedding` (BYTEA — **vecteur uniquement, jamais l'image**), `model_version` (str), `enrolled_by` (str), `enrolled_at` (timestamptz).
+
+---
+
+## 6. API client `payment-api` (app bancaire, via le WAF)
+
+Routes consommées par le front client (`services/front`). Le WAF route **chemin par chemin** : toute
+nouvelle route exige sa `location` dans `security/waf/nginx.conf` (+ test). Bearer obligatoire sauf
+mention contraire ; un objet d'autrui répond **404** (jamais 403 : pas d'oracle d'existence).
+Montants en **centimes entiers**. Aucune nouvelle route n'ajoute de label de métrique : le label
+`path` de §2 prend le gabarit de route, ce qui borne la cardinalité.
+
+| Route | Auth | Contrat |
+|---|---|---|
+| `GET /api/v1/accounts` | JWT | `[{id, iban_fake, balance_cents, currency}]` |
+| `POST /api/v1/transactions` | JWT | `{src_account, dst_account, amount_cents}` → `201 TransactionOut` ; refus métier tracés (`transaction_rejected`) |
+| `GET /api/v1/transactions?limit=` | JWT | Historique de l'utilisateur, plus récent d'abord |
+| `GET /api/v1/status` | **aucune** | `200 {"status":"ok","checked_at":"<iso Z>"}` / `503 {"status":"degraded",…}` si la BDD est injoignable. **Aucun détail interne** (ni version, ni hôte, ni exception). Cache serveur à vol unique `STATUS_CACHE_S` (2 s, borné 0,5–30 s) + `limit_req` WAF par IP (2 r/s, rafale 5), GET seul. **Exclue des métriques HTTP §2** comme `/ready` (sonde, pas trafic métier : n'altère pas les features ML). Un `200` ne prouve que l'accès BDD : le front confirme la reprise par une route métier (#42). |
 
 ---
 

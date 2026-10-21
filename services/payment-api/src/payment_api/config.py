@@ -9,6 +9,7 @@ from resilience_db.config import read_secret
 
 SERVICE_NAME = "payment-api"
 MIN_SECRET_LENGTH = 32
+MIN_STATUS_CACHE_S, MAX_STATUS_CACHE_S = 0.5, 30.0
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -22,10 +23,16 @@ class Settings:
     run_migrations: bool = True
     enable_docs: bool = False
     log_level: str = "INFO"
+    status_cache_s: float = 2.0
 
     def __post_init__(self) -> None:
         if len(self.jwt_secret) < MIN_SECRET_LENGTH:
             raise RuntimeError(f"JWT_SECRET trop court (min {MIN_SECRET_LENGTH} caractères)")
+        # Sous MIN_STATUS_CACHE_S, la route publique /api/v1/status redevient amplificatrice.
+        if not MIN_STATUS_CACHE_S <= self.status_cache_s <= MAX_STATUS_CACHE_S:
+            raise RuntimeError(
+                f"STATUS_CACHE_S hors bornes [{MIN_STATUS_CACHE_S}, {MAX_STATUS_CACHE_S}]"
+            )
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -35,4 +42,5 @@ class Settings:
             run_migrations=_bool("RUN_MIGRATIONS", True),
             enable_docs=_bool("ENABLE_DOCS", False),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+            status_cache_s=float(os.environ.get("STATUS_CACHE_S", "2")),
         )

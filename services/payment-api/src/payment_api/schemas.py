@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, StrictInt
 
@@ -35,3 +36,9 @@ class TransactionOut(BaseModel):
     status: str
     created_at: datetime
     request_id: str | None
+
+
+class ServiceStatusOut(BaseModel):
+    # Volontairement minimal (route publique) : ni version, ni hôte, ni message d'exception.
+    status: Literal["ok", "degraded"]
+    checked_at: str
