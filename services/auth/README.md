@@ -95,6 +95,7 @@ pytest services/auth
 
 ## Écarts et points d'attention
 
+- **Revue complète (21/10)** : le quota de `/login` et `/auth/step-up` est une limite **fixe** dont le resserrement par la remédiation augmente le *coût* par requête (slowapi met le montant de la limite dans la clé du compteur : baisser la limite remettait le compteur à zéro et offrait un budget neuf à l'attaquant) ; le handler 429 rapporte la limite et le `Retry-After` de la route dépassée, seules les routes de mot de passe alimentent `resilience_auth_logins`/`rate_limited` ; une `IntegrityError` du register autre qu'un username pris remonte en `db_error` ; comptes ouverts par `/register` plafonnés (`REGISTER_MONTHLY_LIMIT_CENTS`, 800 €) ; username sans caractères de contrôle.
 - **Step-up (#51)** : `POST /api/v1/auth/step-up` ré-émet la même session (`sub`, `role`, `exp` conservés : aucune prolongation possible) avec un `auth_time` frais. Ses échecs comptent comme des logins ratés (`resilience_auth_logins_total{failed}`) et partagent le quota par IP de `/login` (`shared_limit`, scope `password_attempts`) : une force brute par cette porte reste visible du détecteur et freinée par le même budget.
 
 - Métriques HTTP conformes : `resilience_common.metrics.instrument(app, "auth")` produit désormais exactement `resilience_http_requests_total{service,method,path,status}` et `resilience_http_request_duration_seconds{service,method,path}` (contrat §2). Le test `test_http_metrics_follow_contract_names_and_labels` est **actif et vert** (plus de `xfail`).
