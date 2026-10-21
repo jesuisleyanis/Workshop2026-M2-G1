@@ -330,6 +330,9 @@ Montants en **centimes entiers**. Aucune nouvelle route n'ajoute de label de mé
 | `GET /api/v1/accounts` | JWT | `[{id, iban_fake, balance_cents, currency}]` |
 | `POST /api/v1/transactions` | JWT | `{src_account, dst_account, amount_cents}` → `201 TransactionOut` ; refus métier tracés (`transaction_rejected`) |
 | `GET /api/v1/transactions?limit=` | JWT | Historique de l'utilisateur, plus récent d'abord |
+| `GET /api/v1/beneficiaries` | JWT | Mes bénéficiaires `[{id, display_name, account_id, iban_fake, created_at}]`, triés par nom (#43) |
+| `POST /api/v1/beneficiaries` | JWT | `{display_name (1–64), iban_fake}` → `201`. IBAN résolu vers un compte (espaces/casse ignorés). `404 account_not_found`, `409 beneficiary_exists`, `422 own_account`, `409 beneficiary_limit` (100) |
+| `DELETE /api/v1/beneficiaries/{id}` | JWT | `204` ; bénéficiaire d'autrui ou inconnu → `404 beneficiary_not_found`. Seule route en `DELETE` : autorisée par `ALLOWED_METHODS` du CRS |
 | `GET /api/v1/status` | **aucune** | `200 {"status":"ok","checked_at":"<iso Z>"}` / `503 {"status":"degraded",…}` si la BDD est injoignable. **Aucun détail interne** (ni version, ni hôte, ni exception). Cache serveur à vol unique `STATUS_CACHE_S` (2 s, borné 0,5–30 s) + `limit_req` WAF par IP (2 r/s, rafale 5), GET seul. **Exclue des métriques HTTP §2** comme `/ready` (sonde, pas trafic métier : n'altère pas les features ML). Un `200` ne prouve que l'accès BDD : le front confirme la reprise par une route métier (#42). |
 
 ---

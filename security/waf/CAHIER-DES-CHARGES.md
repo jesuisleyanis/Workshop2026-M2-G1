@@ -43,4 +43,4 @@ Hors périmètre : terminaison TLS de production, gestion de certificats signés
 
 ## Tests
 
-`python -m pytest security/waf/tests/ -q` — exporteur (parsing des blocages ModSecurity → métrique exposée, suivi du journal d'audit) + contrat de configuration Dockerfile / nginx.conf / compose (upstream `front:8080`, non-root, TLS au build, routes publiques seules — dont `/api/v1/status` limitée par IP (#42) et `/api/v1/beneficiaries` (#43) —, méthodes CRS autorisées, healthcheck) : **28 tests**. La validation du proxy complet se fait avec la stack levée.
+`python -m pytest security/waf/tests/ -q` — exporteur (parsing des blocages ModSecurity → métrique exposée, suivi du journal d'audit) + contrat de configuration Dockerfile / nginx.conf / compose (upstream `front:8080`, non-root, TLS au build, routes publiques seules — dont `/api/v1/status` limitée par IP (#42) et `/api/v1/beneficiaries` (#43) —, méthodes CRS autorisées, healthcheck) : **27 tests**. La validation du proxy complet se fait avec la stack levée.

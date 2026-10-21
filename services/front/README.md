@@ -61,11 +61,11 @@ src/
                              useIsDesktop, useServiceStatus, useSecondsLeft, shell-context (toast, retour d'en-tête)
   components/
     Layout.tsx               shell : barre latérale (desktop) / onglets (mobile), en-tête, bandeau d'état, toasts
-    BankDataProvider.tsx     comptes + transactions partagés, rafraîchis toutes les 15 s (onglet visible)
+    BankDataProvider.tsx     comptes + transactions (rafraîchis toutes les 15 s, onglet visible) + bénéficiaires (au chargement)
     ui.tsx                   AccountCard, TxRow, Segmented, Avatar, états chargement/vide/erreur, ConfirmDialog
     icons.tsx                pictogrammes SVG inline
   pages/                     Login, Home, Stats, Send (formulaire desktop + assistant mobile, glisser pour envoyer),
-                             History (+ feuille de filtres mobile, export CSV), TxDetail, Rib, Profile
+                             History (+ feuille de filtres mobile, export CSV), TxDetail, Rib, Beneficiaries, Profile
   lib/
     bank.ts                  vues métier pures : sens/montant signé, groupes par jour, dépenses par période,
                              destinataires connus, CSV (anti-injection de formules)
