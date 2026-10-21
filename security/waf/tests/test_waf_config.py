@@ -40,9 +40,11 @@ def test_api_upstreams_target_service_ports():
 def test_only_public_routes_are_proxied():
     locations = re.findall(r"location\s+(?:=\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
-                              "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
+                              "/api/v1/login", "/api/v1/register", "/api/v1/auth/", "/metrics"}
+    # /metrics n'apparaît que comme REFUS explicite (404), jamais comme route vers un service.
+    routed = _directives(NGINX).replace("location = /metrics { return 404; }", "")
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
-        assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
+        assert forbidden not in routed, f"{forbidden} ne doit jamais être routé par le WAF"
 
 
 # --------------------------------------------------------------------------- #6 Dockerfile / non-root / TLS
@@ -182,3 +184,8 @@ def test_real_ip_trust_is_generated_empty_by_default_and_applied_before_blocking
     assert "WAF_TRUST_FORWARDED_FROM" in script and "real_ip_header X-Forwarded-For;" in script
     assert "grep -Eq '^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'" in script  # IP/CIDR littérale : aucune injection
     assert "06-trust-forwarded.sh /docker-entrypoint.d/06-trust-forwarded.sh" in DOCKERFILE
+
+
+def test_metrics_is_never_reachable_through_the_waf():
+    # `location /` transmet tout au front, qui sert un /metrics interne (sonde Prometheus) : refus explicite.
+    assert "location = /metrics { return 404; }" in _directives(NGINX)

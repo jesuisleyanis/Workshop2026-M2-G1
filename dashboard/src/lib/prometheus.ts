@@ -18,6 +18,7 @@ export const JOB_TO_SERVICE: Record<string, string> = {
   remediation: 'remediation',
   'waf-exporter': 'waf',
   postgres: 'postgres',
+  front: 'front',
 }
 
 type Obj = Record<string, unknown>
@@ -53,16 +54,26 @@ export function scoreMessages(raw: unknown, threshold = DEFAULT_THRESHOLD): Stre
     .map((s) => ({ kind: 'score', ts: s.ts, service: s.metric.service ?? 'payment-api', score: s.value, threshold }))
 }
 
-/** `up{job}` -> un message `health` (fusionné par nom dans l'état). Jobs inconnus ignorés. */
+/** `up{job}` -> un message `health` (fusionné par nom dans l'état). Jobs inconnus ignorés.
+ *  Plusieurs cibles pour un même job (répliques de payment-api) : service `up` seulement si TOUTES
+ *  répondent, sinon `down` avec le décompte (une réplique en panne ne doit pas passer inaperçue). */
 export function healthMessage(raw: unknown): StreamMessage | null {
-  const services: ServiceHealth[] = []
+  const counts = new Map<string, { up: number; total: number }>()
   let ts = ''
   for (const s of vectorSamples(raw)) {
     const name = JOB_TO_SERVICE[s.metric.job ?? '']
     if (!name) continue
     ts = ts || s.ts
-    services.push({ name, status: s.value === 1 ? 'up' : 'down', detail: s.value === 1 ? undefined : 'cible Prometheus injoignable' })
+    const c = counts.get(name) ?? { up: 0, total: 0 }
+    c.total += 1
+    if (s.value === 1) c.up += 1
+    counts.set(name, c)
   }
+  const services: ServiceHealth[] = [...counts].map(([name, { up, total }]) => {
+    if (up === total) return { name, status: 'up', detail: undefined }
+    const detail = total > 1 ? `${total - up}/${total} répliques injoignables` : 'cible Prometheus injoignable'
+    return { name, status: 'down', detail }
+  })
   return services.length ? { kind: 'health', ts: ts || new Date().toISOString(), services } : null
 }
 
