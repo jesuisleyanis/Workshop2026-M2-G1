@@ -23,7 +23,8 @@ DEFAULT_USERS = 5
 DEFAULT_BALANCE_CENTS = 100_000  # 1 000,00 EUR fictifs par compte
 
 # Tiers FICTIFS destinataires de virements (#43). Comptes sans mot de passe utilisable : ils
-# existent pour être crédités, jamais pour se connecter. Préfixe IBAN 9xxx (≠ demoNN).
+# existent pour être crédités, jamais pour se connecter. Banque fictive « 9999 » : espace
+# d'IBAN disjoint de demo_iban (« 0000 »), quel que soit SEED_USERS.
 PAYEES = (
     ("tiers01", "Léa Martin"),
     ("tiers02", "Boulangerie du Port"),
@@ -39,6 +40,10 @@ def demo_username(n: int) -> str:
 
 def demo_iban(n: int) -> str:
     return f"FR76 0000 0000 {n:04d} 0000 0000 000"
+
+
+def payee_iban(i: int) -> str:
+    return f"FR76 9999 0000 {i:04d} 0000 0000 000"
 
 
 def _demo_name(n: int) -> str:
@@ -84,11 +89,10 @@ def _ensure_payees(session: Session) -> list[tuple[str, Account]]:
         if user is None:
             # Mot de passe aléatoire jeté : compte crédité, jamais connectable.
             user = User(username=username, password_hash=hash_password(secrets.token_urlsafe(32)))
-            user.accounts.append(
-                Account(iban_fake=f"FR76 0000 0000 9{i:03d} 0000 0000 000", balance_cents=0)
-            )
             session.add(user)
-            session.flush()
+        if not user.accounts:
+            user.accounts.append(Account(iban_fake=payee_iban(i), balance_cents=0))
+        session.flush()
         out.append((name, user.accounts[0]))
     return out
 

@@ -67,6 +67,9 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `transaction_created` | payment-api | Virement fictif accepté |
 | `transaction_rejected` | payment-api | Virement refusé (solde, validation) |
 | `db_error` | payment-api | Erreur base de données |
+| `beneficiary_added` | payment-api | Bénéficiaire enregistré (#43) — piste d'audit d'un ajout de compte mule après vol de session |
+| `beneficiary_removed` | payment-api | Bénéficiaire supprimé (#43) |
+| `beneficiary_rejected` | payment-api | Ajout refusé (IBAN inconnu, doublon, soi-même, quota) — une rafale = énumération d'IBAN |
 | `waf_blocked` | waf (via log Nginx/ModSec) | Requête bloquée par le CRS |
 | `anomaly_detected` | detector | Le score dépasse le seuil |
 | `model_version_drift` | detector | Version scikit-learn chargée ≠ version d'entraînement du modèle |
@@ -331,8 +334,8 @@ Montants en **centimes entiers**. Aucune nouvelle route n'ajoute de label de mé
 | `POST /api/v1/transactions` | JWT | `{src_account, dst_account, amount_cents}` → `201 TransactionOut` ; refus métier tracés (`transaction_rejected`) |
 | `GET /api/v1/transactions?limit=` | JWT | Historique de l'utilisateur, plus récent d'abord |
 | `GET /api/v1/beneficiaries` | JWT | Mes bénéficiaires `[{id, display_name, account_id, iban_fake, created_at}]`, triés par nom (#43) |
-| `POST /api/v1/beneficiaries` | JWT | `{display_name (1–64), iban_fake}` → `201`. IBAN résolu vers un compte (espaces/casse ignorés). `404 account_not_found`, `409 beneficiary_exists`, `422 own_account`, `409 beneficiary_limit` (100) |
-| `DELETE /api/v1/beneficiaries/{id}` | JWT | `204` ; bénéficiaire d'autrui ou inconnu → `404 beneficiary_not_found`. Seule route en `DELETE` : autorisée par `ALLOWED_METHODS` du CRS |
+| `POST /api/v1/beneficiaries` | JWT | `{display_name (1–64), iban_fake}` → `201`. IBAN résolu vers un compte (espaces/casse ignorés, recherche exacte sur l'index unique). WAF : 30 req/min par IP (rafale 10) contre l'énumération ; events `beneficiary_added` / `beneficiary_rejected`. `404 account_not_found`, `409 beneficiary_exists`, `422 own_account`, `409 beneficiary_limit` (100) |
+| `DELETE /api/v1/beneficiaries/{id}` | JWT | `204` (`beneficiary_removed`) ; bénéficiaire d'autrui ou inconnu → `404 beneficiary_not_found`. **Seule** route en `DELETE` : `ALLOWED_METHODS` du CRS l'admet, `nginx.conf` (`$method_denied`) le refuse en `405` sur tout autre chemin |
 | `GET /api/v1/status` | **aucune** | `200 {"status":"ok","checked_at":"<iso Z>"}` / `503 {"status":"degraded",…}` si la BDD est injoignable. **Aucun détail interne** (ni version, ni hôte, ni exception). Cache serveur à vol unique `STATUS_CACHE_S` (2 s, borné 0,5–30 s) + `limit_req` WAF par IP (2 r/s, rafale 5), GET seul. **Exclue des métriques HTTP §2** comme `/ready` (sonde, pas trafic métier : n'altère pas les features ML). Un `200` ne prouve que l'accès BDD : le front confirme la reprise par une route métier (#42). |
 
 ---

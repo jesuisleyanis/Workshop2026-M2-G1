@@ -12,8 +12,13 @@ from payment_api.ledger import Rejection
 MAX_BENEFICIARIES = 100  # par client : borne la croissance de la table (abus, scripts)
 
 
-def normalize_iban(raw: str) -> str:
-    return "".join(raw.split()).upper()
+def canonical_iban(raw: str) -> str:
+    """Forme stockée des IBAN fictifs (seed, `new_fake_iban`) : groupes de 4, majuscules.
+
+    Recherche exacte sur l'index unique `accounts.iban_fake`, sans balayage de table.
+    """
+    compact = "".join(raw.split()).upper()
+    return " ".join(compact[i : i + 4] for i in range(0, len(compact), 4))
 
 
 def list_for(session: Session, user: User) -> list[Beneficiary]:
@@ -27,10 +32,7 @@ def list_for(session: Session, user: User) -> list[Beneficiary]:
 
 
 def add(session: Session, user: User, display_name: str, iban_fake: str) -> Beneficiary:
-    iban = normalize_iban(iban_fake)
-    account = session.scalar(
-        select(Account).where(func.upper(func.replace(Account.iban_fake, " ", "")) == iban)
-    )
+    account = session.scalar(select(Account).where(Account.iban_fake == canonical_iban(iban_fake)))
     if account is None:
         raise Rejection(404, "account_not_found", "No account matches this IBAN")
     if account.user_id == user.id:
@@ -40,6 +42,8 @@ def add(session: Session, user: User, display_name: str, iban_fake: str) -> Bene
     )
     if count >= MAX_BENEFICIARIES:
         raise Rejection(409, "beneficiary_limit", "Too many beneficiaries")
+    if _exists(session, user, account.id):
+        raise Rejection(409, "beneficiary_exists", "This beneficiary is already registered")
     beneficiary = Beneficiary(
         owner_user_id=user.id,
         display_name=display_name,
@@ -49,10 +53,25 @@ def add(session: Session, user: User, display_name: str, iban_fake: str) -> Bene
     session.add(beneficiary)
     try:
         session.commit()
-    except IntegrityError:  # (owner, account) déjà présent, y compris en course concurrente
+    except IntegrityError:
         session.rollback()
-        raise Rejection(409, "beneficiary_exists", "This beneficiary is already registered")
+        # Course concurrente sur (owner, account) : doublon légitime. Toute autre violation
+        # (FK, base corrompue) remonte en db_error, jamais déguisée en « déjà enregistré ».
+        if _exists(session, user, account.id):
+            raise Rejection(409, "beneficiary_exists", "This beneficiary is already registered")
+        raise
     return beneficiary
+
+
+def _exists(session: Session, user: User, account_id: int) -> bool:
+    return (
+        session.scalar(
+            select(Beneficiary.id).where(
+                Beneficiary.owner_user_id == user.id, Beneficiary.account_id == account_id
+            )
+        )
+        is not None
+    )
 
 
 def remove(session: Session, user: User, beneficiary_id: int) -> None:

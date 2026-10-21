@@ -5,7 +5,7 @@ from resilience_db import Base, build_database_url, make_engine, make_session_fa
 from resilience_db.migrate import upgrade
 from resilience_db.models import Account, Beneficiary, FaceEnrollment, User
 from resilience_db.passwords import hash_password, verify_password
-from resilience_db.seed import PAYEES, seed_demo_data
+from resilience_db.seed import PAYEES, demo_iban, payee_iban, seed_demo_data
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
@@ -155,3 +155,8 @@ def test_password_from_file(monkeypatch, tmp_path):
     monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
     monkeypatch.setenv("POSTGRES_PASSWORD_FILE", str(f))
     assert build_database_url().password == "from-file"
+
+
+def test_payee_ibans_never_collide_with_demo_ibans():
+    demo = {demo_iban(n) for n in range(1, 10_000)}
+    assert not demo & {payee_iban(i) for i in range(1, len(PAYEES) + 1)}

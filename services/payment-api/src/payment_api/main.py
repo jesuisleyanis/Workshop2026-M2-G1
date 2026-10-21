@@ -241,9 +241,27 @@ def create_app(
         body: BeneficiaryIn, user: User = Depends(current_user), session=Depends(get_session)
     ):
         try:
-            return beneficiaries.add(session, user, body.display_name, body.iban_fake)
+            created = beneficiaries.add(session, user, body.display_name, body.iban_fake)
         except Rejection as rej:
+            # Jamais l'IBAN saisi dans le log : seulement le motif (rafale = énumération).
+            log_event(
+                log,
+                logging.WARNING,
+                "beneficiary_rejected",
+                f"Beneficiary rejected ({rej.code})",
+                http_status=rej.status,
+                user=user.username,
+            )
             raise ApiError(rej.status, rej.code, rej.message)
+        log_event(
+            log,
+            logging.INFO,
+            "beneficiary_added",
+            f"Beneficiary {created.id} added (account {created.account_id})",
+            http_status=201,
+            user=user.username,
+        )
+        return created
 
     @app.delete("/api/v1/beneficiaries/{beneficiary_id}", status_code=204)
     def delete_beneficiary(
@@ -255,6 +273,14 @@ def create_app(
             beneficiaries.remove(session, user, beneficiary_id)
         except Rejection as rej:
             raise ApiError(rej.status, rej.code, rej.message)
+        log_event(
+            log,
+            logging.INFO,
+            "beneficiary_removed",
+            f"Beneficiary {beneficiary_id} removed",
+            http_status=204,
+            user=user.username,
+        )
         return Response(status_code=204)
 
     return app
