@@ -71,6 +71,8 @@ COMPOSE="docker compose -f infra/compose/docker-compose.yml --env-file .env"
 `make up*` déchiffre d'abord les secrets (`make decrypt`) et échoue clairement si `.env` est absent.
 Les services démarrent dans l'ordre de santé : postgres *healthy* → payment-api/auth *healthy* → WAF, etc.
 
+**Répliques de payment-api** : 3 par défaut derrière le WAF (répartition + bascule) ; `PAYMENT_API_REPLICAS=2 make up-full` pour changer. Voir `services/payment-api/README.md`.
+
 **Dashboard de supervision** : `make ui` puis http://127.0.0.1:8081 (publié sur le loopback du PC hôte
 uniquement, jamais sur le hotspot ; un `make up*` ultérieur le dépublie, relancer `make ui`).
 

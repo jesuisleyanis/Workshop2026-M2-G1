@@ -126,6 +126,12 @@ services:
   payment-api:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: services/payment-api/Dockerfile }
+    # Service SANS ÉTAT (tout est en base) : N répliques derrière le répartiteur du WAF (least_conn,
+    # retrait d'une réplique en panne). 3 = tient une panne pendant un redémarrage progressif ; au-delà,
+    # le goulot est Postgres (pool 10/réplique, max_connections 100) et le CPU de l'hôte.
+    # Prometheus découvre chaque réplique par DNS (sinon le ML ne verrait qu'1/N du trafic).
+    deploy:
+      replicas: ${PAYMENT_API_REPLICAS:-3}
     networks: [app, data]
     environment:
       POSTGRES_HOST: postgres

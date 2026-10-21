@@ -22,8 +22,13 @@ scrape_configs:
     scrape_interval: 1s
     scrape_timeout: 900ms
     metrics_path: /metrics
-    static_configs:
-      - targets: ["payment-api:8001"]
+    # Une cible PAR RÉPLIQUE (DNS Docker) : avec un static_config, Prometheus ne relèverait qu'une
+    # réplique au hasard et les features ML (sum(rate)) ne verraient qu'1/N du trafic.
+    dns_sd_configs:
+      - names: ["payment-api"]
+        type: A
+        port: 8001
+        refresh_interval: 5s
 
   - job_name: auth
     # Signaux de détection rapide (docs/plan-amelioration-detection.md, lot 2) : 1 scrape/s ;

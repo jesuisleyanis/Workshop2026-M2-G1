@@ -168,6 +168,7 @@ Pourquoi : redémarrer un service après une corruption de données **ne corrige
 | A1 | Le moteur démarre avec la table livrée ; une table invalide (action inconnue, type manquant, doublon, clé inconnue, paramètre dangereux) l'empêche de démarrer. | `tests/test_decision_table.py` |
 | A2 | Pour chacun des 5 `incident_type`, la séquence d'actions exécutée est celle de la table, avec les paramètres de la table. | `test_decision_table.py`, `test_engine.py` |
 | A3 | `service_flood` ne restaure jamais de dump ; `data_corruption` ne redémarre/recrée jamais de service ; `restore_pg_dump` refusé hors `data_corruption` ; `unknown` sans action destructive. | `test_decision_table.py`, `test_engine.py` |
+| A4c | `restart_service` **progressif** : une réplique à la fois, la suivante quand la précédente est `healthy` (`GET /containers/{id}/json`, déjà autorisé par le proxy) ; arrêt si une réplique ne revient pas (les autres restent en service). | `test_actions.py` |
 | A4b | Règle `verify_first` (flood, web_attack) : `verify_tx` joué avant toute action ; OK = attaque contenue par le WAF, incident clos sans action (pas de redémarrage en boucle). | `test_engine.py` |
 | A4 | `verify_tx` OK clôt l'incident et calcule MTTD/MTTR ; KO passe à l'action suivante ; OK après la 1re action saute les suivantes ; la vérification est retentée tant que la plateforme n'est pas saine. | `test_engine.py` |
 | A5 | Cooldown : pas de ré-action sur la même clé avant `cooldown_seconds`, et le cooldown est par clé. | `test_engine.py` |

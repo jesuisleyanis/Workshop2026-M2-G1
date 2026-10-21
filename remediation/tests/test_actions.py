@@ -227,3 +227,30 @@ def test_journal_marks_orphans_interrupted_after_restart():
                       event_json="{}", detected_at=T0, dry_run=False)
     assert j.recover_orphans() == 1
     assert j.get_incident("i1")["status"] == "interrupted"
+
+
+async def test_restart_is_rolling_one_replica_at_a_time():
+    # 3 répliques derrière le WAF : redémarrer tout d'un coup = coupure ; une à une, attente « healthy ».
+    net = FakeNetwork()
+    net.replicas["payment-api"] = 3
+    res = await build_action("restart_service", {"service": "payment-api"}).execute(ctx_for(client(net)))
+    assert res.ok and len(res.data["containers"]) == 3
+    calls = [(m, p) for m, p in net.docker_calls() if p != "/containers/json"]
+    assert calls == [
+        ("POST", "/containers/cid-payment-api-1/restart"), ("GET", "/containers/cid-payment-api-1/json"),
+        ("POST", "/containers/cid-payment-api-2/restart"), ("GET", "/containers/cid-payment-api-2/json"),
+        ("POST", "/containers/cid-payment-api-3/restart"),
+    ]
+
+
+async def test_rolling_restart_stops_if_a_replica_never_recovers(monkeypatch):
+    import actions.docker as docker_actions
+
+    monkeypatch.setattr(docker_actions, "ROLLING_HEALTH_TIMEOUT_S", 0.0)
+    net = FakeNetwork()
+    net.replicas["payment-api"] = 3
+    net.health = "unhealthy"
+    with pytest.raises(ActionError, match="interrompu"):
+        await build_action("restart_service", {"service": "payment-api"}).execute(ctx_for(client(net)))
+    restarts = [p for m, p in net.docker_calls() if p.endswith("/restart")]
+    assert restarts == ["/containers/cid-payment-api-1/restart"]  # on n'abat pas les autres répliques

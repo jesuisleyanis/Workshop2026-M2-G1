@@ -61,3 +61,14 @@ def test_detector_and_remediation_can_read_loki():
     assert "obs" in COMPOSE["loki"]["networks"]
     for name in ("detector", "remediation"):
         assert "obs" in COMPOSE[name]["networks"], f"{name} doit joindre Loki (réseau obs)"
+
+
+def test_every_payment_api_replica_is_scraped():
+    # N répliques derrière le WAF : un static_config ne relèverait qu'une réplique (1/N du trafic) et
+    # fausserait les features ML. Découverte DNS = une cible par réplique.
+    replicas = str(COMPOSE["payment-api"]["deploy"]["replicas"])
+    assert re.fullmatch(r"\$\{PAYMENT_API_REPLICAS:-([2-9])\}|[2-9]", replicas), replicas
+    job = _job("payment-api")
+    assert "static_configs" not in job
+    (sd,) = job["dns_sd_configs"]
+    assert sd["names"] == ["payment-api"] and sd["type"] == "A" and sd["port"] == 8001

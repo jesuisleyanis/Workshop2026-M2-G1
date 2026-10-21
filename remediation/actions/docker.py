@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from typing import Any
 
 from actions.base import Action, ActionContext, ActionError, ActionParamError, ActionResult
@@ -24,6 +26,24 @@ def _check_allowed(ctx: ActionContext, service: str) -> None:
         raise ActionError(f"service {service!r} hors de la liste autorisée {ctx.settings.restartable_services}")
 
 
+#: Attente max qu'une réplique redémarrée redevienne saine avant de passer à la suivante (s).
+ROLLING_HEALTH_TIMEOUT_S = 45.0
+ROLLING_POLL_S = 1.0
+
+
+async def _wait_healthy(ctx: ActionContext, cid: str, timeout_s: float) -> bool:
+    """True quand le conteneur est `healthy` (ou simplement `running` s'il n'a pas de healthcheck)."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        state = (await ctx.docker.inspect(cid)).get("State", {})
+        health = (state.get("Health") or {}).get("Status")
+        if health == "healthy" or (health is None and state.get("Running")):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(ROLLING_POLL_S)
+
+
 class RestartService(Action):
     type = "restart_service"
 
@@ -39,8 +59,13 @@ class RestartService(Action):
         _check_allowed(ctx, service)
         try:
             ids = await ctx.docker.find_containers(service)
-            for cid in ids:
+            # Redémarrage PROGRESSIF (répliques derrière le répartiteur du WAF) : une à la fois, la
+            # suivante seulement quand la précédente est de nouveau saine -> le service n'est jamais coupé.
+            for i, cid in enumerate(ids):
                 await ctx.docker.restart(cid)
+                if len(ids) > 1 and i < len(ids) - 1 and not await _wait_healthy(ctx, cid, ROLLING_HEALTH_TIMEOUT_S):
+                    raise ActionError(f"réplique {cid[:12]} toujours pas saine après "
+                                      f"{ROLLING_HEALTH_TIMEOUT_S:.0f}s : redémarrage progressif interrompu")
         except DockerProxyError as exc:
             raise ActionError(str(exc)) from exc
         # Idempotent : l'état final (conteneur démarré) est le même, quel que soit le nombre de rejeux.

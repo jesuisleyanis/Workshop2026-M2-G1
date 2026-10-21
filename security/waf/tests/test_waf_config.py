@@ -33,7 +33,7 @@ def test_front_upstream_matches_front_container_port():
 
 def test_api_upstreams_target_service_ports():
     conf = _directives(NGINX)
-    assert re.search(r"upstream\s+payment_api\s*\{\s*server\s+payment-api:8001;", conf)
+    assert re.search(r"upstream\s+payment_api\s*\{[^}]*server\s+payment-api:8001\b", conf)
     assert re.search(r"upstream\s+auth_api\s*\{\s*server\s+auth:8002;", conf)
 
 
@@ -158,3 +158,16 @@ def test_api_routes_are_rate_limited_by_the_waf():
         assert "limit_req zone=api" in line, route
     # /healthz (sonde du WAF) n'est jamais limitée
     assert "limit_req" not in next(ln for ln in NGINX.splitlines() if "location = /healthz" in ln)
+
+
+def test_payment_api_replicas_are_load_balanced_with_failover_but_no_post_replay():
+    conf = _directives(NGINX)
+    block = re.search(r"upstream\s+payment_api\s*\{([^}]*)\}", conf).group(1)
+    assert "least_conn;" in block and "zone payment_api" in block
+    # `resolve` : nouvelles IP des répliques (restart, scale) suivies sans recharger nginx
+    assert re.search(r"server payment-api:8001 resolve max_fails=\d+ fail_timeout=\d+s;", block)
+    assert re.search(r"resolver 127\.0\.0\.11 ", conf)
+    for route in ("/api/v1/accounts", "/api/v1/transactions"):
+        line = next(ln for ln in NGINX.splitlines() if f"location {route}" in ln)
+        assert "proxy_next_upstream error timeout http_502 http_503;" in line, route
+        assert "non_idempotent" not in line, "un virement (POST) ne doit jamais être rejoué en double"
