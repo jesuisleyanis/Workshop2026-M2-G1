@@ -38,10 +38,10 @@ def test_api_upstreams_target_service_ports():
 
 
 def test_only_public_routes_are_proxied():
-    locations = re.findall(r"location\s+(?:=\s*)?(\S+)\s*\{", _directives(NGINX))
+    locations = re.findall(r"location\s+(?:[=~]\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
                               "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/stats/spending",
-                              "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
+                              "^/api/v1/transactions/[0-9]+$", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
 
@@ -74,11 +74,17 @@ def test_spending_stats_route_is_rate_limited_and_read_only():
     assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
 
 
-def test_transaction_detail_is_reachable_through_the_prefix_location():
-    # #45 : GET /api/v1/transactions/{id} passe par la location préfixe (pas de `=` exact).
+def test_transaction_detail_is_rate_limited_but_transfers_are_not():
+    # #45 : GET /api/v1/transactions/{id} (regex, prioritaire sur le préfixe) est borné par IP ;
+    # le préfixe (POST de virement, cible de service_flood) reste sans limite côté WAF.
     conf = _directives(NGINX)
-    assert re.search(r"location /api/v1/transactions\s+\{\s*proxy_pass http://payment_api;", conf)
-    assert "location = /api/v1/transactions" not in conf
+    block = re.search(r"location ~ \^/api/v1/transactions/\[0-9\]\+\$ \{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block, "location regex du détail absente"
+    assert "limit_req zone=tx_detail_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=tx_detail_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    prefix = re.search(r"location /api/v1/transactions\s+\{([^}]*)\}", conf)
+    assert prefix and "limit_req" not in prefix.group(1), "ne pas étouffer service_flood au WAF"
 
 
 def test_beneficiaries_route_is_rate_limited_per_ip():
