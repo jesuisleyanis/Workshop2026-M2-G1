@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from resilience_db.models import Account, Transaction, TransactionStatus, User
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from payment_api.limits import used_cents
 
 MAX_AMOUNT_CENTS = 100_000_000  # 1 000 000,00 EUR fictifs
 
@@ -25,6 +29,7 @@ def transfer(
     amount_cents: int,
     request_id: str | None,
     category: str = "transfer",
+    now: datetime | None = None,
 ) -> Transaction:
     """Débite `src_id` (qui doit appartenir à `user`) et crédite `dst_id`, atomiquement."""
     if amount_cents <= 0:
@@ -53,7 +58,7 @@ def transfer(
     if src.currency != dst.currency:
         raise Rejection(422, "currency_mismatch", "Accounts use different currencies")
 
-    if src.balance_cents < amount_cents:
+    def reject(status: int, code: str, message: str) -> Rejection:
         # Tentative traçable : on persiste la transaction refusée (R2), sans toucher aux soldes.
         session.add(
             Transaction(
@@ -66,7 +71,18 @@ def transfer(
             )
         )
         session.commit()
-        raise Rejection(409, "insufficient_funds", "Insufficient funds")
+        return Rejection(status, code, message)
+
+    # Plafond mensuel (#46), contrôlé sous le verrou de la source : deux virements concurrents
+    # ne peuvent pas le dépasser ensemble. Sans plafond (NULL) ou entre ses propres comptes :
+    # aucun calcul (pas de requête ajoutée sur les comptes de service à fort trafic).
+    limit = src.monthly_limit_cents
+    capped = limit is not None and dst.user_id != src.user_id
+    if capped and used_cents(session, src, now or datetime.now(UTC)) + amount_cents > limit:
+        raise reject(409, "limit_exceeded", "Monthly transfer limit exceeded")
+
+    if src.balance_cents < amount_cents:
+        raise reject(409, "insufficient_funds", "Insufficient funds")
 
     src.balance_cents -= amount_cents
     dst.balance_cents += amount_cents
