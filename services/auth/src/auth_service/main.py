@@ -89,7 +89,8 @@ def create_app(
             "Poser le même secret que face-id, ou BACKOFFICE_FACE_REQUIRED=false en dev."
         )
 
-    rate = DynamicRateLimit(settings.login_rate_limit)
+    rate = DynamicRateLimit(settings.login_rate_limit, settings.rate_limit_restore_seconds)
+    exempt_ips = frozenset(settings.rate_limit_exempt_ips)
     limiter = Limiter(
         key_func=lambda request: client_ip_var.get() or "unknown", storage_uri="memory://"
     )
@@ -201,7 +202,7 @@ def create_app(
         return UserOut(id=user.id, username=user.username)
 
     @app.post("/api/v1/login", response_model=TokenOut)
-    @limiter.limit(rate)
+    @limiter.limit(rate, exempt_when=lambda: client_ip_var.get() in exempt_ips)
     def login(request: Request, body: LoginRequest, session=Depends(get_session)):
         user = session.scalar(select(User).where(User.username == body.username))
         # Vérification systématique (hash factice si inconnu) : temps de réponse constant.

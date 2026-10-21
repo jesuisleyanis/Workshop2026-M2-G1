@@ -211,3 +211,11 @@ def test_ansible_temp_dirs_are_writable_in_the_read_only_remediation_image():
     dockerfile = (ROOT / "remediation" / "Dockerfile").read_text(encoding="utf-8")
     for var in ("ANSIBLE_LOCAL_TEMP=/tmp/", "ANSIBLE_REMOTE_TMP=/tmp/"):
         assert var in dockerfile, var  # sinon « Failed to create temporary directory »
+
+
+def test_only_the_remediation_fixed_ip_is_exempt_from_the_login_rate_limit():
+    ip = SERVICES["remediation"]["networks"]["app"]["ipv4_address"]
+    exempt = SERVICES["auth"]["environment"]["RATE_LIMIT_EXEMPT_IPS"].split(",")
+    assert exempt == [ip]  # une IP exacte, jamais une plage (les clients externes = passerelle Docker)
+    gateway = COMPOSE["networks"]["app"]["ipam"]["config"][0]["gateway"]
+    assert ip != gateway

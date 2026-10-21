@@ -154,6 +154,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      # verify_tx de la remédiation (IP fixe) : jamais limité, sinon tighten_rate_limit fait échouer
+      # la preuve de reprise. Durcissement levé automatiquement 5 min après le dernier tighten.
+      RATE_LIMIT_EXEMPT_IPS: "172.31.0.20"
+      RATE_LIMIT_RESTORE_SECONDS: "300"
     depends_on:
       postgres: { condition: service_healthy }
     read_only: true
@@ -288,8 +292,13 @@ services:
     build: { context: ../.., dockerfile: remediation/Dockerfile }
     # app : API + proxy Docker + WAF (verify_tx) ; data : pg_restore (correction de corruption) ;
     # obs : lecture Loki de `confirm_waf_block` (CDC remédiation, dépendance Loki), réseau interne.
-    # Jamais sur edge, aucun `ports:`.
-    networks: [app, data, obs]
+    # Jamais sur edge, aucun `ports:`. IP FIXE sur app : seule source exemptée du rate-limit de /login
+    # (verify_tx), cf. RATE_LIMIT_EXEMPT_IPS d'auth.
+    networks:
+      app:
+        ipv4_address: 172.31.0.20
+      data: {}
+      obs: {}
     environment:
       DOCKER_PROXY_URL: http://docker-socket-proxy:2375
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}

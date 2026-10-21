@@ -48,6 +48,12 @@ class Settings:
     backoffice_failure_window: int = 900
     backoffice_rate_limit: str = "30/minute"
     backoffice_face_required: bool = True
+    # IP EXACTES exemptées du rate-limit de /login : la vérification automatique (verify_tx de la
+    # remédiation, IP interne fixe). Sans elle, tighten_rate_limit faisait échouer la preuve de reprise
+    # (constaté le 21/10). Jamais de plage : les clients externes arrivent par une passerelle Docker.
+    rate_limit_exempt_ips: tuple[str, ...] = ()
+    # Retour automatique à la limite de base après un durcissement (s) ; 0 = jamais.
+    rate_limit_restore_seconds: int = 300
 
     def __post_init__(self) -> None:
         if len(self.jwt_secret) < MIN_SECRET_LENGTH:
@@ -84,4 +90,8 @@ class Settings:
             backoffice_failure_window=int(os.environ.get("BACKOFFICE_FAILURE_WINDOW", "900")),
             backoffice_rate_limit=os.environ.get("BACKOFFICE_RATE_LIMIT", "30/minute"),
             backoffice_face_required=_bool("BACKOFFICE_FACE_REQUIRED", True),
+            rate_limit_exempt_ips=tuple(
+                ip.strip() for ip in os.environ.get("RATE_LIMIT_EXEMPT_IPS", "").split(",") if ip.strip()
+            ),
+            rate_limit_restore_seconds=int(os.environ.get("RATE_LIMIT_RESTORE_SECONDS", "300")),
         )

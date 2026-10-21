@@ -44,6 +44,8 @@ Le schéma DB, le hash bcrypt et le seed viennent de [`libs/python/resilience_db
 | `POSTGRES_PASSWORD` (ou `_FILE`) | oui | — | Mot de passe DB (`POSTGRES_HOST/PORT/DB/USER` : voir resilience_db) |
 | `DATABASE_URL` | non | — | Surcharge complète de l'URL DB (tests : `sqlite://`) |
 | `LOGIN_RATE_LIMIT` | non | `10/minute` | Limite de `/login` par IP (`N/second\|minute\|hour\|day`) |
+| `RATE_LIMIT_EXEMPT_IPS` | non | vide | IP **exactes** exemptées de la limite de `/login` : la vérification automatique (`verify_tx` de la remédiation, IP fixe `172.31.0.20` en compose). Jamais de plage |
+| `RATE_LIMIT_RESTORE_SECONDS` | non | `300` | Retour automatique à `LOGIN_RATE_LIMIT` après le dernier durcissement (`tighten_rate_limit`) ; `0` = jamais |
 | `TRUSTED_PROXY_HOPS` | non | `1` | Nombre de proxys de confiance devant le service (lecture de `X-Forwarded-For` depuis la droite) |
 | `RUN_MIGRATIONS` | non | `true` | Applique Alembic au démarrage (verrou : sûr si payment-api démarre en parallèle) |
 | `REGISTER_INITIAL_BALANCE_CENTS` | non | `0` | Solde initial du compte créé par `/register` |
