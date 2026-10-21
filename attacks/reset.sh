@@ -10,6 +10,9 @@ echo "== reset du banc d'essai =="
 
 # Vide la deny-list IP du WAF (volume partagé `waf-deny`) et recharge Nginx à chaud.
 COMPOSE=(docker compose -f "${ROOT}/infra/compose/docker-compose.yml")
+# Sans --env-file, Compose cherche infra/compose/.env (absent) : l'interpolation échoue (variables
+# requises), `ps` aussi, et la deny-list n'était JAMAIS vidée.
+[[ -f "${ROOT}/.env" ]] && COMPOSE+=(--env-file "${ROOT}/.env")
 if "${COMPOSE[@]}" ps --status running waf >/dev/null 2>&1; then
   "${COMPOSE[@]}" exec -T waf sh -c \
     'printf "# vidé par attacks/reset.sh\n" > /etc/nginx/deny/blocked_ips.conf && nginx -s reload' \

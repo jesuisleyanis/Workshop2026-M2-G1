@@ -1,12 +1,17 @@
 """Tests du générateur de trafic légitime (aucun réseau : `send` simulé)."""
 
 import importlib.util
+import os
 import random
 import sys
 from collections import Counter
 from pathlib import Path
 
 import pytest
+
+# Mot de passe FACTICE du jeu de test (le générateur lit SEED_PASSWORD à l'import).
+PW = "seed-pass-test"
+os.environ["SEED_PASSWORD"] = PW
 
 _PATH = Path(__file__).resolve().parents[1] / "gen_normal_traffic.py"
 _spec = importlib.util.spec_from_file_location("gen_normal_traffic", _PATH)
@@ -84,7 +89,7 @@ def test_client_logs_in_learns_account_then_transfers_to_a_peer():
 
 def test_no_transfer_before_account_is_known():
     api = FakeApi()
-    c = gen.Client("demo01", "demo-pass-01", send=api)
+    c = gen.Client("demo01", PW, send=api)
     c.peers = [c]
     rng = random.Random(0)
     c.step(rng, now=0.0)
@@ -95,7 +100,7 @@ def test_no_transfer_before_account_is_known():
 
 def test_session_expiry_and_revoked_token_trigger_relogin():
     api = FakeApi()
-    c = gen.Client("demo01", "demo-pass-01", send=api)
+    c = gen.Client("demo01", PW, send=api)
     rng = random.Random(0)
     c.step(rng, now=0.0)
     assert c.step(rng, now=gen.SESSION_TTL_S + 1)[0] == "login"  # TTL dépassé
@@ -197,7 +202,7 @@ def test_traffic_resumes_when_auth_comes_back():
 
 def test_backoff_grows_exponentially_and_resets_on_success():
     api = FakeApi()
-    c = gen.Client("demo01", "demo-pass-01", send=api)
+    c = gen.Client("demo01", PW, send=api)
     api.passwords["demo01"] = "autre"  # login refusé
     rng = random.Random(0)
     delays = []
@@ -210,14 +215,26 @@ def test_backoff_grows_exponentially_and_resets_on_success():
     for i, d in enumerate(delays):
         expected = min(gen.BACKOFF_MAX_S, gen.BACKOFF_BASE_S * 2 ** i)
         assert expected * lo <= d <= expected * hi
-    api.passwords["demo01"] = "demo-pass-01"
+    api.passwords["demo01"] = PW
     assert c.login(now, rng=rng) == 200 and c.login_failures == 0
 
 
 def test_deliberate_typo_never_pauses_the_session():
     api = FakeApi()
-    c = gen.Client("demo01", "demo-pass-01", send=api)
+    c = gen.Client("demo01", PW, send=api)
     c.login(0.0)
     token = c.token
     assert c.login(1.0, password="faux") == 401
     assert c.token == token and c.ready(1.0) and c.login_failures == 0
+
+
+def test_accounts_are_the_seeded_ones_with_the_seed_password():
+    # Les anciens comptes `demo-pass-0N` / `ops` n'existent plus : les utiliser fabriquait des 401
+    # dans le « normal » (le signal même d'auth_abuse) et faussait la baseline du modèle.
+    assert [u for u, _ in gen.USERS] == ["demo01", "demo02", "demo03"]
+    assert all(password == PW for _, password in gen.USERS)
+
+
+def test_main_refuses_to_run_without_seed_password(monkeypatch):
+    monkeypatch.setattr(gen, "USERS", [("demo01", "")])
+    assert gen.main(["--duration", "1s"]) == 2
