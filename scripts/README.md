@@ -23,8 +23,9 @@ ne fait que l'appliquer. Toutes les données sont fictives.
 | `tiers01` … `tiers04` | aléatoire, jeté (**non connectables**) | 1 compte EUR chacun, IBAN `FR76 9999 0000 000N 0000 0000 000` (tiers fictifs : Léa Martin, Boulangerie du Port…) | 0 € |
 
 Chaque `demoNN` a **5 à 8 bénéficiaires** (#43) : jusqu'à 4 autres clients de démo + les 4 tiers,
-et, à sa création, **8 dépenses catégorisées** sur les 3 dernières semaines vers les tiers (#44 :
-écran Statistiques non vide). Le solde affiché reste 1 000,00 € (`verify_tx` inchangé).
+et **8 dépenses catégorisées** vers les tiers, placées dans la semaine et le mois **en cours** au moment
+du seed (#44 : écran Statistiques jamais vide ; un `make seed` / `reset.sh` avant la démo suffit, une fois
+par mois). Le solde affiché reste 1 000,00 € (`verify_tx` inchangé).
 
 - Idempotent : les utilisateurs et bénéficiaires existants sont ignorés, relançable sans doublon.
 - `SEED_USERS` (défaut `5`) change le nombre de comptes.
