@@ -101,3 +101,44 @@ def test_register_is_rate_limited_after_threshold(client):
     assert codes[10] == 429 and codes[11] == 429
     r = client.post("/api/v1/register", json={"username": "u99", "password": PASSWORD})
     assert r.json()["error"]["code"] == "rate_limited"
+
+
+def test_tightening_keeps_attempts_already_spent(client, registered):
+    """Le resserrement ne remet pas le compteur à zéro (la clé slowapi inclut la limite)."""
+    assert _hammer(client, 2) == [401, 401]  # 2 essais sur 3
+    client.post("/internal/tighten-rate-limit", json={"factor": 0.5}, headers=HDR)  # 3 -> 1
+    assert _hammer(client, 1) == [429], "budget déjà consommé : aucun essai neuf offert"
+
+
+def test_tightened_limit_allows_at_most_the_new_count(client, registered):
+    client.post("/internal/tighten-rate-limit", json={"factor": 0.5}, headers=HDR)  # 3 -> 1
+    assert _hammer(client, 3) == [401, 429, 429]
+
+
+def test_other_route_limits_do_not_pollute_the_brute_force_metric(client, log_lines):
+    from authkit import PASSWORD
+
+    before = sample("resilience_auth_rate_limited_total")
+    for i in range(11):
+        r = client.post("/api/v1/register", json={"username": f"v{i:02d}", "password": PASSWORD})
+    assert r.status_code == 429
+    assert sample("resilience_auth_rate_limited_total") == before, "hors métrique de force brute"
+    assert int(r.headers["Retry-After"]) == 60
+    (e,) = log_lines("auth_rate_limited")
+    assert "10 per 1 minute" in e["message"] and "/api/v1/register" in e["message"]
+
+
+def test_register_integrity_error_other_than_username_is_not_username_taken(client, monkeypatch):
+    from authkit import PASSWORD
+
+    import auth_service.main as m
+
+    monkeypatch.setattr(m, "new_fake_iban", lambda: "FR76 DUPLICATE")
+    assert (
+        client.post(
+            "/api/v1/register", json={"username": "dupiban01", "password": PASSWORD}
+        ).status_code
+        == 201
+    )
+    r = client.post("/api/v1/register", json={"username": "dupiban02", "password": PASSWORD})
+    assert r.status_code == 503 and r.json()["error"]["code"] != "username_taken"

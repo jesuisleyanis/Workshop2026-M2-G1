@@ -4,7 +4,6 @@ Lancement : uvicorn auth_service.main:create_app --factory --port 8002
 """
 
 import logging
-import time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, Request
@@ -13,7 +12,7 @@ from resilience_common.logging import get_logger
 from resilience_common.metrics import auth_logins_total, auth_rate_limited_total, instrument
 from resilience_db.config import make_engine, make_session_factory
 from resilience_db.factories import new_fake_iban
-from resilience_db.migrate import upgrade
+from resilience_db.migrate import upgrade_with_retry
 from resilience_db.models import Account, User
 from resilience_db.passwords import DUMMY_HASH, hash_password, verify_password
 from slowapi import Limiter
@@ -56,17 +55,7 @@ from auth_service.security import (
     reissue_with_fresh_auth_time,
 )
 
-
-def _migrate_with_retry(engine: Engine, log: logging.Logger, attempts: int = 5) -> None:
-    for attempt in range(1, attempts + 1):
-        try:
-            upgrade(engine)
-            return
-        except SQLAlchemyError:
-            if attempt == attempts:
-                raise
-            log.warning("DB not ready for migrations (attempt %d/%d)", attempt, attempts)
-            time.sleep(2)
+PASSWORD_ROUTES = frozenset({"/api/v1/login", "/api/v1/auth/step-up"})
 
 
 def create_app(
@@ -103,7 +92,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if settings.run_migrations:
-            _migrate_with_retry(engine, log)
+            upgrade_with_retry(engine, log)
         yield
 
     docs = "/docs" if settings.enable_docs else None
@@ -147,17 +136,26 @@ def create_app(
         return error_response(422, "validation_error", f"Invalid request fields: {fields}")
 
     @app.exception_handler(RateLimitExceeded)
-    async def _rate_limited(_req: Request, _exc: RateLimitExceeded):
-        auth_rate_limited_total.inc()
+    async def _rate_limited(req: Request, exc: RateLimitExceeded):
+        # Essais de mot de passe (/login, /auth/step-up) : limite dynamique, métrique de force
+        # brute. Autres routes (register, back-office) : leur propre limite, hors métrique.
+        password = req.url.path in PASSWORD_ROUTES
+        if password:
+            auth_rate_limited_total.inc()
+            limit, retry_after = rate.value, rate.retry_after_seconds
+        else:
+            item = getattr(getattr(exc, "limit", None), "limit", None)
+            limit = str(item) if item is not None else "route limit"
+            retry_after = item.get_expiry() if item is not None else 60
         log_event(
             log,
             logging.WARNING,
             "auth_rate_limited",
-            f"Rate limit exceeded ({rate.value}) for {client_ip_var.get()}",
+            f"Rate limit exceeded ({limit}) on {req.url.path} for {client_ip_var.get()}",
             http_status=429,
         )
         return error_response(
-            429, "rate_limited", "Too many requests", {"Retry-After": str(rate.retry_after_seconds)}
+            429, "rate_limited", "Too many requests", {"Retry-After": str(retry_after)}
         )
 
     @app.exception_handler(SQLAlchemyError)
@@ -201,15 +199,19 @@ def create_app(
         session.add(user)
         try:
             session.commit()
-        except IntegrityError:  # course : même username créé entre le SELECT et l'INSERT
+        except IntegrityError:
             session.rollback()
-            raise ApiError(409, "username_taken", "Username already exists")
+            # Course sur le même username : 409. Toute autre violation (collision d'IBAN…)
+            # remonte en db_error au lieu de refuser à tort un identifiant libre.
+            if session.scalar(select(User.id).where(User.username == body.username)) is not None:
+                raise ApiError(409, "username_taken", "Username already exists")
+            raise
         return UserOut(id=user.id, username=user.username)
 
     @app.post("/api/v1/login", response_model=TokenOut)
     # Quota PARTAGÉ avec /auth/step-up (scope commun) : deux portes, un seul budget d'essais de
     # mot de passe par IP.
-    @limiter.shared_limit(rate, scope="password_attempts")
+    @limiter.shared_limit(rate.baseline_value, scope="password_attempts", cost=rate.cost)
     def login(request: Request, body: LoginRequest, session=Depends(get_session)):
         user = session.scalar(select(User).where(User.username == body.username))
         # Vérification systématique (hash factice si inconnu) : temps de réponse constant.
@@ -238,7 +240,9 @@ def create_app(
         return TokenOut(access_token=token, expires_in=expires_in)
 
     @app.post("/api/v1/auth/step-up", response_model=TokenOut)
-    @limiter.shared_limit(rate, scope="password_attempts")  # même budget que /login
+    @limiter.shared_limit(
+        rate.baseline_value, scope="password_attempts", cost=rate.cost
+    )  # même budget que /login
     def step_up(
         request: Request,
         body: StepUpRequest,

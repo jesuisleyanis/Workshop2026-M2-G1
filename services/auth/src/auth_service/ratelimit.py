@@ -38,6 +38,18 @@ class DynamicRateLimit:
     def __call__(self) -> str:  # slowapi appelle le provider sans argument
         return self.value
 
+    @property
+    def baseline_value(self) -> str:
+        """Chaîne de limite FIXE passée à slowapi : la clé du compteur (qui inclut le montant de
+        la limite) ne change donc jamais, et un resserrement ne remet aucun compteur à zéro."""
+        count, unit = self._baseline
+        return f"{count}/{unit}"
+
+    def cost(self, _request=None) -> int:
+        """Coût d'une requête : le resserrement multiplie le coût au lieu de baisser la limite
+        (baseline 10, courant 5 -> chaque essai compte double). Au plus `current` essais."""
+        return math.ceil(self._baseline[0] / self._current[0])
+
     def tighten(self, factor: float) -> tuple[str, str]:
         """Multiplie la limite par `factor` (0 < factor <= 1), plancher FLOOR. Renvoie (avant, après)."""
         if not 0 < factor <= 1:
