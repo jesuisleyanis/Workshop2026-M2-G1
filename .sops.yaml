@@ -1,3 +1,0 @@
-creation_rules:
-  - path_regex: ^security/sops/.*\.env$
-    age: age1pcruj55s3gwvj0laglnfcxjm69742erkstjn6ut93x4wtnepc4tsy64ngk
