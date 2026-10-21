@@ -139,7 +139,7 @@ def instrument(app, service: str) -> None:
 
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
     from starlette.requests import Request
-    from starlette.responses import PlainTextResponse, Response
+    from starlette.responses import PlainTextResponse
 
     @app.middleware("http")
     async def _metrics_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -156,6 +156,8 @@ def instrument(app, service: str) -> None:
         http_request_duration_seconds.labels(service, request.method, path).observe(elapsed)
         return response
 
-    @app.get("/metrics")
-    def _metrics() -> Response:  # type: ignore[no-untyped-def]
+    # Pas d'annotation de retour : avec `from __future__ import annotations`, FastAPI
+    # devrait résoudre un nom importé localement, ce qui échoue selon sa version.
+    @app.get("/metrics", response_class=PlainTextResponse)
+    def _metrics():  # type: ignore[no-untyped-def]
         return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)

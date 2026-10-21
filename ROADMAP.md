@@ -108,7 +108,7 @@ Phase 9  Consigne add. 1  [#####.....]  50%   L0+L1+L2 faits + L3 login (49+15+1
 | Lot | Objet | Composant(s) | Statut | Preuve |
 |---|---|---|---|---|
 | L0 | Delta contrat + ADR 0004/0005/0006 + modèle données (rôles, `face_enrollments`) | `docs/contracts.md`, `docs/adr`, `resilience_db` | ✅ | contrat §5 + migration `0002` ; tests verts |
-| L1 | Service `face-id` (IA légère, reconnaissance 1:1, enrôlement) | `services/face-id` | ✅ | service + **10 tests verts** ; smoke modèle réel en recette |
+| L1 | Service `face-id` (IA légère, reconnaissance 1:1, enrôlement) | `services/face-id` | ✅ | service + **16 tests verts** (dans `make test` ; FastAPI/pydantic alignés sur auth, sinon `/metrics` empêche le démarrage) ; smoke modèle réel en recette |
 | L2 | Auth à étapes (identifiant→visage→mdp) + verrouillage 1 reprise/5 min **[critique]** | `services/auth` | ✅ | 13 tests (49 auth au total) ; LED fail-open + rôle dans le JWT |
 | L3 | Back-office React + capture webcam (`getUserMedia`, caméra PC Hôte) **[critique]** | `services/backoffice` | 🟨 | login à étapes + webcam + miroir LED livrés (14 tests) ; reste habilitations (L6) |
 | L4 | Firmware ESP8266 LED bicolore (CLion/PlatformIO, machine à états) | `iot/esp8266-led` | 🟨 | modules LED/Wi-Fi/HTTP/MQTT séparés, 3 routes HTTP ; build ESP8266 + 6 tests native verts ; recette matérielle |
