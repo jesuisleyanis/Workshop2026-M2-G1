@@ -13,22 +13,28 @@ Le front est un **site statique** (build Vite) servi par nginx **derrière le WA
 | # | Exigence | Réalisation |
 |---|---|---|
 | F1 | Page de connexion appelant `POST /api/v1/login`, stockage du JWT | `LoginPage`, `AuthProvider`, `api/tokenStore.ts` (sessionStorage) |
-| F2 | Accueil : solde total + cartes de comptes via `GET /api/v1/accounts`, dernières opérations | `DashboardPage` |
-| F3 | Formulaire de virement fictif `POST /api/v1/transactions` (choix du compte, raccourcis bénéficiaire, récapitulatif, carte de résultat) | `TransferPage`, `lib/validation.ts` |
-| F4 | Historique `GET /api/v1/transactions` avec filtres par statut | `HistoryPage` |
+| F2 | Accueil : « Bonjour », carrousel de comptes, solde total, « Envoyer à », dépenses du mois, opérations récentes | `HomePage` |
+| F3 | Envoi `POST /api/v1/transactions` : desktop = formulaire une page + récapitulatif ; mobile = assistant 4 étapes + « glisser pour envoyer » ; écrans de résultat (envoyé / refusé solde / refusé / erreur 5xx + réessai / statut inconnu sur timeout-réseau, sans réessai pour éviter un double débit) | `SendPage`, `lib/validation.ts` |
+| F4 | Historique groupé par jour, recherche, filtres statut/sens (feuille sur mobile), export CSV, détail d'opération + référence `request_id` | `HistoryPage`, `TxDetailPage`, `lib/bank.ts` |
 | F5 | Auth Bearer sur toutes les routes métier | `api/client.ts` |
-| F6 | Gestion des erreurs (corps `{error:{code,message,request_id}}`, 401, 409 `insufficient_funds`, 429, réseau, timeout) | `api/errors.ts`, `components/ui.tsx` (`ErrorBlock`), `lib/errorMessages.ts` |
-| F7 | États de chargement (squelettes), vides et de réessai | `components/ui.tsx`, `hooks/useResource.ts`, `BankDataProvider` |
-| F8 | Déconnexion sur 401 et à l'expiration du JWT (15 min), compte à rebours de session, message d'expiration | `AuthProvider` + `setUnauthorizedHandler`, `Layout` |
+| F6 | Gestion des erreurs (corps `{error:{code,message,request_id}}`, 401, 409 `insufficient_funds`, 429, réseau, timeout) | `api/errors.ts`, `components/ui.tsx` (`ErrorState`), `lib/errorMessages.ts` |
+| F7 | États de chargement (squelettes), vides et de réessai sur chaque écran | `components/ui.tsx`, `hooks/useResource.ts`, `BankDataProvider` |
+| F8 | Déconnexion sur 401 et à l'expiration du JWT (15 min), compte à rebours de session, déconnexion confirmée | `AuthProvider` + `setUnauthorizedHandler`, `Layout`, `ProfilePage` |
 | F9 | Base d'API configurable (`VITE_API_BASE`) | `config.ts` |
 | F10 | Image durcie : non-root, healthcheck, statique | `Dockerfile`, `docker/` |
-| F11 | Page Comptes : IBAN fictif, copie, « virer depuis ce compte » | `AccountsPage` |
+| F11 | RIB par compte : IBAN fictif, copier / partager / imprimer | `RibPage` |
 | F12 | Libellé de virement (absent de l'API) conservé localement | `lib/labels.ts` (localStorage, par id de transaction) |
+| F13 | Shell responsive : barre latérale ≥ 1024 px, barre d'onglets en dessous | `Layout`, `hooks/useMediaQuery.ts` |
+| F14 | Statistiques : dépenses par jour (semaine/mois, navigation), opérations de la période | `StatsPage`, `lib/bank.ts` |
+| F15 | Bandeau d'état du service (#42) : « perturbé » sur réseau/timeout/5xx, « rétabli » à la reprise, rafraîchissement 15 s | `lib/serviceStatus.ts`, `Layout`, `BankDataProvider` |
 
 ### Design
 
-Maquette « Banque Résilience » (claude.ai/design) : cadre clair, barre latérale, cartes « nuit », pastilles ok/ko.
-Jetons de couleur et utilitaires (`field`, `btn-primary`, `btn-ghost`, `tnum`) dans `src/index.css` (`@theme` Tailwind v4).
+Maquettes Claude Design « Banque Résilience » (D1–D16, desktop 1280 et mobile 390, prompt `design/CLAUDE-DESIGN-PROMPT.md`) :
+noir & blanc, cartes de compte « nuit », grands rayons, ombres douces. Jetons, animations et utilitaires
+(`card`, `field`, `search`, `btn-primary`, `btn-ghost`, `round-btn`, `tnum`) dans `src/index.css` (`@theme` Tailwind v4).
+Écrans livrés : D1, D2, D3, D4, D5, D6, D9 (détail + RIB), D16. Les écrans D7, D8, D10–D15 attendent leurs routes
+backend (#43–#51) : aucune donnée n'est inventée côté front.
 Polices **auto-hébergées** (`@fontsource`) : la CSP (`style-src 'self'`) interdit les CDN de polices.
 Écart volontaire à la maquette : les raccourcis « comptes de démonstration » ne remplissent que l'**identifiant** —
 aucun mot de passe n'est embarqué dans le bundle, servi publiquement derrière le WAF (donc lisible depuis le PC Attaquant).
