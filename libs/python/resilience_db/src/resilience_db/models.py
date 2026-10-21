@@ -81,6 +81,10 @@ class Account(Base):
     __table_args__ = (
         # Garde-fou DB : un solde ne peut jamais devenir négatif, même en cas de bug applicatif.
         CheckConstraint("balance_cents >= 0", name="ck_accounts_balance_non_negative"),
+        CheckConstraint(
+            "monthly_limit_cents IS NULL OR monthly_limit_cents >= 0",
+            name="ck_accounts_monthly_limit_non_negative",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -88,6 +92,9 @@ class Account(Base):
     iban_fake: Mapped[str] = mapped_column(String(34), unique=True, nullable=False)
     balance_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="EUR")
+    # Plafond mensuel de virement (#46). NULL = pas de plafond : comptes de service (verify_tx,
+    # trafic normal) et comptes ouverts par `auth`. Jamais de défaut implicite côté API.
+    monthly_limit_cents: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="accounts")
 

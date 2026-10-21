@@ -22,6 +22,11 @@ from resilience_db.passwords import hash_password
 
 DEFAULT_USERS = 5
 DEFAULT_BALANCE_CENTS = 100_000  # 1 000,00 EUR fictifs par compte
+# Plafond mensuel (#46) des clients de démo « humains ». demo01/demo02 sont des comptes de
+# SERVICE (verify_tx, trafic normal, service_flood) : jamais plafonnés, sinon la vérification
+# de reprise et la baseline ML (ratio 4xx) casseraient après quelques heures de trafic.
+DEFAULT_MONTHLY_LIMIT_CENTS = 300_000  # 3 000,00 EUR
+SERVICE_USERS = frozenset({"demo01", "demo02"})
 
 # Tiers FICTIFS destinataires de virements (#43). Comptes sans mot de passe utilisable : ils
 # existent pour être crédités, jamais pour se connecter. Banque fictive « 9999 » : espace
@@ -71,6 +76,7 @@ def seed_demo_data(
     *,
     users: int = DEFAULT_USERS,
     balance_cents: int = DEFAULT_BALANCE_CENTS,
+    monthly_limit_cents: int = DEFAULT_MONTHLY_LIMIT_CENTS,
 ) -> list[str]:
     """Crée demo01..demoNN avec un compte chacun. Idempotent : ignore les existants.
 
@@ -88,6 +94,7 @@ def seed_demo_data(
                 iban_fake=demo_iban(n),
                 balance_cents=balance_cents,
                 currency="EUR",
+                monthly_limit_cents=None if username in SERVICE_USERS else monthly_limit_cents,
             )
         )
         session.add(user)
@@ -213,9 +220,10 @@ def seed_beneficiaries(session: Session, *, users: int = DEFAULT_USERS) -> int:
 def main() -> int:
     password = read_secret("SEED_PASSWORD")
     users = int(os.environ.get("SEED_USERS", DEFAULT_USERS))
+    limit = int(os.environ.get("SEED_MONTHLY_LIMIT_CENTS", DEFAULT_MONTHLY_LIMIT_CENTS))
     engine = make_engine()
     with make_session_factory(engine)() as session:
-        created = seed_demo_data(session, password, users=users)
+        created = seed_demo_data(session, password, users=users, monthly_limit_cents=limit)
     sys.stdout.write(f"seed: {len(created)} utilisateur(s) créé(s): {', '.join(created) or '-'}\n")
     return 0
 
