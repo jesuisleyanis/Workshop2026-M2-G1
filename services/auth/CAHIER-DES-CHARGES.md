@@ -23,7 +23,8 @@ Service d'**authentification** de la plateforme de paiement fictive : crée des 
 | Méthode & chemin | Auth | Description |
 |---|---|---|
 | `POST /api/v1/register` | — | `{username, password}` → `201 {id, username}` ; crée aussi un compte `EUR` à solde **0** (jamais de création de monnaie). `409 username_taken` |
-| `POST /api/v1/login` | — (rate-limité) | `{username, password}` → `200 {access_token, token_type:"bearer", expires_in:900}` ; `401 invalid_credentials` ; `429 rate_limited` + `Retry-After` |
+| `POST /api/v1/login` | — (rate-limité) | `{username, password}` → `200 {access_token, token_type:"bearer", expires_in:900}` (JWT avec `auth_time`, #51) ; `401 invalid_credentials` ; `429 rate_limited` + `Retry-After` |
+| `POST /api/v1/auth/step-up` | JWT + même quota que `/login` | `{password}` → `200` nouveau jeton à `auth_time` frais (ré-authentification avant un gros virement, #51) ; `401 invalid_credentials` / `invalid_token` ; `429` ; events `auth_step_up_success` / `auth_step_up_failed`, **hors** `resilience_auth_logins_total` |
 | `GET /health` | — | Liveness (process up) |
 | `GET /ready` | — | Readiness : `200` si la DB répond (`SELECT 1`), sinon `503 db_unavailable` |
 | `GET /metrics` | — (réseau interne) | Prometheus |
