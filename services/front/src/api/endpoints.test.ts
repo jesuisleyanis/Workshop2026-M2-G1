@@ -123,6 +123,11 @@ describe('endpoints /api/v1', () => {
     expect(() => parseSchedule({ ...base, frequency: 'daily' })).toThrow()
   })
 
+  it('parseSchedule : une exécution interrompue (pending) reste lisible', () => {
+    const row = { id: 1, src_account: 1, dst_account: 2, amount_cents: 100, category: 'transfer', frequency: 'once', start_on: '2026-10-21', next_run_on: null, end_on: null, status: 'completed', last_run: { run_on: '2026-10-21', status: 'pending', error_code: null } }
+    expect(parseSchedule(row).lastRun?.status).toBe('pending')
+  })
+
   it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {
     const { api, f } = endpointsWith(() =>
       jsonResponse([{ id: 1, iban_fake: 'FR76 0000 0001', balance_cents: 125050, currency: 'EUR' }]),

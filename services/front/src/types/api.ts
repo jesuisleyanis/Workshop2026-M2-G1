@@ -141,7 +141,7 @@ export interface ScheduledTransfer {
   nextRunOn: string | null
   endOn: string | null
   status: ScheduleStatus
-  lastRun: { runOn: string; status: 'executed' | 'failed'; errorCode: string | null } | null
+  lastRun: { runOn: string; status: 'pending' | 'executed' | 'failed'; errorCode: string | null } | null
 }
 
 export interface NewSchedule {

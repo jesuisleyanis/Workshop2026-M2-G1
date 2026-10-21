@@ -229,7 +229,7 @@ export function parseSchedule(v: unknown): ScheduledTransfer {
     status: oneOf(o.status, SCHEDULE_STATUSES, 'statut de programmation'),
     lastRun: run && {
       runOn: str(run, 'run_on', 'dernière exécution'),
-      status: oneOf(run.status, ['executed', 'failed'] as const, 'exécution'),
+      status: oneOf(run.status, ['pending', 'executed', 'failed'] as const, 'exécution'),
       errorCode: optStr(run, 'error_code'),
     },
   }

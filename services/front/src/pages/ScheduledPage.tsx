@@ -99,6 +99,11 @@ export function ScheduledPage() {
                     Dernière exécution échouée le {formatDay(s.lastRun!.runOn)} : {runErrorLabel(s.lastRun!.errorCode)}.
                   </Alert>
                 )}
+                {s.lastRun?.status === 'pending' && (
+                  <Alert tone="info">
+                    Exécution du {formatDay(s.lastRun.runOn)} interrompue (service redémarré) : elle ne sera pas rejouée automatiquement, vérifiez l’historique.
+                  </Alert>
+                )}
                 {isOpen(s) && (
                   <div className="flex gap-2.5">
                     {s.status === 'active' ? (
