@@ -69,6 +69,9 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `db_error` | payment-api | Erreur base de données |
 | `beneficiary_added` | payment-api | Bénéficiaire enregistré (#43) — piste d'audit d'un ajout de compte mule après vol de session |
 | `beneficiary_removed` | payment-api | Bénéficiaire supprimé (#43) |
+| `card_frozen` | payment-api | Carte gelée par son titulaire (#47) — un seul événement par changement d'état |
+| `card_unfrozen` | payment-api | Carte dégelée (#47) |
+| `card_settings_changed` | payment-api | Réglages de carte modifiés (#47 : plafond, sans contact, paiement en ligne — noms des champs seulement) |
 | `transaction_access_denied` | payment-api | Lecture refusée d'une opération (#45 : id inconnu ou d'un tiers, message `unknown`/`foreign`) — une rafale = balayage d'ids (IDOR) |
 | `beneficiary_rejected` | payment-api | Ajout refusé (IBAN inconnu, doublon, soi-même, quota) — une rafale = énumération d'IBAN |
 | `waf_blocked` | waf (via log Nginx/ModSec) | Requête bloquée par le CRS |

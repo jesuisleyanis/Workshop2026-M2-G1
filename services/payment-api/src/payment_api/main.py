@@ -24,7 +24,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from payment_api import beneficiaries, limits, stats
+from payment_api import beneficiaries, cards, limits, stats
 from payment_api.config import SERVICE_NAME, Settings
 from payment_api.ledger import Rejection, transfer
 from payment_api.observability import (
@@ -39,6 +39,8 @@ from payment_api.schemas import (
     AccountOut,
     BeneficiaryIn,
     BeneficiaryOut,
+    CardOut,
+    CardPatch,
     LimitOut,
     ServiceStatusOut,
     SpendingOut,
@@ -287,6 +289,53 @@ def create_app(
         session=Depends(get_session),
     ):
         return stats.spending(session, user, period, now(), offset)
+
+    # ---------------------------------------------------------------- cartes (#47)
+    @app.get("/api/v1/cards", response_model=list[CardOut])
+    def list_cards(user: User = Depends(current_user), session=Depends(get_session)):
+        return cards.list_for(session, user)
+
+    def _card_status(card_id: int, status: str, event: str, user: User, session):
+        try:
+            card, changed = cards.set_status(session, user, card_id, status)
+        except Rejection as rej:
+            raise ApiError(rej.status, rej.code, rej.message)
+        if changed:  # idempotent : pas de second événement pour un état inchangé
+            log_event(log, logging.INFO, event, f"Card {card.id} {status}", user=user.username)
+        return card
+
+    @app.post("/api/v1/cards/{card_id}/freeze", response_model=CardOut)
+    def freeze_card(
+        card_id: DbId, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        return _card_status(card_id, "frozen", "card_frozen", user, session)
+
+    @app.post("/api/v1/cards/{card_id}/unfreeze", response_model=CardOut)
+    def unfreeze_card(
+        card_id: DbId, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        return _card_status(card_id, "active", "card_unfrozen", user, session)
+
+    @app.patch("/api/v1/cards/{card_id}", response_model=CardOut)
+    def update_card(
+        card_id: DbId,
+        body: CardPatch,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        changes = body.model_dump(exclude_unset=True)
+        try:
+            card = cards.update(session, user, card_id, changes)
+        except Rejection as rej:
+            raise ApiError(rej.status, rej.code, rej.message)
+        log_event(
+            log,
+            logging.INFO,
+            "card_settings_changed",
+            f"Card {card.id} settings changed: {', '.join(sorted(changes))}",
+            user=user.username,
+        )
+        return card
 
     # ---------------------------------------------------------------- bénéficiaires (#43)
     @app.get("/api/v1/beneficiaries", response_model=list[BeneficiaryOut])

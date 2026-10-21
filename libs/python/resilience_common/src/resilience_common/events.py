@@ -44,6 +44,9 @@ RESERVED_EVENTS: frozenset[str] = frozenset(
         "beneficiary_removed",
         "beneficiary_rejected",
         "transaction_access_denied",
+        "card_frozen",
+        "card_unfrozen",
+        "card_settings_changed",
         # waf
         "waf_blocked",
         # detector
