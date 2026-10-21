@@ -177,20 +177,29 @@ describe('Front - espace client', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     let down = false
     const fail = () => jsonResponse({ error: { code: 'upstream', message: 'x' } }, 503)
-    stubFetch({
+    const degraded = () => jsonResponse({ status: 'degraded', checked_at: '2026-10-21T10:00:00Z' }, 503)
+    const f = stubFetch({
       'GET /api/v1/accounts': () => (down ? fail() : jsonResponse(ACCOUNTS)),
       'GET /api/v1/transactions': () => (down ? fail() : jsonResponse(TXS)),
+      'GET /api/v1/status': () => (down ? degraded() : jsonResponse({ status: 'ok', checked_at: '2026-10-21T10:00:05Z' })),
     })
+    const statusCalls = () => f.mock.calls.filter(([u]) => String(u).endsWith('/api/v1/status'))
     try {
       renderApp('/')
       await screen.findByTestId('balance')
+      expect(statusCalls()).toHaveLength(0) // pas de sonde tant que tout va bien
       down = true
       act(() => vi.advanceTimersByTime(15_000))
       expect(await screen.findByText('Service perturbé — reprise automatique en cours')).toBeInTheDocument()
       // Les données déjà affichées restent visibles pendant l'incident.
       expect(screen.getByTestId('balance')).toHaveTextContent(/1\s?250,50/)
+      act(() => vi.advanceTimersByTime(5_000)) // sonde : encore « degraded » (503)
+      await waitFor(() => expect(statusCalls()).toHaveLength(1))
+      expect(screen.getByText('Service perturbé — reprise automatique en cours')).toBeInTheDocument()
+      const [, init] = statusCalls()[0] as unknown as [string, RequestInit]
+      expect((init.headers as Record<string, string>).Authorization).toBeUndefined() // route publique
       down = false
-      act(() => vi.advanceTimersByTime(5_000)) // sonde de reprise
+      act(() => vi.advanceTimersByTime(5_000)) // sonde de reprise : ok
       expect(await screen.findByText('Service rétabli')).toBeInTheDocument()
     } finally {
       vi.useRealTimers()

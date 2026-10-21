@@ -21,6 +21,16 @@ describe('endpoints /api/v1', () => {
     expect(init.method).toBe('POST')
   })
 
+  it('getStatus : GET /api/v1/status sans jeton ; 503 degraded = erreur serveur', async () => {
+    const { api, f } = endpointsWith(() => jsonResponse({ status: 'ok', checked_at: '2026-10-21T10:00:00Z' }))
+    expect(await api.getStatus()).toEqual({ status: 'ok', checkedAt: '2026-10-21T10:00:00Z' })
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/api/v1/status')
+    expect((init.headers as Record<string, string>).Authorization).toBeUndefined()
+    const down = endpointsWith(() => jsonResponse({ status: 'degraded', checked_at: '2026-10-21T10:00:00Z' }, 503))
+    await expect(down.api.getStatus()).rejects.toMatchObject({ status: 503 })
+  })
+
   it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {
     const { api, f } = endpointsWith(() =>
       jsonResponse([{ id: 1, iban_fake: 'FR76 0000 0001', balance_cents: 125050, currency: 'EUR' }]),

@@ -53,3 +53,9 @@ export interface TransferRequest {
   currency?: string
   label?: string
 }
+
+/** GET /api/v1/status (payment-api, public) : 200 ok, 503 degraded. */
+export interface ServiceHealth {
+  status: 'ok' | 'degraded'
+  checkedAt: string
+}

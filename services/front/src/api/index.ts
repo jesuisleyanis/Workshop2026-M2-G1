@@ -1,15 +1,19 @@
 import { API_BASE } from '../config'
 import { createApiClient, type ApiClient } from './client'
-import { parseAccounts, parseLogin, parseTransaction, parseTransactions } from './parsers'
+import { parseAccounts, parseLogin, parseServiceHealth, parseTransaction, parseTransactions } from './parsers'
 import { tokenStore } from './tokenStore'
 import { serviceStatus } from '../lib/serviceStatus'
-import type { Account, LoginRequest, LoginResponse, Transaction, TransferRequest } from '../types/api'
+import type { Account, LoginRequest, LoginResponse, ServiceHealth, Transaction, TransferRequest } from '../types/api'
 
 /** Endpoints métier /api/v1 (docs/contracts.md : préfixe /api/v1, JWT Bearer). */
 export function createEndpoints(client: ApiClient) {
   return {
     login: async (creds: LoginRequest): Promise<LoginResponse> =>
       parseLogin(await client.request('/api/v1/login', { method: 'POST', body: creds, auth: false })),
+    // Public et mis en cache côté serveur : sonde légère de reprise (un 503 « degraded » passe
+    // par onAvailability comme tout 5xx).
+    getStatus: async (signal?: AbortSignal): Promise<ServiceHealth> =>
+      parseServiceHealth(await client.request('/api/v1/status', { auth: false, signal })),
     getAccounts: async (signal?: AbortSignal): Promise<Account[]> =>
       parseAccounts(await client.request('/api/v1/accounts', { signal })),
     listTransactions: async (signal?: AbortSignal): Promise<Transaction[]> =>

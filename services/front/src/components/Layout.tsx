@@ -208,7 +208,11 @@ function Sidebar({ pathname, activeTab, expiresAt }: { pathname: string; activeT
   )
 }
 
-/** Bandeau D6 : visible pendant l'incident, « Service rétabli » à la reprise. Sonde la reprise toutes les 5 s. */
+/**
+ * Bandeau D6 : visible pendant l'incident, « Service rétabli » à la reprise. La détection vient du
+ * rafraîchissement 15 s des données (BankDataProvider) ; la reprise est sondée toutes les 5 s sur
+ * GET /api/v1/status (public, en cache 2 s côté serveur) plutôt que sur une route métier.
+ */
 function ServiceBanner({ isDesktop }: { isDesktop: boolean }) {
   const status = useServiceStatus()
   const { accounts, transactions } = useBankData()
@@ -216,7 +220,7 @@ function ServiceBanner({ isDesktop }: { isDesktop: boolean }) {
 
   useEffect(() => {
     if (status !== 'degraded') return
-    const id = setInterval(() => void api.getAccounts().catch(() => {}), 5000)
+    const id = setInterval(() => void api.getStatus().catch(() => {}), 5000)
     return () => clearInterval(id)
   }, [status])
 
