@@ -266,6 +266,25 @@ def test_service_accounts_are_never_capped_and_demo_clients_are():
     assert all(limits[f"tiers0{i}"] is None for i in range(1, 5))
 
 
+def test_seed_backfills_the_limit_of_demo_clients_seeded_before_46():
+    from resilience_db.seed import DEFAULT_MONTHLY_LIMIT_CENTS
+
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "s3cret-pass", users=3)
+        for u in s.query(User):
+            for a in u.accounts:
+                a.monthly_limit_cents = None  # état juste après la migration 0005
+        s.query(User).filter_by(username="demo03").one().accounts[0].monthly_limit_cents = None
+        s.commit()
+        seed_demo_data(s, "s3cret-pass", users=3)
+        by = {u.username: u.accounts[0].monthly_limit_cents for u in s.query(User) if u.accounts}
+    assert by["demo03"] == DEFAULT_MONTHLY_LIMIT_CENTS
+    assert by["demo01"] is None and by["demo02"] is None, "service : jamais rétro-plafonnés"
+    assert DEFAULT_MONTHLY_LIMIT_CENTS < 100_000, "plafond sous le solde de démo"
+
+
 def test_monthly_limit_cannot_be_negative():
     engine = make_engine("sqlite://")
     Base.metadata.create_all(engine)

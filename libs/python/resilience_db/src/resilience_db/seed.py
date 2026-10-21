@@ -25,7 +25,8 @@ DEFAULT_BALANCE_CENTS = 100_000  # 1 000,00 EUR fictifs par compte
 # Plafond mensuel (#46) des clients de démo « humains ». demo01/demo02 sont des comptes de
 # SERVICE (verify_tx, trafic normal, service_flood) : jamais plafonnés, sinon la vérification
 # de reprise et la baseline ML (ratio 4xx) casseraient après quelques heures de trafic.
-DEFAULT_MONTHLY_LIMIT_CENTS = 300_000  # 3 000,00 EUR
+# Sous le solde (1 000 €) : le plafond se voit et se déclenche avant le solde insuffisant.
+DEFAULT_MONTHLY_LIMIT_CENTS = 80_000  # 800,00 EUR
 SERVICE_USERS = frozenset({"demo01", "demo02"})
 
 # Tiers FICTIFS destinataires de virements (#43). Comptes sans mot de passe utilisable : ils
@@ -60,6 +61,20 @@ def demo_username(n: int) -> str:
 
 def demo_iban(n: int) -> str:
     return f"FR76 0000 0000 {n:04d} 0000 0000 000"
+
+
+def _backfill_limits(session: Session, users: int, limit: int) -> None:
+    """Clients de démo seedés avant #46 (colonne NULL après la migration) : plafond posé une fois.
+    Les comptes de service et un plafond déjà fixé ne sont jamais touchés."""
+    for n in range(1, users + 1):
+        username = demo_username(n)
+        if username in SERVICE_USERS:
+            continue
+        user = session.scalar(select(User).where(User.username == username))
+        for account in user.accounts if user else []:
+            if account.monthly_limit_cents is None:
+                account.monthly_limit_cents = limit
+    session.commit()
 
 
 def payee_iban(i: int) -> str:
@@ -100,6 +115,7 @@ def seed_demo_data(
         session.add(user)
         created.append(username)
     session.commit()
+    _backfill_limits(session, users, monthly_limit_cents)
     seed_beneficiaries(session, users=users)
     seed_history(session, [demo_username(n) for n in range(1, users + 1)])
     return created

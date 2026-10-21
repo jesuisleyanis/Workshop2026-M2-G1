@@ -50,6 +50,7 @@ def test_without_db_config_delegates_to_compose(monkeypatch):
     assert seed.main() == 0
     cmd, env = calls[0]
     assert cmd[:3] == ["docker", "compose", "-f"] and cmd[-3:] == ["python", "-m", "resilience_db.seed"]
+    assert "SEED_MONTHLY_LIMIT_CENTS" in cmd and env["SEED_MONTHLY_LIMIT_CENTS"] == "80000", "#46 transmis"
     assert "payment-api" in cmd and env["SEED_PASSWORD"] == "fake-seed-pass"
 
 
