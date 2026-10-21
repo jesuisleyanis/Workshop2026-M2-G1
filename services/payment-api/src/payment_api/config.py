@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 from resilience_db.config import read_secret
 
@@ -22,6 +24,8 @@ class Settings:
     run_migrations: bool = True
     enable_docs: bool = False
     log_level: str = "INFO"
+    status_cache_s: float = 2.0
+    clock: Callable[[], float] = field(default=time.monotonic, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if len(self.jwt_secret) < MIN_SECRET_LENGTH:
@@ -35,4 +39,5 @@ class Settings:
             run_migrations=_bool("RUN_MIGRATIONS", True),
             enable_docs=_bool("ENABLE_DOCS", False),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+            status_cache_s=float(os.environ.get("STATUS_CACHE_S", "2")),
         )

@@ -6,9 +6,11 @@ Lancement : uvicorn payment_api.main:create_app --factory --port 8001
 import logging
 import time
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from resilience_common.logging import get_logger
 from resilience_common.metrics import db_errors_total, instrument, transactions_total
@@ -29,7 +31,7 @@ from payment_api.observability import (
     log_event,
     request_id_var,
 )
-from payment_api.schemas import AccountOut, TransactionIn, TransactionOut
+from payment_api.schemas import AccountOut, ServiceStatusOut, TransactionIn, TransactionOut
 from payment_api.security import missing_token, username_from_token
 
 
@@ -135,6 +137,27 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         except SQLAlchemyError:
             raise ApiError(503, "db_unavailable", "Database unreachable")
         return {"status": "ready"}
+
+    # État public du service (bandeau client « perturbé → rétabli », #42). Sans auth, donc
+    # aucun détail interne, et mis en cache : au plus une requête BDD par fenêtre, quel que
+    # soit le trafic (pas de vecteur d'amplification ; le WAF le limite en plus par IP).
+    status_cache: dict = {"until": float("-inf"), "body": None}
+
+    @app.get("/api/v1/status", response_model=ServiceStatusOut)
+    def service_status():
+        now = settings.clock()
+        if now >= status_cache["until"]:
+            try:
+                with session_factory() as session:
+                    session.execute(text("SELECT 1"))
+                status = "ok"
+            except SQLAlchemyError:
+                status = "degraded"
+            checked_at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+            status_cache["until"] = now + settings.status_cache_s
+            status_cache["body"] = {"status": status, "checked_at": checked_at}
+        body = status_cache["body"]
+        return JSONResponse(body, status_code=200 if body["status"] == "ok" else 503)
 
     # ---------------------------------------------------------------- API métier
     @app.get("/api/v1/accounts", response_model=list[AccountOut])
