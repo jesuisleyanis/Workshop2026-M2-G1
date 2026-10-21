@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import os
-import time
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from resilience_db.config import read_secret
 
 SERVICE_NAME = "payment-api"
 MIN_SECRET_LENGTH = 32
+MIN_STATUS_CACHE_S, MAX_STATUS_CACHE_S = 0.5, 30.0
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -25,11 +24,15 @@ class Settings:
     enable_docs: bool = False
     log_level: str = "INFO"
     status_cache_s: float = 2.0
-    clock: Callable[[], float] = field(default=time.monotonic, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if len(self.jwt_secret) < MIN_SECRET_LENGTH:
             raise RuntimeError(f"JWT_SECRET trop court (min {MIN_SECRET_LENGTH} caractères)")
+        # Sous MIN_STATUS_CACHE_S, la route publique /api/v1/status redevient amplificatrice.
+        if not MIN_STATUS_CACHE_S <= self.status_cache_s <= MAX_STATUS_CACHE_S:
+            raise RuntimeError(
+                f"STATUS_CACHE_S hors bornes [{MIN_STATUS_CACHE_S}, {MAX_STATUS_CACHE_S}]"
+            )
 
     @classmethod
     def from_env(cls) -> Settings:

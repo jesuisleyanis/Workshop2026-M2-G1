@@ -53,7 +53,7 @@ Le schéma (`users`, `accounts`, `transactions`), la config de connexion, les mi
 | `RUN_MIGRATIONS` | non | `true` | Applique Alembic au démarrage (verrou : sûr si auth démarre en parallèle) |
 | `ENABLE_DOCS` | non | `false` | Expose `/docs` (dev uniquement) |
 | `LOG_LEVEL` | non | `INFO` | Niveau de log |
-| `STATUS_CACHE_S` | non | `2` | Durée de cache de `GET /api/v1/status` (borne la charge BDD de la route publique) |
+| `STATUS_CACHE_S` | non | `2` | Durée de cache de `GET /api/v1/status`, bornée à [0,5 ; 30] s (refus au démarrage sinon) |
 
 ## Lancement local
 
@@ -99,7 +99,7 @@ pytest services/payment-api
 
 - **Transaction de contrôle (`verify_tx`)** : login `auth` → `POST /api/v1/transactions` entre deux comptes seedés → attendre `201` (code retour 0) / sinon 1.
 - **Alertes Loki** : `{service="payment-api"} | json | event="db_error"` ; ratio `transaction_rejected` / `transaction_created`.
-- **`GET /api/v1/status`** (public, via WAF) : `503 degraded` ⇔ même test BDD que `/ready`, servi depuis un cache de 2 s. Effet sur la baseline ML : le front ne l'appelle qu'en mode « perturbé » (toutes les 5 s, par client) ; en régime normal, aucun trafic ajouté. Les features du collector (`sum(rate(...))`, ratios 4xx/5xx) agrègent tous les chemins, la route y est donc visible (`path="/api/v1/status"`) sans nouveau label.
+- **`GET /api/v1/status`** (public, via WAF) : `503 degraded` ⇔ même test BDD que `/ready` (`_db_reachable`), servi par un cache **à vol unique** (`status.py`) : un seul rafraîchissement à la fois, les requêtes concurrentes reçoivent la dernière valeur. Effet sur la baseline ML : **aucun** — la route est exclue de `resilience_http_*` comme `/ready` (les features du collector agrègent tous les chemins, des 503 servis en cache fausseraient le ratio 5xx et la latence) ; elle reste visible dans les logs WAF. Le front ne l'appelle qu'en mode « perturbé » (5 s par client).
 - **`/ready` 503** ⇒ la DB est injoignable (`/health` reste 200 : le conteneur n'est pas tué à tort, la remédiation décide).
 
 ## Écarts et points d'attention

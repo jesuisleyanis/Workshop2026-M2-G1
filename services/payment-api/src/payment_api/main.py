@@ -5,8 +5,8 @@ Lancement : uvicorn payment_api.main:create_app --factory --port 8001
 
 import logging
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -33,6 +33,7 @@ from payment_api.observability import (
 )
 from payment_api.schemas import AccountOut, ServiceStatusOut, TransactionIn, TransactionOut
 from payment_api.security import missing_token, username_from_token
+from payment_api.status import StatusCache
 
 
 def _migrate_with_retry(engine: Engine, log: logging.Logger, attempts: int = 5) -> None:
@@ -47,7 +48,19 @@ def _migrate_with_retry(engine: Engine, log: logging.Logger, attempts: int = 5) 
             time.sleep(2)
 
 
-def create_app(settings: Settings | None = None, engine: Engine | None = None) -> FastAPI:
+def _db_reachable(session) -> bool:
+    try:
+        session.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        return False
+    return True
+
+
+def create_app(
+    settings: Settings | None = None,
+    engine: Engine | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> FastAPI:
     settings = settings or Settings.from_env()
     engine = engine or make_engine()
     session_factory = make_session_factory(engine)
@@ -132,32 +145,22 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     @app.get("/ready")
     def ready(session=Depends(get_session)):
         # Sonde : n'incrémente PAS resilience_db_errors_total (réservé au trafic métier).
-        try:
-            session.execute(text("SELECT 1"))
-        except SQLAlchemyError:
+        if not _db_reachable(session):
             raise ApiError(503, "db_unavailable", "Database unreachable")
         return {"status": "ready"}
 
-    # État public du service (bandeau client « perturbé → rétabli », #42). Sans auth, donc
-    # aucun détail interne, et mis en cache : au plus une requête BDD par fenêtre, quel que
-    # soit le trafic (pas de vecteur d'amplification ; le WAF le limite en plus par IP).
-    status_cache: dict = {"until": float("-inf"), "body": None}
+    # État public du service (bandeau client « perturbé → rétabli », #42) : sans auth, donc
+    # aucun détail interne ; cache à vol unique (cf. status.py), limité par IP au WAF.
+    def _probe_db() -> bool:
+        with session_factory() as session:
+            return _db_reachable(session)
+
+    status_cache = StatusCache(_probe_db, settings.status_cache_s, clock)
 
     @app.get("/api/v1/status", response_model=ServiceStatusOut)
     def service_status():
-        now = settings.clock()
-        if now >= status_cache["until"]:
-            try:
-                with session_factory() as session:
-                    session.execute(text("SELECT 1"))
-                status = "ok"
-            except SQLAlchemyError:
-                status = "degraded"
-            checked_at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
-            status_cache["until"] = now + settings.status_cache_s
-            status_cache["body"] = {"status": status, "checked_at": checked_at}
-        body = status_cache["body"]
-        return JSONResponse(body, status_code=200 if body["status"] == "ok" else 503)
+        body = status_cache.get()
+        return JSONResponse(body.model_dump(), status_code=200 if body.status == "ok" else 503)
 
     # ---------------------------------------------------------------- API métier
     @app.get("/api/v1/accounts", response_model=list[AccountOut])
