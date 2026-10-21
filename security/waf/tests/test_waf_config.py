@@ -66,6 +66,14 @@ def test_delete_is_denied_everywhere_except_one_beneficiary():
     assert not denied.search("GET:/api/v1/accounts") and not denied.search("POST:/api/v1/beneficiaries")
 
 
+def test_spending_stats_route_is_rate_limited_and_read_only():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=stats_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    block = re.search(r"location = /api/v1/stats/spending \{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block and "limit_req zone=stats_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
+
+
 def test_beneficiaries_route_is_rate_limited_per_ip():
     conf = _directives(NGINX)
     assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=beneficiaries_per_ip:\d+m\s+rate=\d+r/m;", conf)
