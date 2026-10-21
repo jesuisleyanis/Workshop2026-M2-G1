@@ -470,6 +470,28 @@ describe('Front - bénéficiaires (#43)', () => {
     expect(f.mock.calls.some(([u, i]) => String(u).endsWith('/api/v1/beneficiaries/5') && (i as RequestInit).method === 'DELETE')).toBe(true)
   })
 
+  it('bénéficiaires en échec pendant un incident : rechargés sans action à la reprise', async () => {
+    loginAsStored()
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    let down = true
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/beneficiaries': () => (down ? jsonResponse({ error: { code: 'db_unavailable', message: 'x' } }, 503) : jsonResponse([LEA])),
+      'GET /api/v1/status': () => jsonResponse({ status: 'ok', checked_at: '2026-10-21T10:00:00Z' }),
+    })
+    try {
+      renderApp('/', { desktop: false })
+      await screen.findByTestId('balance')
+      expect(screen.queryByRole('button', { name: 'Envoyer à Léa Martin' })).not.toBeInTheDocument()
+      down = false
+      act(() => vi.advanceTimersByTime(15_000))
+      expect(await screen.findByRole('button', { name: 'Envoyer à Léa Martin' })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('annuler la suppression ne supprime rien', async () => {
     loginAsStored()
     const f = stubFetch({

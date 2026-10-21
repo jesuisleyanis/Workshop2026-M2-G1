@@ -1,4 +1,4 @@
-import { formatMoney } from './format'
+import { formatIban, formatMoney } from './format'
 import type { Account, Beneficiary, Transaction } from '../types/api'
 
 /**
@@ -197,7 +197,7 @@ export function recipients(accounts: Account[], views: TxView[], excludeId?: str
   for (const b of beneficiaries) {
     if (seen.has(b.accountId)) continue
     seen.add(b.accountId)
-    out.push({ id: b.accountId, name: b.name, mask: b.iban, own: false, badge: initials(b.name), short: b.name.split(' ')[0]! })
+    out.push({ id: b.accountId, name: b.name, mask: formatIban(b.iban), own: false, badge: initials(b.name) || '?', short: b.name.split(' ')[0]! })
   }
   for (const v of views) {
     const id = v.tx.toAccount

@@ -15,15 +15,18 @@ export function BankDataProvider({ children }: { children: ReactNode }) {
   const beneficiaries = useBeneficiaries()
   const { reload: reloadAccounts } = accounts
   const { reload: reloadTransactions } = transactions
+  const { reload: reloadBeneficiaries, error: beneficiariesError } = beneficiaries
 
   useEffect(() => {
     const id = setInterval(() => {
       if (document.visibilityState !== 'visible') return
       reloadAccounts()
       reloadTransactions()
+      // Rarement modifiés : rechargés seulement s'ils ont échoué (ex. pendant un incident).
+      if (beneficiariesError) reloadBeneficiaries()
     }, REFRESH_MS)
     return () => clearInterval(id)
-  }, [reloadAccounts, reloadTransactions])
+  }, [reloadAccounts, reloadTransactions, reloadBeneficiaries, beneficiariesError])
   const [labels, setLabels] = useState(labelStore.all)
   const saveLabel = useCallback((txId: string, label: string) => setLabels(labelStore.save(txId, label)), [])
 

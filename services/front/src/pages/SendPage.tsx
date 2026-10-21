@@ -302,7 +302,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
                 <span className={`rounded-full outline-offset-2 ${r.id === to ? 'outline-[3px] outline-ink outline-solid' : ''}`}>
                   <Avatar text={r.badge} index={i} size={54} />
                 </span>
-                <span className="max-w-[60px] truncate text-xs text-ink-2">{r.own ? 'Vous' : `n°${r.id}`}</span>
+                <span className="max-w-[60px] truncate text-xs text-ink-2">{r.own ? 'Vous' : r.short}</span>
               </button>
             ))}
             {!all && !query && matches.length > 4 && (
