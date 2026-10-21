@@ -1,0 +1,7 @@
+# Scripts exécutés sous Linux (WSL, conteneurs) : toujours LF, même avec core.autocrlf=true
+*.sh          text eol=lf
+*.py          text eol=lf
+scripts/verify_tx text eol=lf
+Makefile      text eol=lf
+# Fichiers chiffrés SOPS : octets exacts (MAC + date sops_lastmodified), jamais de CRLF
+security/sops/*.enc.env text eol=lf
