@@ -7,19 +7,19 @@
 # cf. ml/training/README.md), sinon baseline synthétique ; seuil calibré par
 # ml/training/data/calibration.json si présent.
 FROM python:3.12-slim AS builder
-ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 COPY libs/python/resilience_common /tmp/resilience_common
 COPY ml/detector/requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt "/tmp/resilience_common[fastapi]"
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/requirements.txt "/tmp/resilience_common[fastapi]"
 
 # Outils ML de DEV (make ml-tools / train / calibrate / test-ml) : même Python et même
 # scikit-learn que le runtime, sans rien installer sur le poste. Le dépôt est monté en
 # /src au lancement ; cette étape n'entre pas dans l'image finale du detector.
 FROM builder AS ml-tools
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN pip install "/tmp/resilience_common[fastapi,test]"
+RUN --mount=type=cache,target=/root/.cache/pip pip install "/tmp/resilience_common[fastapi,test]"
 WORKDIR /src
 
 FROM builder AS trainer

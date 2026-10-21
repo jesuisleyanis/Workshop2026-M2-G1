@@ -92,6 +92,9 @@ make seed        # comptes fictifs demo01..demo05 financés
 # Détails des cibles make : `make help` ; procédures scripts : scripts/README.md
 ```
 
+Toutes les commandes (lancer, entraîner le ML seul, démontrer, tester, dépanner) : [`docs/commandes.md`](docs/commandes.md).
+Plan d'optimisation du lancement : [`docs/plan-optimisation-lancement.md`](docs/plan-optimisation-lancement.md).
+
 ## Vérifier le système
 
 - **WAF (seul point HTTP exposé)** : `https://localhost` (80/443) — front « Banque Résilience » ; les API internes ne sont pas publiées. Le profil `iot` expose uniquement MQTT sur `192.168.137.1:1883`.

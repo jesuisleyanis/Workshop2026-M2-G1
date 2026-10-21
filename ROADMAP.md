@@ -200,6 +200,21 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | P4S-06/03 | Doc : « aucun secret en image » (clé TLS figée) et audit WAF | Exception de labo documentée (clé TLS), nuance `read_only`, résiduel journal d'audit WAF | `hardening.md`, `docs/ebios-rm.md §5.3` |
 | P4S-01/07 | Résiduels non corrigeables hors stack : passerelle Alertmanager non authentifiée, HTTP clair/TLS | Portés comme risques résiduels + commentaire compose ; génération hex des secrets (évite de casser l'URL du pg-exporter) | `docs/ebios-rm.md §5.3`, `docker-compose.yml`, `security/sops/secrets.example.env` |
 
+### Lancement de la stack — fiabilité et vitesse (branche `perf/lancement-stack`)
+
+> Plan et constats : [`docs/plan-optimisation-lancement.md`](docs/plan-optimisation-lancement.md). Commandes : [`docs/commandes.md`](docs/commandes.md).
+
+| # | Écart | Résolution | Statut / preuve |
+|---|---|---|---|
+| L1 / C1 | `make up*` ne levait pas le profil `ml` : **aucun collector/detector, donc pas de détection** ; `down` ne l'arrêtait pas | `PROFILES_DEMO` = `demo` + `ml` ; `down`/`ps` couvrent tous les profils déclarés | ✅ `infra/tests/test_launch_contract.py` |
+| L1 / C2 | Compose ne lisait pas le `.env` racine (cherché dans `infra/compose/`) → secrets vides | `COMPOSE` passe `--env-file .env` ; `check-env` échoue clairement sans `.env` | ✅ test + `docker compose config` (sans `--env-file` : erreur `GRAFANA_PASSWORD`) |
+| L2 / C3 | Aucun `.dockerignore` racine : un `COPY` trop large pourrait embarquer `.env`/clés ou des caches locaux | `.dockerignore` racine (secrets, VCS, caches, artefacts). Mesuré : BuildKit ne transférait déjà que les chemins des `COPY` (~50 kB), donc gain de **sécurité**, pas de vitesse | ✅ test (entrées de build conservées, secrets exclus) |
+| L2 / C5 | `PIP_NO_CACHE_DIR` : tout re-télécharger à chaque changement de dépendances | `RUN --mount=type=cache,target=/root/.cache/pip` (étapes builder, image finale inchangée) | ✅ test ; build réel des 6 images racine OK (froid 4 min 08, rebuild à chaud 35 s) |
+| L3 / C4 | `up` entraînait le modèle sur l'hôte (sklearn local requis) alors que le build detector ré-entraîne | `model` retiré de `up*`, passe par l'image `ml-tools` ; cibles `build`, `start`, `start-full`, `retrain-detector` | ✅ test |
+| L4 / C6 | `depends_on` sans attente de santé | `condition: service_healthy` vers toute dépendance qui a un healthcheck | ✅ test + `docker compose config` |
+| L4 / C7 | Dashboard/Grafana publiés nulle part : visibilité du temps 5 de la démo | **Décision équipe** : `127.0.0.1:<port>` ou route WAF authentifiée | ⬜ à trancher |
+| — | `test_mosquitto_is_limited_to_iot_profile_and_hotspot` rouge (`1883:1883` au lieu de `192.168.137.1:1883:1883`) | Préexistant sur `main`, hors de ce lot | 🔴 à corriger (profil `iot`) |
+
 ## Risques projet (vivant)
 
 | Risque | Impact | Parade | Statut |

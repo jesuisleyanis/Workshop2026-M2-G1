@@ -1,12 +1,13 @@
+# syntax=docker/dockerfile:1
 # Assistant opérateur RAG - lecture documentaire seule.
 # CONTEXTE DE BUILD = RACINE DU REPO (la lib commune est hors de assistant/) :
 #   docker build -f assistant/Dockerfile -t resilience/assistant .
 FROM python:3.12-slim AS builder
-ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 COPY assistant/requirements.txt ./requirements.txt
 COPY libs/python/resilience_common ./resilience_common
-RUN python -m venv /opt/venv \
+RUN --mount=type=cache,target=/root/.cache/pip python -m venv /opt/venv \
  && /opt/venv/bin/pip install -r requirements.txt ./resilience_common
 
 FROM python:3.12-slim

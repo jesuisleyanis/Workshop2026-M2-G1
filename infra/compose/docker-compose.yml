@@ -66,7 +66,10 @@ services:
     volumes:
       - waf-deny:/etc/nginx/deny:rw
       - waf-logs:/var/log/modsec:rw
-    depends_on: [front, payment-api, auth]
+    depends_on:
+      front: { condition: service_started }
+      payment-api: { condition: service_healthy }
+      auth: { condition: service_healthy }
     mem_limit: 256m
     healthcheck:
       # /healthz est servi par le WAF lui-même (sans upstream) ; cert auto-signé -> -k.
@@ -85,7 +88,8 @@ services:
     volumes:
       - waf-logs:/var/log/modsec:ro
     group_add: ["101"]         # groupe nginx : lecture garantie même si l'audit log est créé en 0640
-    depends_on: [waf]
+    depends_on:
+      waf: { condition: service_healthy }
     read_only: true
     mem_limit: 64m
     healthcheck:
@@ -117,7 +121,8 @@ services:
       POSTGRES_USER: resilience
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
-    depends_on: [postgres]
+    depends_on:
+      postgres: { condition: service_healthy }
     read_only: true
     tmpfs: ["/tmp"]
     healthcheck:
@@ -137,7 +142,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
-    depends_on: [postgres]
+    depends_on:
+      postgres: { condition: service_healthy }
     read_only: true
     tmpfs: ["/tmp"]
     healthcheck:
@@ -217,7 +223,9 @@ services:
       # URL COMPLÈTE de l'endpoint (le detector POSTe tel quel, cf. ml/detector/core.py)
       REMEDIATION_URL: http://remediation:8005/events
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
-    depends_on: [collector, remediation]
+    depends_on:
+      collector: { condition: service_started }
+      remediation: { condition: service_healthy }
     read_only: true
     tmpfs: ["/tmp"]
     profiles: [ml]
@@ -270,7 +278,9 @@ services:
       - ../../infra/ansible/backups:/opt/backups:ro          # dumps sains (pg_backup.yml côté hôte)
       - remediation-journal:/var/lib/remediation:rw          # journal d'incidents SQLite (persistant, survit au redémarrage)
     group_add: ["101"]         # groupe nginx du WAF : droit d'écrire dans le volume waf-deny
-    depends_on: [docker-socket-proxy, postgres]
+    depends_on:
+      docker-socket-proxy: { condition: service_started }
+      postgres: { condition: service_healthy }
     # Racine en lecture seule (CDC §5.4) : seuls points inscriptibles = volume journal, volume
     # waf-deny partagé, et /tmp (tmpfs) pour les artefacts ansible-runner (ANSIBLE_HOME/LOCAL_TEMP/PRIVATE_DATA_DIR).
     read_only: true
@@ -294,7 +304,9 @@ services:
       REMEDIATION_UPSTREAM: remediation:8005
       REMEDIATION_AUTH_HEADER: "Bearer ${REMEDIATION_TOKEN}"
       PROMETHEUS_UPSTREAM: prometheus:9090
-    depends_on: [remediation, prometheus]
+    depends_on:
+      remediation: { condition: service_healthy }
+      prometheus: { condition: service_started }
     read_only: true
     tmpfs: ["/tmp"]
     mem_limit: 128m
@@ -384,7 +396,8 @@ services:
     networks: [data, obs]
     environment:
       DATA_SOURCE_NAME: "postgresql://resilience:${POSTGRES_PASSWORD}@postgres:5432/resilience?sslmode=disable"
-    depends_on: [postgres]
+    depends_on:
+      postgres: { condition: service_healthy }
     mem_limit: 64m
 
   # ---------------------------------------------------------------- assistant RAG (profil ai)

@@ -60,3 +60,6 @@ ml/training/data/*.tmp
 # Journal et PID du lanceur de scénarios (exécution locale)
 attacks/.runlog
 attacks/.run.pid
+
+# Graphe de connaissance local (graphify) — régénérable
+graphify-out/

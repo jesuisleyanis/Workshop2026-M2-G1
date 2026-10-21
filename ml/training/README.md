@@ -92,7 +92,7 @@ effets finiraient dans la baseline « normale » ; et en dev, l'attaque et le tr
 | 3 | `make capture-attack SC=service_flood` (puis `auth_abuse`, `web_attack`, `data_corruption`) | joue le scénario (`ATTACK_S=20` s) sur fond de trafic normal ; étiquette **seulement** la fenêtre attaque + 30 s (retombée des `rate()`) et l'ajoute à `data/attacks_real.csv` via un `.tmp` |
 | 4 | `make calibrate` | ré-entraîne **sans** calibration puis place le seuil entre le normal et le pic le plus faible des attaques ; MTTD par scénario ; écrit `data/calibration.json` (+ `calibration.report.json`, toujours) |
 | 5 | `make train` | ré-entraîne avec la calibration (même empreinte, sinon échec) ; rapport `attaques RÉELLES` (détection, score max, routage) |
-| 6 | `git add ml/training/data/*.csv ml/training/data/calibration.json` puis `docker compose -f infra/compose/docker-compose.yml build detector` | l'image du detector embarque le modèle réel |
+| 6 | `make retrain-detector` puis `git add ml/training/data/*.csv ml/training/data/calibration.json` | le build du detector ré-entraîne sur ces données et le relance seul : l'image embarque le modèle réel |
 
 Lecture des résultats de `calibrate` (code retour) :
 - **0** : séparable et MTTD <= `--max-mttd` (20 s) pour chaque passage de chaque scénario.

@@ -2,12 +2,22 @@
 # Flow du projet : on code, on teste, on documente, on met à jour la roadmap.
 
 SHELL := /bin/bash   # pipefail dans les recettes de tests
-COMPOSE := docker compose -f infra/compose/docker-compose.yml
+# --env-file .env : Compose chercherait sinon le .env dans infra/compose/ (répertoire du fichier
+# compose), où il n'existe pas -> POSTGRES_PASSWORD, JWT_SECRET, tokens vides. Affectation récursive
+# (`=`) : le wildcard est évalué à l'exécution de la recette, donc APRÈS `make decrypt`.
+COMPOSE = docker compose -f infra/compose/docker-compose.yml $(if $(wildcard .env),--env-file .env)
 ROOT    := $(shell pwd)
 # Charge .env (produit par `make decrypt`) dans l'environnement d'une cible : SEED_PASSWORD, tokens...
 LOADENV := set -a; [ -f .env ] && . ./.env; set +a;
 
-.PHONY: help up up-full up-iot down seed verify demo attack stop-attack reset test test-py test-front audit package decrypt model \
+# Profils Compose (infra/compose/docker-compose.yml). `demo` = services sans profil (chemin critique) ;
+# `ml` = collector + detector : SANS lui, aucune détection, donc pas de Zero-Touch Recovery.
+PROFILES_DEMO := --profile demo --profile ml
+PROFILES_FULL := $(PROFILES_DEMO) --profile full
+PROFILES_ALL  := $(PROFILES_FULL) --profile iot --profile attack --profile ai
+
+.PHONY: help up up-full up-iot build start start-full ps down check-env seed verify demo attack stop-attack reset \
+        test test-py test-front audit package decrypt model retrain-detector \
         traffic train capture-baseline capture-attack calibrate ml-tools test-ml
 
 ML_DATA  := ml/training/data
@@ -36,28 +46,47 @@ help: ## Affiche cette aide
 decrypt: ## Déchiffre les secrets SOPS vers .env
 	scripts/decrypt-secrets.sh
 
-model: ## Entraîne le modèle ML si l'artefact est absent (requis avant le build du detector)
+# Aperçu local uniquement : `up` n'en dépend PAS, le build du detector entraîne lui-même le modèle
+# (étape `trainer` de ml/detector/Dockerfile). Tourne dans l'image ml-tools : aucun sklearn sur le poste.
+model: ml-tools ## Entraîne le modèle dans ml/training/artifacts/ s'il est absent (aperçu, facultatif)
 	@if [ -f ml/training/artifacts/model.joblib ] && [ -f ml/training/artifacts/baseline_stats.json ]; then \
 	  echo "== Modèle présent (ml/training/artifacts/) — pas de ré-entraînement =="; \
 	else \
-	  echo "== Entraînement du modèle (python -m ml.training.train) =="; \
-	  $(PYTHON) -m ml.training.train; \
+	  echo "== Entraînement du modèle (image $(ML_TOOLS)) =="; \
+	  $(ML_DOCKER) -w /src $(ML_TOOLS) python -m ml.training.train --version $(VERSION) $(TRAIN_DATA_ARGS); \
 	fi
 
-up: decrypt model ## Lève la stack (profil démo minimal)
-	$(COMPOSE) --profile demo up -d --build
+check-env:
+	@[ -f .env ] || { echo "ERREUR : .env absent — lancer \`make decrypt\` (clé age requise, voir security/sops/README.md)."; exit 1; }
 
-up-full: decrypt model ## Lève la stack complète (observabilité + full)
-	$(COMPOSE) --profile demo --profile full up -d --build
+up: decrypt check-env ## Construit et lève la stack démo (chemin critique + détection ML)
+	$(COMPOSE) $(PROFILES_DEMO) up -d --build
 
-up-iot: decrypt ## Lève la stack avec le broker MQTT sur le point d'accès
-	$(COMPOSE) --env-file .env --profile demo --profile iot up -d --build
+up-full: decrypt check-env ## Construit et lève la stack complète (démo + ML + observabilité full)
+	$(COMPOSE) $(PROFILES_FULL) up -d --build
 
-ps:
-	$(COMPOSE) --env-file .env ps
+up-iot: decrypt check-env ## Construit et lève la stack démo + broker MQTT sur le point d'accès
+	$(COMPOSE) $(PROFILES_DEMO) --profile iot up -d --build
 
-down: ## Arrête et nettoie la stack
-	$(COMPOSE) --profile demo --profile full --profile iot --profile attack --profile ai down
+build: check-env ## Construit les images (démo + ML + full) sans rien lancer
+	$(COMPOSE) $(PROFILES_FULL) build
+
+start: check-env ## Relance la stack démo SANS rebuild (images déjà construites)
+	$(COMPOSE) $(PROFILES_DEMO) up -d
+
+start-full: check-env ## Relance la stack complète SANS rebuild
+	$(COMPOSE) $(PROFILES_FULL) up -d
+
+ps: ## État des conteneurs (tous profils)
+	$(COMPOSE) $(PROFILES_ALL) ps
+
+down: ## Arrête et nettoie la stack (tous profils)
+	$(COMPOSE) $(PROFILES_ALL) down
+
+# Le build du detector ré-entraîne le modèle avec ml/training/data/{baseline_real.csv,calibration.json}.
+retrain-detector: check-env ## Reconstruit le detector (ré-entraînement au build) et le relance seul
+	$(COMPOSE) $(PROFILES_DEMO) build detector
+	$(COMPOSE) $(PROFILES_DEMO) up -d --no-deps detector
 
 seed: ## Peuple les données fictives (resilience_db.seed, via le conteneur payment-api)
 	@$(LOADENV) python3 scripts/seed.py

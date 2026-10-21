@@ -4,17 +4,17 @@
 
 # ---- Étape 1 : build des dépendances dans un venv isolé --------------------------------
 FROM python:3.12-slim AS builder
-ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /build
 COPY services/face-id/requirements.txt ./requirements.txt
-RUN pip install -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
 COPY libs/python/resilience_common ./libs/resilience_common
 COPY libs/python/resilience_db ./libs/resilience_db
 COPY services/face-id/pyproject.toml ./service/pyproject.toml
 COPY services/face-id/src ./service/src
-RUN pip install --no-deps ./libs/resilience_common ./libs/resilience_db ./service
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-deps ./libs/resilience_common ./libs/resilience_db ./service
 
 # ---- Étape 2 : image d'exécution minimale ---------------------------------------------
 FROM python:3.12-slim
