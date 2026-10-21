@@ -12,6 +12,12 @@ export function createEndpoints(client: ApiClient) {
   return {
     login: async (creds: LoginRequest): Promise<LoginResponse> =>
       parseLogin(await client.request('/api/v1/login', { method: 'POST', body: creds, auth: false })),
+    // Ré-authentification d'un gros virement (#51) : Bearer de la session, nouveau jeton à
+    // auth_time frais. Un 401 (mauvais mot de passe) ne déconnecte pas : la modale le gère.
+    stepUp: async (password: string): Promise<LoginResponse> =>
+      parseLogin(
+        await client.request('/api/v1/auth/step-up', { method: 'POST', body: { password }, logoutOnUnauthorized: false }),
+      ),
     // Public et mis en cache côté serveur. Un 503 « degraded » signale la panne ; un 200 ne prouve
     // que l'accès BDD de payment-api, pas la reprise des routes métier (reportRecovery: false).
     getStatus: async (signal?: AbortSignal): Promise<ServiceHealth> =>
