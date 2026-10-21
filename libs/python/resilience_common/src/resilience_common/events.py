@@ -23,6 +23,8 @@ RESERVED_EVENTS: frozenset[str] = frozenset(
         "auth_login_success",
         "auth_login_failed",
         "auth_rate_limited",
+        "auth_step_up_success",
+        "auth_step_up_failed",
         # auth — consigne additionnelle 1 (authentification à étapes + LED)
         "auth_identify_started",
         "auth_face_recognized",

@@ -53,6 +53,8 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `auth_login_success` | auth | Connexion réussie |
 | `auth_login_failed` | auth | Échec de connexion (mauvais identifiants) |
 | `auth_rate_limited` | auth | Requête rejetée par le rate-limit |
+| `auth_step_up_success` | auth | Ré-authentification réussie avant un gros virement (#51) — nouveau jeton à `auth_time` frais |
+| `auth_step_up_failed` | auth | Mot de passe refusé à la ré-authentification (#51) — hors `resilience_auth_logins_total` |
 | `auth_identify_started` | auth | Étape 1 du back-office : identifiant saisi, caméra activée (consigne add. 1) |
 | `auth_face_recognized` | auth | Étape 2 : visage reconnu, saisie du mot de passe débloquée |
 | `auth_face_rejected` | auth | Étape 2 : visage non reconnu (identifiant vidé, caméra éteinte) |

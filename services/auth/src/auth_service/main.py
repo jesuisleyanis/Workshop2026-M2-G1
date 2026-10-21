@@ -44,11 +44,16 @@ from auth_service.schemas import (
     LoginRequest,
     RateLimitOut,
     RegisterRequest,
+    StepUpRequest,
     TightenRequest,
     TokenOut,
     UserOut,
 )
-from auth_service.security import create_access_token, internal_token_matches
+from auth_service.security import (
+    create_access_token,
+    internal_token_matches,
+    username_from_bearer,
+)
 
 
 def _migrate_with_retry(engine: Engine, log: logging.Logger, attempts: int = 5) -> None:
@@ -224,6 +229,45 @@ def create_app(
             logging.INFO,
             "auth_login_success",
             f"User {user.username} logged in",
+            http_status=200,
+            user=user.username,
+        )
+        return TokenOut(access_token=token, expires_in=expires_in)
+
+    @app.post("/api/v1/auth/step-up", response_model=TokenOut)
+    @limiter.limit(rate)  # même quota que /login : pas de force brute par cette porte
+    def step_up(
+        request: Request,
+        body: StepUpRequest,
+        authorization: str | None = Header(default=None),
+        session=Depends(get_session),
+    ):
+        """Ré-authentification (#51) : session valide + mot de passe -> jeton à `auth_time` frais.
+
+        Hors métriques de login (resilience_auth_logins_total alimente la détection de force
+        brute) : un échec est tracé par son propre événement.
+        """
+        username = username_from_bearer(authorization, settings.jwt_secret)
+        if username is None:
+            raise ApiError(401, "invalid_token", "Invalid token", {"WWW-Authenticate": "Bearer"})
+        user = session.scalar(select(User).where(User.username == username))
+        valid = verify_password(body.password, user.password_hash if user else DUMMY_HASH)
+        if user is None or not valid:
+            log_event(
+                log,
+                logging.WARNING,
+                "auth_step_up_failed",
+                f"Step-up failed for user {username}",
+                http_status=401,
+                user=username,
+            )
+            raise ApiError(401, "invalid_credentials", "Invalid credentials")
+        token, expires_in = create_access_token(user.username, settings.jwt_secret)
+        log_event(
+            log,
+            logging.INFO,
+            "auth_step_up_success",
+            f"User {user.username} re-authenticated",
             http_status=200,
             user=user.username,
         )

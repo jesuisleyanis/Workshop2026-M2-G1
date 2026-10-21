@@ -19,6 +19,8 @@ NORMALIZED_EVENTS = frozenset(
         "auth_login_success",
         "auth_login_failed",
         "auth_rate_limited",
+        "auth_step_up_success",
+        "auth_step_up_failed",
         "transaction_created",
         "transaction_rejected",
         "db_error",
