@@ -7,6 +7,7 @@ from enum import Enum, StrEnum
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    true,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -169,6 +171,46 @@ class Beneficiary(Base):
     display_name: Mapped[str] = mapped_column(String(64), nullable=False)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
     iban_fake: Mapped[str] = mapped_column(String(34), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+CARD_MAX_PAYMENT_LIMIT_CENTS = 1_000_000  # 10 000,00 EUR
+
+
+class Card(Base):
+    """Carte bancaire fictive (#47). JAMAIS de numéro complet (PAN) ni de CVV : `last4` seul."""
+
+    __tablename__ = "cards"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'frozen')", name="ck_cards_status_valid"),
+        CheckConstraint("expiry_month BETWEEN 1 AND 12", name="ck_cards_expiry_month"),
+        CheckConstraint(
+            f"payment_limit_cents BETWEEN 0 AND {CARD_MAX_PAYMENT_LIMIT_CENTS}",
+            name="ck_cards_payment_limit_bounds",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False, index=True)
+    last4: Mapped[str] = mapped_column(String(4), nullable=False)
+    holder: Mapped[str] = mapped_column(String(64), nullable=False)
+    expiry_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    expiry_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="active", server_default="active"
+    )
+    payment_limit_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    contactless: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
+    online_payments: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utcnow,

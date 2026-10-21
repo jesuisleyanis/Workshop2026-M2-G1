@@ -5,8 +5,16 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
-from resilience_db.models import TransactionCategory
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
+from resilience_db.models import CARD_MAX_PAYMENT_LIMIT_CENTS, TransactionCategory
 
 
 class AccountOut(BaseModel):
@@ -101,3 +109,36 @@ class LimitOut(BaseModel):
     used_cents: int
     remaining_cents: int | None
     period_end: date  # 1er du mois suivant (UTC), date de remise à zéro
+
+
+class CardOut(BaseModel):
+    """Jamais de numéro complet ni de CVV : ils n'existent pas côté serveur."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    account_id: int
+    last4: str
+    holder: str
+    expiry_month: int
+    expiry_year: int
+    status: Literal["active", "frozen"]
+    payment_limit_cents: int
+    contactless: bool
+    online_payments: bool
+
+
+class CardPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # pas de champ inattendu (ex. status, last4)
+
+    payment_limit_cents: StrictInt | None = Field(None, ge=0, le=CARD_MAX_PAYMENT_LIMIT_CENTS)
+    contactless: StrictBool | None = None
+    online_payments: StrictBool | None = None
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> CardPatch:
+        if not self.model_fields_set or any(
+            getattr(self, f) is None for f in self.model_fields_set
+        ):
+            raise ValueError("at least one non-null setting is required")
+        return self

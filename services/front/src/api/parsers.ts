@@ -1,5 +1,5 @@
 import { ApiError } from './errors'
-import type { Account, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
+import type { Account, Card, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
 import { isCategory } from '../lib/categories'
 
 type Obj = Record<string, unknown>
@@ -168,4 +168,37 @@ export function parseLimits(v: unknown): AccountLimit[] {
       periodEnd: str(o, 'period_end', 'plafond'),
     }
   })
+}
+
+export function parseCard(v: unknown): Card {
+  const o = asObj(v, 'carte')
+  const last4 = str(o, 'last4', 'carte').replace(/\D/g, '').slice(-4)
+  return {
+    id: str(o, 'id', 'carte'),
+    accountId: str(o, 'account_id', 'carte'),
+    last4,
+    holder: str(o, 'holder', 'carte'),
+    expiryMonth: num(o, 'expiry_month', 'carte'),
+    expiryYear: num(o, 'expiry_year', 'carte'),
+    status: cardStatus(o.status),
+    paymentLimit: num(o, 'payment_limit_cents', 'carte') / 100,
+    contactless: bool(o, 'contactless', 'carte'),
+    onlinePayments: bool(o, 'online_payments', 'carte'),
+  }
+}
+
+/** Échec fermé : un statut inconnu n'est jamais affiché « Active » (carte peut-être inutilisable). */
+function cardStatus(v: unknown): Card['status'] {
+  if (v === 'active' || v === 'frozen') return v
+  throw new ApiError(0, 'invalid_response', 'Statut de carte inconnu.')
+}
+
+function bool(o: Obj, key: string, what: string): boolean {
+  const v = o[key]
+  if (typeof v === 'boolean') return v
+  throw new ApiError(0, 'invalid_response', `Champ « ${key} » invalide (${what}).`)
+}
+
+export function parseCards(v: unknown): Card[] {
+  return list(v, 'cards', 'cartes').map(parseCard)
 }

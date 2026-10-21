@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createApiClient } from './client'
 import { createEndpoints } from './index'
 import { decodeJwtClaims, decodeJwtExp } from './tokenStore'
-import { parseAccounts, parseLimits, parseLogin, parseTransaction } from './parsers'
+import { parseAccounts, parseCard, parseLimits, parseLogin, parseTransaction } from './parsers'
 import { fakeJwt, jsonResponse } from '../test/helpers'
 
 function endpointsWith(handler: (url: string, init?: RequestInit) => Response) {
@@ -94,6 +94,25 @@ describe('endpoints /api/v1', () => {
       { accountId: '1', limit: 2000, used: 10.5, remaining: 1989.5, periodEnd: '2026-11-01' },
       { accountId: '2', limit: null, used: 0, remaining: null, periodEnd: '2026-11-01' },
     ])
+  })
+
+  it('cartes : liste parsée (centimes -> euros), PATCH partiel en centimes', async () => {
+    const card = { id: 9, account_id: 1, last4: '4001', holder: 'C D', expiry_month: 3, expiry_year: 2029, status: 'frozen', payment_limit_cents: 150000, contactless: true, online_payments: false }
+    const { api, f } = endpointsWith((_u, init) => jsonResponse(init?.method === 'GET' ? [card] : card))
+    expect(await api.listCards()).toEqual([
+      { id: '9', accountId: '1', last4: '4001', holder: 'C D', expiryMonth: 3, expiryYear: 2029, status: 'frozen', paymentLimit: 1500, contactless: true, onlinePayments: false },
+    ])
+    await api.updateCard('9', { paymentLimit: 20.5, onlinePayments: true })
+    expect(f.mock.calls[1]).toEqual(['/api/v1/cards/9', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ payment_limit_cents: 2050, online_payments: true }) })])
+    await api.freezeCard('9')
+    expect(f.mock.calls[2]).toEqual(['/api/v1/cards/9/freeze', expect.objectContaining({ method: 'POST' })])
+  })
+
+  it('parseCard : échec fermé sur un statut ou un booléen inattendu (jamais « Active » par défaut)', () => {
+    const base = { id: 9, account_id: 1, last4: '4001', holder: 'X', expiry_month: 1, expiry_year: 2029, status: 'active', payment_limit_cents: 100, contactless: true, online_payments: false }
+    expect(parseCard(base).status).toBe('active')
+    expect(() => parseCard({ ...base, status: 'blocked' })).toThrow(/Statut de carte inconnu/)
+    expect(() => parseCard({ ...base, contactless: undefined })).toThrow(/contactless/)
   })
 
   it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {

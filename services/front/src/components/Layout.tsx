@@ -30,6 +30,7 @@ const TABS: Screen[] = [
 /** Services (barre latérale desktop, menu Profil sur mobile). Les autres arrivent avec leurs tickets backend. */
 export const SERVICES: Screen[] = [
   { path: '/beneficiaries', label: 'Bénéficiaires', icon: 'user', title: 'Bénéficiaires' },
+  { path: '/cards', label: 'Cartes', icon: 'card', title: 'Cartes' },
   { path: '/rib', label: 'RIB', icon: 'bank', title: 'Relevé d’identité bancaire' },
   { path: '/limits', label: 'Plafonds', icon: 'sliders', title: 'Plafonds de virement' },
 ]
@@ -40,6 +41,7 @@ const SUBSCREENS: { prefix: string; title: string; parent: string }[] = [
   { prefix: '/rib', title: 'Relevé d’identité bancaire', parent: '/profile' },
   { prefix: '/beneficiaries', title: 'Bénéficiaires', parent: '/profile' },
   { prefix: '/limits', title: 'Plafonds de virement', parent: '/profile' },
+  { prefix: '/cards', title: 'Cartes', parent: '/profile' },
 ]
 
 export function Layout() {

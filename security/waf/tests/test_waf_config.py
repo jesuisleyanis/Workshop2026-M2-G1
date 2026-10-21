@@ -41,29 +41,43 @@ def test_only_public_routes_are_proxied():
     locations = re.findall(r"location\s+(?:[=~]\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
                               "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/stats/spending",
-                              "^/api/v1/transactions/[0-9]+$", "/api/v1/limits", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
+                              "^/api/v1/transactions/[0-9]+$", "/api/v1/limits", "/api/v1/cards",
+                              "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
 
 
-def test_crs_allows_delete_but_not_put_or_patch():
+def test_crs_allows_delete_and_patch_but_not_put():
     # #43 : DELETE /api/v1/beneficiaries/{id}. Sans ALLOWED_METHODS, la règle CRS 911100 le bloque.
     m = re.search(r'ALLOWED_METHODS="([^"]+)"', DOCKERFILE)
     assert m, "ALLOWED_METHODS doit être fixé dans l'image WAF"
-    assert set(m.group(1).split()) == {"GET", "HEAD", "POST", "OPTIONS", "DELETE"}
+    assert set(m.group(1).split()) == {"GET", "HEAD", "POST", "OPTIONS", "DELETE", "PATCH"}
 
 
-def test_delete_is_denied_everywhere_except_one_beneficiary():
+def test_delete_and_patch_are_denied_everywhere_except_their_one_route():
     conf = _directives(NGINX)
-    m = re.search(r'map "\$request_method:\$uri" \$method_denied \{\s*default 0;\s*"~([^"]+)" 1;\s*\}', conf)
+    m = re.search(r'map "\$request_method:\$uri" \$method_denied \{\s*default 0;((?:\s*"~[^"]+" 1;)+)\s*\}', conf)
     assert m, "map $method_denied absente"
     assert re.search(r"if \(\$method_denied\)\s*\{\s*return 405;\s*\}", conf)
-    denied = re.compile(m.group(1))
-    assert not denied.search("DELETE:/api/v1/beneficiaries/12")
+    rules = [re.compile(r) for r in re.findall(r'"~([^"]+)" 1;', m.group(1))]
+
+    def denied(probe: str) -> bool:
+        return any(r.search(probe) for r in rules)
+
+    assert not denied("DELETE:/api/v1/beneficiaries/12")
+    assert not denied("PATCH:/api/v1/cards/3")
     for probe in ("DELETE:/api/v1/beneficiaries", "DELETE:/api/v1/beneficiaries/12/x",
-                  "DELETE:/api/v1/accounts", "DELETE:/api/v1/auth/session", "DELETE:/"):
-        assert denied.search(probe), probe
-    assert not denied.search("GET:/api/v1/accounts") and not denied.search("POST:/api/v1/beneficiaries")
+                  "DELETE:/api/v1/accounts", "DELETE:/api/v1/cards/3", "DELETE:/",
+                  "PATCH:/api/v1/cards", "PATCH:/api/v1/cards/3/freeze", "PATCH:/api/v1/accounts",
+                  "PATCH:/api/v1/beneficiaries/12"):
+        assert denied(probe), probe
+    assert not denied("GET:/api/v1/accounts") and not denied("POST:/api/v1/cards/3/freeze")
+
+
+def test_cards_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=cards_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/cards\s+\{\s*limit_req zone=cards_per_ip", conf)
 
 
 def test_spending_stats_route_is_rate_limited_and_read_only():

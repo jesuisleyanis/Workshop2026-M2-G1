@@ -15,7 +15,7 @@ export interface ApiClientOptions {
 }
 
 export interface RequestOptions {
-  method?: 'GET' | 'POST' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
   body?: unknown
   /** false pour login (pas de Bearer, pas de déconnexion sur 401). */
   auth?: boolean

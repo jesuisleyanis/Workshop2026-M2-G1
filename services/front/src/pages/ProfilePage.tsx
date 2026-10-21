@@ -19,6 +19,8 @@ export function ProfilePage() {
   const subs: Record<string, string> = {
     '/rib': plural(accounts.data?.length ?? 0, 'compte'),
     '/beneficiaries': plural(beneficiaries.data?.length ?? 0, 'bénéficiaire'),
+    // Libellé fixe : pas de GET /api/v1/cards à chaque ouverture du Profil (écran Cartes seul).
+    '/cards': 'Geler, plafond de paiement',
     '/limits': limits.data ? (limits.data.some((l) => l.limit !== null) ? 'Plafond mensuel' : 'Sans plafond') : limits.error ? 'Indisponible pour le moment' : '',
   }
 

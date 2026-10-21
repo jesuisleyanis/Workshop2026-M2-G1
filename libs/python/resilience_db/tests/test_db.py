@@ -8,6 +8,7 @@ from resilience_db.migrate import upgrade
 from resilience_db.models import (
     Account,
     Beneficiary,
+    Card,
     FaceEnrollment,
     Transaction,
     TransactionCategory,
@@ -292,5 +293,33 @@ def test_monthly_limit_cannot_be_negative():
         u = User(username="x", password_hash="x")
         u.accounts.append(Account(iban_fake="FR76 X", balance_cents=0, monthly_limit_cents=-1))
         s.add(u)
+        with pytest.raises(IntegrityError):
+            s.commit()
+
+
+def test_one_card_per_demo_account_without_pan_and_idempotent():
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "s3cret-pass", users=3)
+        seed_demo_data(s, "s3cret-pass", users=3)
+        cards = s.query(Card).all()
+        assert len(cards) == 3
+        assert all(len(c.last4) == 4 and c.last4.isdigit() and c.status == "active" for c in cards)
+    assert {c.name for c in Card.__table__.columns}.isdisjoint({"pan", "number", "cvv", "cvc"})
+
+
+def test_card_bounds_are_enforced_in_database(tmp_path):
+    engine = make_engine(f"sqlite:///{tmp_path}/m.db")
+    upgrade(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "s3cret-pass", users=1)
+        card = s.query(Card).one()
+        card.payment_limit_cents = 1_000_001
+        with pytest.raises(IntegrityError):
+            s.commit()
+        s.rollback()
+        card = s.query(Card).one()
+        card.status = "stolen"
         with pytest.raises(IntegrityError):
             s.commit()

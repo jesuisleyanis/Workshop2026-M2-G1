@@ -24,7 +24,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from payment_api import beneficiaries, limits, stats
+from payment_api import beneficiaries, cards, limits, stats
 from payment_api.config import SERVICE_NAME, Settings
 from payment_api.ledger import Rejection, transfer
 from payment_api.observability import (
@@ -39,6 +39,8 @@ from payment_api.schemas import (
     AccountOut,
     BeneficiaryIn,
     BeneficiaryOut,
+    CardOut,
+    CardPatch,
     LimitOut,
     ServiceStatusOut,
     SpendingOut,
@@ -135,6 +137,11 @@ def create_app(
     @app.exception_handler(ApiError)
     async def _api_error(_req: Request, exc: ApiError):
         return error_response(exc.status, exc.code, exc.message, exc.headers)
+
+    @app.exception_handler(Rejection)
+    async def _rejection(_req: Request, exc: Rejection):
+        # Refus métier non intercepté par la route : même corps que ApiError (contrat).
+        return error_response(exc.status, exc.code, exc.message)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(_req: Request, exc: StarletteHTTPException):
@@ -288,6 +295,75 @@ def create_app(
     ):
         return stats.spending(session, user, period, now(), offset)
 
+    # ---------------------------------------------------------------- cartes (#47)
+    @app.get("/api/v1/cards", response_model=list[CardOut])
+    def list_cards(user: User = Depends(current_user), session=Depends(get_session)):
+        return cards.list_for(session, user)
+
+    def _owned_card_or_audit(action, user: User, card_id: int):
+        try:
+            return action()
+        except Rejection as rej:
+            if rej.code == "card_not_found":  # balayage d'ids de carte = tentative d'IDOR
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "card_access_denied",
+                    f"Card {card_id} access denied",
+                    http_status=404,
+                    user=user.username,
+                )
+            raise
+
+    def _card_status(card_id: int, status: str, event: str, user: User, session):
+        card, changed = _owned_card_or_audit(
+            lambda: cards.set_status(session, user, card_id, status), user, card_id
+        )
+        if changed:  # idempotent : pas de second événement pour un état inchangé
+            log_event(
+                log,
+                logging.INFO,
+                event,
+                f"Card {card.id} {status}",
+                http_status=200,
+                user=user.username,
+            )
+        return card
+
+    @app.post("/api/v1/cards/{card_id}/freeze", response_model=CardOut)
+    def freeze_card(
+        card_id: DbId, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        return _card_status(card_id, "frozen", "card_frozen", user, session)
+
+    @app.post("/api/v1/cards/{card_id}/unfreeze", response_model=CardOut)
+    def unfreeze_card(
+        card_id: DbId, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        return _card_status(card_id, "active", "card_unfrozen", user, session)
+
+    @app.patch("/api/v1/cards/{card_id}", response_model=CardOut)
+    def update_card(
+        card_id: DbId,
+        body: CardPatch,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        changes = body.model_dump(exclude_unset=True)
+        card, changed = _owned_card_or_audit(
+            lambda: cards.update(session, user, card_id, changes), user, card_id
+        )
+        if changed:
+            log_event(
+                log,
+                logging.INFO,
+                "card_settings_changed",
+                f"Card {card.id} settings changed: {', '.join(changed)}",
+                http_status=200,
+                user=user.username,
+            )
+        return card
+
     # ---------------------------------------------------------------- bénéficiaires (#43)
     @app.get("/api/v1/beneficiaries", response_model=list[BeneficiaryOut])
     def list_beneficiaries(user: User = Depends(current_user), session=Depends(get_session)):
@@ -326,10 +402,7 @@ def create_app(
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
-        try:
-            beneficiaries.remove(session, user, beneficiary_id)
-        except Rejection as rej:
-            raise ApiError(rej.status, rej.code, rej.message)
+        beneficiaries.remove(session, user, beneficiary_id)  # Rejection -> handler commun
         log_event(
             log,
             logging.INFO,

@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from resilience_db.config import make_engine, make_session_factory, read_secret
-from resilience_db.models import Account, Beneficiary, Transaction, User
+from resilience_db.models import Account, Beneficiary, Card, Transaction, User
 from resilience_db.passwords import hash_password
 
 DEFAULT_USERS = 5
@@ -77,6 +77,32 @@ def _backfill_limits(session: Session, users: int, limit: int) -> None:
     session.commit()
 
 
+DEFAULT_CARD_LIMIT_CENTS = 150_000  # 1 500,00 EUR de plafond de paiement par carte
+
+
+def seed_cards(session: Session, *, users: int = DEFAULT_USERS) -> int:
+    """Une carte fictive par compte de client de démo (#47), idempotent. `last4` seul (pas de PAN)."""
+    created = 0
+    for n in range(1, users + 1):
+        user = session.scalar(select(User).where(User.username == demo_username(n)))
+        for account in user.accounts if user else []:
+            if session.scalar(select(Card.id).where(Card.account_id == account.id)) is not None:
+                continue
+            session.add(
+                Card(
+                    account_id=account.id,
+                    last4=f"{4000 + account.id % 1000:04d}",
+                    holder=_demo_name(n).upper(),
+                    expiry_month=(n - 1) % 12 + 1,
+                    expiry_year=2029,
+                    payment_limit_cents=DEFAULT_CARD_LIMIT_CENTS,
+                )
+            )
+            created += 1
+    session.commit()
+    return created
+
+
 def payee_iban(i: int) -> str:
     return f"FR76 9999 0000 {i:04d} 0000 0000 000"
 
@@ -116,6 +142,7 @@ def seed_demo_data(
         created.append(username)
     session.commit()
     _backfill_limits(session, users, monthly_limit_cents)
+    seed_cards(session, users=users)
     seed_beneficiaries(session, users=users)
     seed_history(session, [demo_username(n) for n in range(1, users + 1)])
     return created
