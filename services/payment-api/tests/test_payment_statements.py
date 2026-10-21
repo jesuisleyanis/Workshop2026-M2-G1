@@ -115,6 +115,9 @@ def test_json_format_for_the_printable_page(client, alice, history):
     [
         {**Q, "from": "2026-10-31", "to": "2026-10-01"},
         {**Q, "from": "2025-10-01", "to": "2026-10-31"},
+        {**Q, "from": "2025-01-01", "to": "2026-01-02"},  # 367 jours inclus
+        {**Q, "from": "9999-06-01", "to": "9999-12-31"},  # pas de débordement (500)
+        {**Q, "from": "1999-12-31", "to": "2000-01-05"},
     ],
 )
 def test_invalid_period_is_422(client, alice, params):
@@ -146,3 +149,20 @@ def test_export_is_audited_and_needs_a_bearer(client, alice, history, log_lines)
     (e,) = log_lines("statement_exported")
     assert e["user"] == "alice" and "6 rows" in e["message"]
     assert client.get(ST, params=Q).status_code == 401
+
+
+def test_a_full_year_inclusive_is_accepted(client, alice, history):
+    r = client.get(ST, headers=alice, params={**Q, "from": "2025-11-01", "to": "2026-10-31"})
+    assert r.status_code == 200, "365 jours inclus"
+
+
+def test_third_party_refusals_never_appear_on_the_recipient_statement(client, db, history):
+    db.add(_tx(3, 1, 5_000, 12, status="rejected"))  # bob échoue un virement vers alice
+    db.commit()
+    body = client.get(
+        ST, headers=bearer(make_token("alice")), params={**Q, "format": "json"}
+    ).json()
+    assert not [r for r in body["rows"] if r["direction"] == "credit" and r["status"] == "rejected"]
+    bob_q = {**Q, "account_id": 3, "format": "json"}
+    bob = client.get(ST, headers=bearer(make_token("bob")), params=bob_q).json()
+    assert any(r["status"] == "rejected" for r in bob["rows"]), "l'émetteur voit son propre refus"

@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 
 from payment_api.ledger import Rejection
 
-MAX_PERIOD = timedelta(days=366)
+MAX_DAYS = 366  # bornes incluses : au plus un an
+EARLIEST, LATEST = date(2000, 1, 1), date(2100, 12, 31)  # pas de débordement de date
 MAX_ROWS = 5_000
 HEADER = ("Date", "Référence", "Libellé", "Catégorie", "Débit", "Crédit", "Statut")
 CATEGORY_FR = {
@@ -45,7 +46,7 @@ def _amount(cents: int) -> str:
 
 
 def build(session: Session, user: User, account_id: int, start: date, end: date) -> dict:
-    if end < start or end - start > MAX_PERIOD:
+    if not EARLIEST <= start <= end <= LATEST or (end - start).days + 1 > MAX_DAYS:
         raise Rejection(422, "invalid_period", "Period must be ordered and at most 12 months")
     account = session.get(Account, account_id)
     if account is None or account.user_id != user.id:
@@ -67,10 +68,13 @@ def build(session: Session, user: User, account_id: int, start: date, end: date)
     rows, debit, credit = [], 0, 0
     for t in txs:
         out = t.src_account == account.id
+        if not out and t.status != "created":
+            continue  # un refus d'un tiers ne regarde que lui : jamais sur le relevé du destinataire
         if t.status == "created":
-            debit, credit = (
-                (debit + t.amount_cents, credit) if out else (debit, credit + t.amount_cents)
-            )
+            if out:
+                debit += t.amount_cents
+            else:
+                credit += t.amount_cents
         rows.append(
             {
                 "id": t.id,
