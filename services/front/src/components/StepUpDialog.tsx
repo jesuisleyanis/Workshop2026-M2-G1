@@ -5,7 +5,6 @@ import { userMessage } from '../lib/errorMessages'
 import { Icon } from './icons'
 
 /** Seuil indicatif affiché (le serveur reste l'autorité : STEP_UP_THRESHOLD_CENTS). */
-export const STEP_UP_THRESHOLD_LABEL = '500 €'
 
 /**
  * D15 — Confirmation renforcée d'un gros virement (#51). `onDone(true)` après une
@@ -71,7 +70,7 @@ export function StepUpDialog({ onDone }: { onDone: (ok: boolean) => void }) {
           Confirmation renforcée
         </h2>
         <p className="m-0 text-[15px] leading-normal text-ink-2">
-          Pour un virement de plus de {STEP_UP_THRESHOLD_LABEL}, confirmez votre mot de passe.
+          Pour ce montant important, confirmez votre mot de passe (le seuil est fixé par la banque).
         </p>
         <label className="flex flex-col gap-1.5 text-sm font-medium text-ink-2">
           Mot de passe

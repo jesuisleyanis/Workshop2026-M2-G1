@@ -1261,6 +1261,30 @@ describe('Front - confirmation renforcée des gros virements (#51)', () => {
     })
   }
 
+  it('mobile : annuler la confirmation renforcée garde le message à l’étape 4, sans second envoi', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse([{ ...ACCOUNTS[0]!, balance_cents: 1_000_000 }]),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'POST /api/v1/transactions': STEP_UP,
+    })
+    renderApp('/send', { desktop: false })
+    const user = userEvent.setup()
+    await user.click(within(await screen.findByRole('region', { name: 'Destinataires' })).getByRole('button', { name: /Compte n°99/ }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '600')
+    await user.click(screen.getByRole('button', { name: /Continuer/ }))
+    await user.click(screen.getByRole('button', { name: /Vérifier le virement/ }))
+    screen.getByRole('button', { name: /^Envoyer 600,00/ }).focus()
+    await user.keyboard('{Enter}')
+    const dlg = await screen.findByRole('dialog')
+    await user.click(within(dlg).getByRole('button', { name: /Annuler/ }))
+    expect(await screen.findByText('Virement non envoyé : la confirmation renforcée a été annulée.')).toBeInTheDocument()
+    expect(screen.getByText('Étape 4 sur 4')).toBeInTheDocument()
+    expect(txPosts(f)).toHaveLength(1)
+  })
+
   it('403 step_up_required → modale → mot de passe → rejeu identique avec le nouveau jeton → succès', async () => {
     loginAsStored()
     const oldToken = tokenStore.get()
@@ -1269,7 +1293,7 @@ describe('Front - confirmation renforcée des gros virements (#51)', () => {
     const user = userEvent.setup()
     await bigTransfer(user)
     const dlg = await screen.findByRole('dialog', { name: 'Confirmation renforcée' })
-    expect(within(dlg).getByText(/plus de 500/)).toBeInTheDocument()
+    expect(within(dlg).getByText(/montant important/)).toBeInTheDocument()
     const pwd = within(dlg).getByLabelText('Mot de passe')
     expect(pwd).toHaveFocus()
     expect(pwd).toHaveAttribute('autocomplete', 'current-password')

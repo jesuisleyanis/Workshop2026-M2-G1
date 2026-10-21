@@ -154,9 +154,10 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
     }
   }
   function stepUpCancelled() {
-    setErr('Virement non envoyé : la confirmation renforcée a été annulée.')
+    // goStep efface le message d'erreur : on revient d'abord à l'étape, PUIS on pose le message.
     if (isDesktop) setStep('recap')
     else goStep(4)
+    setErr('Virement non envoyé : la confirmation renforcée a été annulée.')
   }
 
   async function schedule() {
