@@ -21,6 +21,7 @@ from resilience_db.migrate import upgrade
 from resilience_db.models import Account, Transaction, User
 from sqlalchemy import Engine, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from payment_api import beneficiaries, stats
@@ -249,12 +250,28 @@ def create_app(
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
-        own_ids = set(session.scalars(select(Account.id).where(Account.user_id == user.id)))
-        tx = session.get(Transaction, transaction_id)
-        # Ni émetteur ni destinataire : même 404 qu'un id inconnu (pas 403, anti-énumération).
-        if tx is None or not ({tx.src_account, tx.dst_account} & own_ids):
+        src, dst = aliased(Account), aliased(Account)
+        row = session.execute(
+            select(Transaction, src.user_id, dst.user_id)
+            .join(src, src.id == Transaction.src_account)
+            .join(dst, dst.id == Transaction.dst_account)
+            .where(Transaction.id == transaction_id)
+        ).first()  # une seule requête : l'opération et ses deux titulaires
+        if row is None or user.id not in (row[1], row[2]):
+            # Ni émetteur ni destinataire : même 404 qu'un id inconnu (pas 403, anti-énumération),
+            # mais tracé côté SOC (balayage d'ids = tentative d'IDOR).
+            log_event(
+                log,
+                logging.WARNING,
+                "transaction_access_denied",
+                f"Transaction lookup denied ({'unknown' if row is None else 'foreign'})",
+                http_status=404,
+                user=user.username,
+            )
             raise ApiError(404, "transaction_not_found", "Transaction not found")
-        return _as_seen_by(tx, own_ids)
+        tx, sender, _ = row
+        own = {tx.src_account} if sender == user.id else set()
+        return _as_seen_by(tx, own)
 
     @app.get("/api/v1/stats/spending", response_model=SpendingOut)
     def spending_stats(
