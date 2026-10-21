@@ -35,6 +35,7 @@ NORMALIZED_EVENTS = frozenset(
         "scheduled_transfer_created",
         "scheduled_transfer_rejected",
         "scheduled_transfer_changed",
+        "statement_exported",
         "waf_blocked",
         "anomaly_detected",
         "remediation_started",

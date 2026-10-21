@@ -95,6 +95,30 @@
     width: 100% !important;
     box-shadow: none !important;
   }
+  /* Document long (relevé #50) : `fixed` n'imprimerait que la 1re page. Tout ce qui n'est ni le
+     document ni l'un de ses ancêtres sort du flux, et les conteneurs du shell (hauteur d'écran,
+     défilement) se déplient pour que le document s'étende sur plusieurs pages. */
+  body:has([data-print-doc]) :not(:has([data-print-doc])):not([data-print-doc]):not([data-print-doc] *) {
+    display: none !important;
+  }
+  body:has([data-print-doc]) :has([data-print-doc]) {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  [data-print-doc],
+  [data-print-doc] * {
+    visibility: visible !important;
+  }
+  [data-print-doc] {
+    width: 100% !important;
+    box-shadow: none !important;
+  }
+  [data-print-doc] tr {
+    break-inside: avoid;
+  }
 }
 
 @utility card {

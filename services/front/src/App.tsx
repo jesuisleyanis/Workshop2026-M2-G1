@@ -12,6 +12,8 @@ import { ProfilePage } from './pages/ProfilePage'
 import { RibPage } from './pages/RibPage'
 import { ScheduledPage } from './pages/ScheduledPage'
 import { SendPage } from './pages/SendPage'
+import { StatementPrintPage } from './pages/StatementPrintPage'
+import { StatementsPage } from './pages/StatementsPage'
 import { StatsPage } from './pages/StatsPage'
 import { TxDetailPage } from './pages/TxDetailPage'
 
@@ -27,6 +29,8 @@ export function App() {
           <Route path="history" element={<HistoryPage />} />
           <Route path="operations/:id" element={<TxDetailPage />} />
           <Route path="rib" element={<RibPage />} />
+          <Route path="statements" element={<StatementsPage />} />
+          <Route path="statements/print" element={<StatementPrintPage />} />
           <Route path="beneficiaries" element={<BeneficiariesPage />} />
           <Route path="cards" element={<CardsPage />} />
           <Route path="limits" element={<LimitsPage />} />
