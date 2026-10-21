@@ -50,8 +50,10 @@ export function StatsPage() {
   const today = fresh ? todayUtc : dayKey(new Date().toISOString())
   const first = p.days[0]!.key
   const last = p.days[p.days.length - 1]!.key
+  // Même calendrier que les barres : jours UTC quand la période vient du serveur.
+  const keyOf = (iso: string) => (fresh ? new Date(iso).toISOString().slice(0, 10) : dayKey(iso))
   const ops = views.filter((v) => {
-    const k = dayKey(v.tx.createdAt)
+    const k = keyOf(v.tx.createdAt)
     return k >= first && k <= last
   })
   const aria = `Graphique des dépenses par jour, ${p.label}. ${p.days
@@ -66,9 +68,16 @@ export function StatsPage() {
           <div className="flex flex-col gap-1">
             <span className="text-sm font-medium text-ink-3">Total dépensé</span>
             <span data-testid="stats-total" className="tnum text-[34px] font-bold tracking-[-0.03em]">
-              {p.total > 0 ? '−' : ''}
-              {formatMoney(p.total)}
+              {/* Sans réponse serveur pour CETTE période, aucun total présenté comme exact. */}
+              {fresh ? `${p.total > 0 ? '−' : ''}${formatMoney(p.total)}` : '—'}
             </span>
+            {!fresh && (spending.error ? (
+              <button type="button" onClick={spending.reload} className="self-start border-0 bg-transparent p-0 text-[13px] text-ink-3 underline">
+                Total indisponible — réessayer
+              </button>
+            ) : (
+              <span className="text-[13px] text-ink-3">Calcul en cours…</span>
+            ))}
           </div>
           <Segmented
             label="Période"

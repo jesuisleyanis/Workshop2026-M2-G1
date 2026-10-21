@@ -405,7 +405,8 @@ describe('Front - revue complète', () => {
     renderApp('/stats')
     await waitFor(() => expect(screen.getByTestId('stats-total')).toHaveTextContent(/1\s?234,56/))
     await userEvent.click(screen.getByRole('button', { name: 'Période précédente' }))
-    expect(screen.getByTestId('stats-total')).not.toHaveTextContent(/1\s?234,56/)
+    expect(screen.getByTestId('stats-total')).toHaveTextContent('—')
+    expect(screen.getByText('Calcul en cours…')).toBeInTheDocument()
   })
 
   it('un statut d’opération inconnu n’est jamais affiché « Effectué » ni ne casse l’historique', async () => {

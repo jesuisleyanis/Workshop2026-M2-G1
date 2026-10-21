@@ -14,18 +14,15 @@ import type { AppNotification } from '../types/api'
 export function NotificationsPage() {
   const all = useNotifications(false)
   const { unreadCount } = useBankData()
-  // Le sondage du badge (30 s) rafraîchit la liste dès que le compteur CHANGE (une lecture ailleurs et une
-  // arrivée peuvent se compenser… mais un changement sans action locale signale toujours du nouveau) :
-  // ni au montage (chargement déjà en cours), ni juste après nos propres marquages (déjà à jour).
+  // Le sondage du badge (30 s) rafraîchit la liste dès que le compteur change (sauf au montage : le
+  // chargement est déjà en cours). Après un marquage local, cela coûte un GET de plus, jamais une
+  // notification manquée.
   const { reload: reloadAll } = all
   const prevCount = useRef<number | null>(null)
-  const ownChange = useRef(false)
   useEffect(() => {
     const prev = prevCount.current
     prevCount.current = unreadCount.data
-    if (prev === null || unreadCount.data === null || unreadCount.data === prev) return
-    if (ownChange.current) ownChange.current = false
-    else reloadAll()
+    if (prev !== null && unreadCount.data !== null && unreadCount.data !== prev) reloadAll()
   }, [unreadCount.data, reloadAll])
   const { toast } = useShell()
   // Réponses serveur après un marquage, valables pour CE chargement : un rechargement l'emporte.
@@ -46,7 +43,6 @@ export function NotificationsPage() {
     if (n.readAt) return
     try {
       keep(await api.markNotificationRead(n.id))
-      ownChange.current = true
       unreadCount.reload()
     } catch (e) {
       toast(userMessage(e))
@@ -57,7 +53,6 @@ export function NotificationsPage() {
     try {
       await api.markAllNotificationsRead()
       all.reload()
-      ownChange.current = true
       unreadCount.reload()
     } catch (e) {
       toast(userMessage(e))
