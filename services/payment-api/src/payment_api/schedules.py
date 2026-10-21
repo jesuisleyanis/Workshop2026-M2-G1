@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from payment_api.ledger import Rejection, check_amount_and_accounts, transfer
+from payment_api.notifications import euros, notify
 from payment_api.observability import log_event
 
 MAX_ACTIVE_PER_USER = 20
@@ -209,6 +210,14 @@ def _fail(session: Session, run_id: int, code: str, s, username: str | None, log
     session.rollback()
     run = session.get(ScheduledRun, run_id)
     run.status, run.error_code = "failed", code
+    notify(
+        session,
+        s.owner_user_id,
+        "scheduled_failed",
+        "Virement programmé non exécuté",
+        f"{euros(s.amount_cents)} vers le compte n°{s.dst_account} le {run.run_on:%d/%m/%Y}"
+        f" ({code.replace('_', ' ')}).",
+    )
     session.commit()
     transactions_total.labels(result="rejected").inc()
     log_event(
@@ -236,6 +245,7 @@ def _execute(session: Session, run: ScheduledRun, owner_id: int, log, now) -> No
             f"sched-{s.id}-{run.run_on.isoformat()}",
             s.category,
             now(),
+            notify_sender=False,  # l'émetteur reçoit « programmé exécuté » ci-dessous
         )
     except Rejection as rej:
         _fail(session, run.id, rej.code, s, owner.username, log)
@@ -248,6 +258,13 @@ def _execute(session: Session, run: ScheduledRun, owner_id: int, log, now) -> No
         raise
     run = session.get(ScheduledRun, run.id)
     run.status, run.transaction_id = "executed", tx.id
+    notify(
+        session,
+        s.owner_user_id,
+        "scheduled_executed",
+        "Virement programmé exécuté",
+        f"{euros(s.amount_cents)} vers le compte n°{s.dst_account}.",
+    )
     session.commit()
     transactions_total.labels(result="created").inc()
     log_event(

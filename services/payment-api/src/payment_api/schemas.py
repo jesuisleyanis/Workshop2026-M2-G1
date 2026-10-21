@@ -183,3 +183,14 @@ class ScheduleOut(BaseModel):
     end_on: date | None
     status: Literal["active", "paused", "cancelled", "completed"]
     last_run: RunOut | None = None
+
+
+class NotificationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    type: str
+    title: str
+    body: str
+    created_at: datetime
+    read_at: datetime | None

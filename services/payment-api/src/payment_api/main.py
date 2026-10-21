@@ -25,7 +25,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from payment_api import beneficiaries, cards, limits, schedules, stats
+from payment_api import beneficiaries, cards, limits, notifications, schedules, stats
 from payment_api.config import SERVICE_NAME, Settings
 from payment_api.ledger import Rejection, transfer
 from payment_api.observability import (
@@ -43,6 +43,7 @@ from payment_api.schemas import (
     CardOut,
     CardPatch,
     LimitOut,
+    NotificationOut,
     RunOut,
     ScheduleIn,
     ScheduleOut,
@@ -311,6 +312,28 @@ def create_app(
         session=Depends(get_session),
     ):
         return stats.spending(session, user, period, now(), offset)
+
+    # ---------------------------------------------------------------- notifications (#49)
+    @app.get("/api/v1/notifications", response_model=list[NotificationOut])
+    def list_notifications(
+        unread: bool = Query(False),
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        return notifications.list_for(session, user.id, unread)
+
+    @app.post("/api/v1/notifications/read-all")
+    def read_all_notifications(user: User = Depends(current_user), session=Depends(get_session)):
+        return {"updated": notifications.mark_all_read(session, user.id)}
+
+    @app.post("/api/v1/notifications/{notification_id}/read", response_model=NotificationOut)
+    def read_notification(
+        notification_id: DbId, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        n = notifications.mark_read(session, user.id, notification_id)
+        if n is None:  # d'autrui ou inconnue : même 404
+            raise ApiError(404, "notification_not_found", "Notification not found")
+        return n
 
     # ---------------------------------------------------------------- programmés (#48)
     def _schedule_out(s, run=None) -> ScheduleOut:

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from payment_api.ledger import Rejection
+from payment_api.notifications import notify
 
 
 def list_for(session: Session, user: User) -> list[Card]:
@@ -44,6 +45,14 @@ def set_status(session: Session, user: User, card_id: int, status: str) -> tuple
     changed = card.status != status
     if changed:
         card.status = status
+        frozen = status == "frozen"
+        notify(
+            session,
+            user.id,
+            "card_frozen" if frozen else "card_unfrozen",
+            "Carte gelée" if frozen else "Carte dégelée",
+            f"Carte •••• {card.last4} {'gelée' if frozen else 'de nouveau active'}.",
+        )
         session.commit()
     return card, changed
 

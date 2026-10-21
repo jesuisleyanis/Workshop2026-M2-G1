@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from payment_api.limits import used_cents
+from payment_api.notifications import euros, notify
 
 MAX_AMOUNT_CENTS = 100_000_000  # 1 000 000,00 EUR fictifs
 
@@ -40,8 +41,13 @@ def transfer(
     request_id: str | None,
     category: str = "transfer",
     now: datetime | None = None,
+    notify_sender: bool = True,
 ) -> Transaction:
-    """Débite `src_id` (qui doit appartenir à `user`) et crédite `dst_id`, atomiquement."""
+    """Débite `src_id` (qui doit appartenir à `user`) et crédite `dst_id`, atomiquement.
+
+    Notifications (#49) écrites dans la même transaction. `notify_sender=False` : l'appelant
+    (exécuteur des virements programmés) notifie l'émetteur lui-même.
+    """
     check_amount_and_accounts(src_id, dst_id, amount_cents)
 
     # Verrou de ligne dans l'ordre des id : pas de deadlock entre deux virements croisés,
@@ -75,6 +81,15 @@ def transfer(
                 category=category,
             )
         )
+        if notify_sender:
+            reason = "plafond mensuel atteint" if code == "limit_exceeded" else "solde insuffisant"
+            notify(
+                session,
+                src.user_id,
+                "transfer_rejected",
+                "Virement refusé",
+                f"{euros(amount_cents)} vers le compte n°{dst.id} : {reason}.",
+            )
         session.commit()
         return Rejection(status, code, message)
 
@@ -83,7 +98,8 @@ def transfer(
     # aucun calcul (pas de requête ajoutée sur les comptes de service à fort trafic).
     limit = src.monthly_limit_cents
     capped = limit is not None and dst.user_id != src.user_id
-    if capped and used_cents(session, src, now or datetime.now(UTC)) + amount_cents > limit:
+    used = used_cents(session, src, now or datetime.now(UTC)) if capped else 0
+    if capped and used + amount_cents > limit:
         raise reject(409, "limit_exceeded", "Monthly transfer limit exceeded")
 
     if src.balance_cents < amount_cents:
@@ -100,5 +116,31 @@ def transfer(
         category=category,
     )
     session.add(tx)
+    if dst.user_id != src.user_id:  # virement interne : pas de notification
+        if notify_sender:
+            notify(
+                session,
+                src.user_id,
+                "transfer_sent",
+                "Virement émis",
+                f"{euros(amount_cents)} vers le compte n°{dst.id}.",
+            )
+        notify(
+            session,
+            dst.user_id,
+            "transfer_received",
+            "Virement reçu",
+            f"{euros(amount_cents)} du compte n°{src.id}.",
+        )
+        # Plafond franchissant 80 % : une seule alerte au passage du seuil.
+        if capped and used < 0.8 * limit <= used + amount_cents:
+            notify(
+                session,
+                src.user_id,
+                "limit_80",
+                "Plafond bientôt atteint",
+                f"80 % du plafond mensuel du compte n°{src.id} utilisés"
+                f" (reste {euros(limit - used - amount_cents)}).",
+            )
     session.commit()
     return tx
