@@ -24,6 +24,7 @@ def transfer(
     dst_id: int,
     amount_cents: int,
     request_id: str | None,
+    category: str = "transfer",
 ) -> Transaction:
     """Débite `src_id` (qui doit appartenir à `user`) et crédite `dst_id`, atomiquement."""
     if amount_cents <= 0:
@@ -61,6 +62,7 @@ def transfer(
                 amount_cents=amount_cents,
                 status=TransactionStatus.REJECTED.value,
                 request_id=request_id,
+                category=category,
             )
         )
         session.commit()
@@ -74,6 +76,7 @@ def transfer(
         amount_cents=amount_cents,
         status=TransactionStatus.CREATED.value,
         request_id=request_id,
+        category=category,
     )
     session.add(tx)
     session.commit()

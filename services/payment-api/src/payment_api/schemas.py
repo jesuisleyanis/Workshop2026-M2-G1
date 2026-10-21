@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+
+Category = Literal[
+    "food",
+    "shopping",
+    "transport",
+    "subscriptions",
+    "health",
+    "leisure",
+    "housing",
+    "transfer",
+    "other",
+]
 
 
 class AccountOut(BaseModel):
@@ -24,6 +36,8 @@ class TransactionIn(BaseModel):
     src_account: StrictInt
     dst_account: StrictInt
     amount_cents: StrictInt
+    # Facultatif (#44) : verify_tx et le trafic normal historique n'en envoient pas.
+    category: Category = "transfer"
 
 
 class TransactionOut(BaseModel):
@@ -36,6 +50,7 @@ class TransactionOut(BaseModel):
     status: str
     created_at: datetime
     request_id: str | None
+    category: str
 
 
 class ServiceStatusOut(BaseModel):
@@ -66,3 +81,23 @@ class BeneficiaryOut(BaseModel):
     account_id: int
     iban_fake: str
     created_at: datetime
+
+
+class CategoryShare(BaseModel):
+    category: str
+    amount_cents: int
+    share: float
+
+
+class DaySpending(BaseModel):
+    date: date
+    amount_cents: int
+
+
+class SpendingOut(BaseModel):
+    period: Literal["week", "month"]
+    start: date
+    end: date  # exclusif
+    total_cents: int
+    by_category: list[CategoryShare]
+    by_day: list[DaySpending]

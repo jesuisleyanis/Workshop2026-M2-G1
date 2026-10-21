@@ -7,6 +7,8 @@ import logging
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -21,7 +23,7 @@ from sqlalchemy import Engine, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from payment_api import beneficiaries
+from payment_api import beneficiaries, stats
 from payment_api.config import SERVICE_NAME, Settings
 from payment_api.ledger import Rejection, transfer
 from payment_api.observability import (
@@ -37,6 +39,7 @@ from payment_api.schemas import (
     BeneficiaryIn,
     BeneficiaryOut,
     ServiceStatusOut,
+    SpendingOut,
     TransactionIn,
     TransactionOut,
 )
@@ -73,6 +76,7 @@ def create_app(
     settings: Settings | None = None,
     engine: Engine | None = None,
     clock: Callable[[], float] = time.monotonic,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     engine = engine or make_engine()
@@ -194,6 +198,7 @@ def create_app(
                 body.dst_account,
                 body.amount_cents,
                 request_id_var.get(),
+                body.category,
             )
         except Rejection as rej:
             transactions_total.labels(result="rejected").inc()
@@ -230,6 +235,14 @@ def create_app(
             .order_by(Transaction.id.desc())
             .limit(limit)
         ).all()
+
+    @app.get("/api/v1/stats/spending", response_model=SpendingOut)
+    def spending_stats(
+        period: Literal["week", "month"] = Query("month"),
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        return stats.spending(session, user, period, now())
 
     # ---------------------------------------------------------------- bénéficiaires (#43)
     @app.get("/api/v1/beneficiaries", response_model=list[BeneficiaryOut])
