@@ -75,10 +75,12 @@ export function parseAccounts(v: unknown): Account[] {
   return list(v, 'accounts', 'comptes').map(parseAccount)
 }
 
+const UNKNOWN_STATUS = 'Statut d’opération inconnu.'
+
 /** Échec fermé : un statut inconnu n'est jamais affiché « Effectué » (ni compté dans les totaux). */
 function parseStatus(v: unknown): TransactionStatus {
   if (v === 'created' || v === 'rejected') return v
-  throw new ApiError(0, 'invalid_response', 'Statut d’opération inconnu.')
+  throw new ApiError(0, 'invalid_response', UNKNOWN_STATUS)
 }
 
 /** Absente (serveur antérieur à #44) : « Virement » ; inconnue (serveur plus récent) : « Autre ». */
@@ -111,8 +113,19 @@ export function parseTransaction(v: unknown): Transaction {
   }
 }
 
+/**
+ * Une ligne au statut inconnu est ÉCARTÉE (jamais montrée « Effectuée », jamais comptée) sans
+ * faire tomber tout l'historique ; une ligne par id (parseTransaction) reste en échec fermé.
+ */
 export function parseTransactions(v: unknown): Transaction[] {
-  return list(v, 'transactions', 'transactions').map(parseTransaction)
+  return list(v, 'transactions', 'transactions').flatMap((row) => {
+    try {
+      return [parseTransaction(row)]
+    } catch (e) {
+      if (e instanceof ApiError && e.message === UNKNOWN_STATUS) return []
+      throw e
+    }
+  })
 }
 
 export function parseServiceHealth(v: unknown): ServiceHealth {

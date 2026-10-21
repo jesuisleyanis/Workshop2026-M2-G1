@@ -11,7 +11,7 @@ cp .env.example .env      # optionnel
 npm run dev               # http://localhost:5173
 ```
 
-Le serveur de dev proxifie `/api/*` vers `DEV_API_TARGET` (défaut `http://localhost`, c'est-à-dire le WAF local de `make up`). Sans WAF, viser directement les services :
+Le serveur de dev proxifie `/api/*` vers `DEV_API_TARGET` (défaut `https://localhost`, c'est-à-dire le WAF local de `make up` — en HTTPS, le port 80 ne fait que rediriger ; certificat auto-signé accepté par le proxy). Sans WAF, viser directement les services :
 
 ```bash
 DEV_API_TARGET=http://localhost:8001 DEV_AUTH_TARGET=http://localhost:8002 npm run dev
@@ -36,7 +36,7 @@ Comptes de démo (seed) : `demo01`, `demo02` — mots de passe dans `scripts/see
 | Variable | Défaut | Description |
 |---|---|---|
 | `VITE_API_BASE` | _vide_ (same-origin) | Préfixe de l'API, **figé au build**. `https://hote:443` si l'API est sur une autre origine |
-| `DEV_API_TARGET` (non-Vite) | `http://localhost` | Cible du proxy de dev |
+| `DEV_API_TARGET` (non-Vite) | `https://localhost` | Cible du proxy de dev |
 
 ## Architecture
 

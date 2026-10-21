@@ -392,14 +392,30 @@ describe('Front - revue complète', () => {
     expect(f.mock.calls.filter(([u]) => String(u).endsWith('?unread=false'))).toHaveLength(1)
   })
 
-  it('un statut d’opération inconnu n’est jamais affiché « Effectué »', async () => {
+  it('statistiques : jamais le total de la période précédente pendant le rechargement', async () => {
+    loginAsStored()
+    const today = new Date().toISOString().slice(0, 10)
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/stats/spending?period=week&offset=0': () =>
+        jsonResponse({ period: 'week', offset: 0, start: today, end: today, total_cents: 123456, by_category: [], by_day: [{ date: today, amount_cents: 123456 }] }),
+      'GET /api/v1/stats/spending?period=week&offset=-1': () => new Promise<Response>(() => {}), // ne répond jamais
+    })
+    renderApp('/stats')
+    await waitFor(() => expect(screen.getByTestId('stats-total')).toHaveTextContent(/1\s?234,56/))
+    await userEvent.click(screen.getByRole('button', { name: 'Période précédente' }))
+    expect(screen.getByTestId('stats-total')).not.toHaveTextContent(/1\s?234,56/)
+  })
+
+  it('un statut d’opération inconnu n’est jamais affiché « Effectué » ni ne casse l’historique', async () => {
     loginAsStored()
     stubFetch({
       'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
-      'GET /api/v1/transactions': () => jsonResponse([{ ...TXS[0], status: 'reversed' }]),
+      'GET /api/v1/transactions': () => jsonResponse([{ ...TXS[0], id: 5, status: 'reversed' }, TXS[1]]),
     })
     renderApp('/history')
-    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(await screen.findByText('1 opération')).toBeInTheDocument()
     expect(screen.queryByText('Effectué')).not.toBeInTheDocument()
   })
 
