@@ -1,5 +1,5 @@
 import { ApiError } from './errors'
-import type { Account, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
+import type { Account, Card, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
 import { isCategory } from '../lib/categories'
 
 type Obj = Record<string, unknown>
@@ -168,4 +168,25 @@ export function parseLimits(v: unknown): AccountLimit[] {
       periodEnd: str(o, 'period_end', 'plafond'),
     }
   })
+}
+
+export function parseCard(v: unknown): Card {
+  const o = asObj(v, 'carte')
+  const last4 = str(o, 'last4', 'carte').replace(/\D/g, '').slice(-4)
+  return {
+    id: str(o, 'id', 'carte'),
+    accountId: str(o, 'account_id', 'carte'),
+    last4,
+    holder: str(o, 'holder', 'carte'),
+    expiryMonth: num(o, 'expiry_month', 'carte'),
+    expiryYear: num(o, 'expiry_year', 'carte'),
+    status: o.status === 'frozen' ? 'frozen' : 'active',
+    paymentLimit: num(o, 'payment_limit_cents', 'carte') / 100,
+    contactless: o.contactless === true,
+    onlinePayments: o.online_payments === true,
+  }
+}
+
+export function parseCards(v: unknown): Card[] {
+  return list(v, 'cards', 'cartes').map(parseCard)
 }

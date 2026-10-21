@@ -96,6 +96,18 @@ describe('endpoints /api/v1', () => {
     ])
   })
 
+  it('cartes : liste parsée (centimes -> euros), PATCH partiel en centimes', async () => {
+    const card = { id: 9, account_id: 1, last4: '4001', holder: 'C D', expiry_month: 3, expiry_year: 2029, status: 'frozen', payment_limit_cents: 150000, contactless: true, online_payments: false }
+    const { api, f } = endpointsWith((_u, init) => jsonResponse(init?.method === 'GET' ? [card] : card))
+    expect(await api.listCards()).toEqual([
+      { id: '9', accountId: '1', last4: '4001', holder: 'C D', expiryMonth: 3, expiryYear: 2029, status: 'frozen', paymentLimit: 1500, contactless: true, onlinePayments: false },
+    ])
+    await api.updateCard('9', { paymentLimit: 20.5, onlinePayments: true })
+    expect(f.mock.calls[1]).toEqual(['/api/v1/cards/9', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ payment_limit_cents: 2050, online_payments: true }) })])
+    await api.freezeCard('9')
+    expect(f.mock.calls[2]).toEqual(['/api/v1/cards/9/freeze', expect.objectContaining({ method: 'POST' })])
+  })
+
   it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {
     const { api, f } = endpointsWith(() =>
       jsonResponse([{ id: 1, iban_fake: 'FR76 0000 0001', balance_cents: 125050, currency: 'EUR' }]),

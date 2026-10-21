@@ -1,9 +1,9 @@
 import { API_BASE } from '../config'
 import { createApiClient, type ApiClient } from './client'
-import { parseAccounts, parseLimits, parseBeneficiaries, parseBeneficiary, parseLogin, parseServiceHealth, parseSpending, parseTransaction, parseTransactions } from './parsers'
+import { parseAccounts, parseBeneficiaries, parseBeneficiary, parseCard, parseCards, parseLimits, parseLogin, parseServiceHealth, parseSpending, parseTransaction, parseTransactions } from './parsers'
 import { tokenStore } from './tokenStore'
 import { serviceStatus } from '../lib/serviceStatus'
-import type { Account, AccountLimit, Beneficiary, LoginRequest, LoginResponse, NewBeneficiary, ServiceHealth, Spending, Transaction, TransferRequest } from '../types/api'
+import type { Account, AccountLimit, Beneficiary, Card, CardPatch, LoginRequest, LoginResponse, NewBeneficiary, ServiceHealth, Spending, Transaction, TransferRequest } from '../types/api'
 
 /** Endpoints métier /api/v1 (docs/contracts.md : préfixe /api/v1, JWT Bearer). */
 export function createEndpoints(client: ApiClient) {
@@ -29,6 +29,23 @@ export function createEndpoints(client: ApiClient) {
       parseTransaction(await client.request(`/api/v1/transactions/${encodeURIComponent(id)}`, { signal })),
     getLimits: async (signal?: AbortSignal): Promise<AccountLimit[]> =>
       parseLimits(await client.request('/api/v1/limits', { signal })),
+    listCards: async (signal?: AbortSignal): Promise<Card[]> => parseCards(await client.request('/api/v1/cards', { signal })),
+    freezeCard: async (id: string): Promise<Card> =>
+      parseCard(await client.request(`/api/v1/cards/${encodeURIComponent(id)}/freeze`, { method: 'POST' })),
+    unfreezeCard: async (id: string): Promise<Card> =>
+      parseCard(await client.request(`/api/v1/cards/${encodeURIComponent(id)}/unfreeze`, { method: 'POST' })),
+    // Corps partiel : seuls les champs fournis sont envoyés ; plafond converti en centimes entiers.
+    updateCard: async (id: string, patch: CardPatch): Promise<Card> =>
+      parseCard(
+        await client.request(`/api/v1/cards/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          body: {
+            ...(patch.paymentLimit !== undefined ? { payment_limit_cents: Math.round(patch.paymentLimit * 100) } : {}),
+            ...(patch.contactless !== undefined ? { contactless: patch.contactless } : {}),
+            ...(patch.onlinePayments !== undefined ? { online_payments: patch.onlinePayments } : {}),
+          },
+        }),
+      ),
     listTransactions: async (signal?: AbortSignal): Promise<Transaction[]> =>
       parseTransactions(await client.request('/api/v1/transactions', { signal })),
     createTransaction: async (req: TransferRequest): Promise<Transaction> =>

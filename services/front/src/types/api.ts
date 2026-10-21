@@ -103,3 +103,23 @@ export interface AccountLimit {
   /** YYYY-MM-DD, exclusif : date de remise à zéro (1er du mois suivant, UTC). */
   periodEnd: string
 }
+
+/** Carte bancaire fictive (payment-api, #47). Jamais de numéro complet ni de CVV. Montants en euros. */
+export interface Card {
+  id: string
+  accountId: string
+  last4: string
+  holder: string
+  expiryMonth: number
+  expiryYear: number
+  status: 'active' | 'frozen'
+  paymentLimit: number
+  contactless: boolean
+  onlinePayments: boolean
+}
+
+export interface CardPatch {
+  paymentLimit?: number
+  contactless?: boolean
+  onlinePayments?: boolean
+}

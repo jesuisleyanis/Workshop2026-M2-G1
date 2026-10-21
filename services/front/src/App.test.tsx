@@ -1,6 +1,6 @@
 import { act } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { App } from './App'
@@ -755,8 +755,104 @@ describe('Front - plafonds, revue (#46)', () => {
       'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
       'GET /api/v1/transactions': () => jsonResponse([]),
       'GET /api/v1/limits': () => jsonResponse({ error: { code: 'rate_limited', message: 'x' } }, 429),
+      'GET /api/v1/cards': () => jsonResponse([]),
     })
     renderApp('/profile')
     expect(await screen.findByText('Indisponible pour le moment')).toBeInTheDocument()
+  })
+})
+
+describe('Front - cartes (#47)', () => {
+  const CARD = { id: 9, account_id: 1, last4: '4001', holder: 'CAMILLE DURAND', expiry_month: 3, expiry_year: 2029, status: 'active', payment_limit_cents: 150000, contactless: true, online_payments: false }
+  const base = { 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) }
+  const patches = (f: ReturnType<typeof stubFetch>) =>
+    f.mock.calls.filter(([, i]) => (i as RequestInit | undefined)?.method === 'PATCH').map(([u, i]) => [String(u), JSON.parse((i as RequestInit).body as string)])
+
+  it('visuel : 4 derniers chiffres, titulaire, expiration ; jamais de numéro complet', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/cards': () => jsonResponse([CARD]) })
+    renderApp('/cards')
+    const visual = await screen.findByTestId('card-visual')
+    expect(visual).toHaveTextContent('•••• •••• •••• 4001')
+    expect(visual).toHaveTextContent('CAMILLE DURAND')
+    expect(visual).toHaveTextContent('03/29')
+    expect(visual).toHaveTextContent('Active')
+    expect(visual.textContent).not.toMatch(/\d{5,}/)
+  })
+
+  it('gel avec confirmation puis dégel ; réglages verrouillés quand gelée', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      ...base,
+      'GET /api/v1/cards': () => jsonResponse([CARD]),
+      'POST /api/v1/cards/9/freeze': () => jsonResponse({ ...CARD, status: 'frozen' }),
+      'POST /api/v1/cards/9/unfreeze': () => jsonResponse(CARD),
+    })
+    renderApp('/cards')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Geler la carte' }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Geler' }))
+    expect(await screen.findByText('Gelée')).toBeInTheDocument()
+    expect(f.mock.calls.some(([u]) => String(u).endsWith('/api/v1/cards/9/freeze'))).toBe(true)
+    expect(screen.getByRole('switch', { name: 'Sans contact' })).toBeDisabled()
+    expect(screen.getByRole('slider')).toBeDisabled()
+    expect(screen.getByText('Carte gelée : réglages verrouillés jusqu’au dégel.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Dégeler la carte' }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Dégeler' }))
+    expect(await screen.findByText('Active')).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Sans contact' })).toBeEnabled()
+  })
+
+  it('annuler la confirmation de gel : aucun appel', async () => {
+    loginAsStored()
+    const f = stubFetch({ ...base, 'GET /api/v1/cards': () => jsonResponse([CARD]) })
+    renderApp('/cards')
+    await userEvent.click(await screen.findByRole('button', { name: 'Geler la carte' }))
+    await userEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: /Annuler/ }))
+    expect(f.mock.calls.some(([u]) => String(u).includes('/freeze'))).toBe(false)
+    expect(screen.getByText('Active')).toBeInTheDocument()
+  })
+
+  it('plafond de paiement : PATCH en centimes ; sans contact : PATCH booléen', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      ...base,
+      'GET /api/v1/cards': () => jsonResponse([CARD]),
+      'PATCH /api/v1/cards/9': (init) => jsonResponse({ ...CARD, ...JSON.parse(init!.body as string) }),
+    })
+    renderApp('/cards')
+    const slider = await screen.findByRole('slider')
+    fireEvent.change(slider, { target: { value: '2050' } })
+    await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }))
+    expect(await screen.findByText('Plafond de paiement enregistré')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('switch', { name: 'Sans contact' }))
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Sans contact' })).toHaveAttribute('aria-checked', 'false'))
+    expect(patches(f)).toEqual([
+      ['/api/v1/cards/9', { payment_limit_cents: 205000 }],
+      ['/api/v1/cards/9', { contactless: false }],
+    ])
+  })
+
+  it('409 card_frozen et 422 : messages clairs', async () => {
+    loginAsStored()
+    let code = 'card_frozen'
+    stubFetch({
+      ...base,
+      'GET /api/v1/cards': () => jsonResponse([CARD]),
+      'PATCH /api/v1/cards/9': () => jsonResponse({ error: { code, message: 'x' } }, code === 'card_frozen' ? 409 : 422),
+    })
+    renderApp('/cards')
+    await userEvent.click(await screen.findByRole('switch', { name: 'Paiement en ligne' }))
+    expect(await screen.findByText('Carte gelée : dégelez-la avant de modifier ses réglages.')).toBeInTheDocument()
+    code = 'validation_error'
+    await userEvent.click(screen.getByRole('switch', { name: 'Paiement en ligne' }))
+    expect(await screen.findByText('Réglage refusé : valeur hors des bornes autorisées.')).toBeInTheDocument()
+  })
+
+  it('aucune carte : état vide', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/cards': () => jsonResponse([]) })
+    renderApp('/cards')
+    expect(await screen.findByText('Aucune carte')).toBeInTheDocument()
   })
 })

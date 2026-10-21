@@ -58,7 +58,7 @@ src/
     tokenStore.ts            JWT en sessionStorage + lecture des claims sub/exp
     index.ts                 endpoints /api/v1 (login, accounts, transactions) + instance branchée sur serviceStatus
   hooks/                     useAuth, useResource, useAccounts, useTransactions (tri), useBankData, useTxViews,
-                             useIsDesktop, useServiceStatus, useSecondsLeft, useBeneficiaries, useLimits, useSpending (stats par
+                             useIsDesktop, useServiceStatus, useSecondsLeft, useBeneficiaries, useLimits, useCards, useSpending (stats par
                              catégorie, #44), shell-context (toast, retour d'en-tête)
   components/
     Layout.tsx               shell : barre latérale (desktop) / onglets (mobile), en-tête, bandeau d'état, toasts
@@ -66,9 +66,10 @@ src/
     ui.tsx                   AccountCard, TxRow, Segmented, Avatar, états chargement/vide/erreur, ConfirmDialog
     CategoryPicker.tsx       sélecteur de catégorie (Envoyer, filtres de l'historique)
     LimitBar.tsx             barre « Plafond restant » (#46, D10)
+    Switch.tsx               interrupteur accessible role=switch (réglages de carte, #47)
     icons.tsx                pictogrammes SVG inline
   pages/                     Login, Home, Stats, Send (formulaire desktop + assistant mobile, glisser pour envoyer),
-                             History (+ feuille de filtres mobile, export CSV), TxDetail, Rib, Beneficiaries, Limits, Profile
+                             History (+ feuille de filtres mobile, export CSV), TxDetail, Rib, Beneficiaries, Limits, Cards, Profile
   lib/
     bank.ts                  vues métier pures : sens/montant signé, groupes par jour, dépenses par période,
                              destinataires connus, CSV (anti-injection de formules)
