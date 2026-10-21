@@ -1,6 +1,6 @@
 import { createContext } from 'react'
 import type { Resource } from './useResource'
-import type { Account, Beneficiary, Transaction } from '../types/api'
+import type { Account, AccountLimit, Beneficiary, Transaction } from '../types/api'
 
 export interface BankData {
   accounts: Resource<Account[]>
@@ -8,6 +8,8 @@ export interface BankData {
   transactions: Resource<Transaction[]>
   /** Bénéficiaires enregistrés (#43) ; rechargés après ajout / suppression, pas périodiquement. */
   beneficiaries: Resource<Beneficiary[]>
+  /** Plafonds mensuels (#46) ; rechargés après un virement, en cas d'échec et à la reprise du service. */
+  limits: Resource<AccountLimit[]>
   /** Libellés saisis localement (l'API n'en stocke pas), par id de transaction. */
   labels: Record<string, string>
   saveLabel: (txId: string, label: string) => void

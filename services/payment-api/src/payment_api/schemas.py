@@ -92,3 +92,12 @@ class SpendingOut(BaseModel):
     total_cents: int
     by_category: list[CategoryShare]
     by_day: list[DaySpending]
+
+
+class LimitOut(BaseModel):
+    account_id: int
+    # null = pas de plafond (comptes de service : verify_tx, trafic normal)
+    monthly_limit_cents: int | None
+    used_cents: int
+    remaining_cents: int | None
+    period_end: date  # 1er du mois suivant (UTC), date de remise à zéro

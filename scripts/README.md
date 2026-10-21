@@ -27,6 +27,8 @@ et **8 dépenses catégorisées** vers les tiers, placées dans la semaine et le
 du seed (#44 : écran Statistiques jamais vide ; un `make seed` / `reset.sh` avant la démo suffit, une fois
 par mois). Le solde affiché reste 1 000,00 € (`verify_tx` inchangé).
 
+- Plafond mensuel (#46) : `demo03`+ plafonnés à `SEED_MONTHLY_LIMIT_CENTS` (défaut 80 000 = 800 €, sous le solde : le plafond se voit et se déclenche ; transmis aussi au conteneur ; un client seedé avant #46 est rattrapé) ;
+  `demo01`/`demo02` (comptes de service : `verify_tx`, trafic normal, `service_flood`) **sans plafond**.
 - Idempotent : les utilisateurs et bénéficiaires existants sont ignorés, relançable sans doublon.
 - `SEED_USERS` (défaut `5`) change le nombre de comptes.
 

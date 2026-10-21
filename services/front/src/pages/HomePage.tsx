@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { Icon } from '../components/icons'
+import { LimitBar } from '../components/LimitBar'
 import { AccountCard, Avatar, Card, EmptyState, ErrorState, H2, LoadingState, TxRow } from '../components/ui'
 import { useBankData } from '../hooks/useBankData'
 import { useSpending } from '../hooks/useSpending'
@@ -11,7 +12,7 @@ import { formatMoney } from '../lib/format'
 import type { SendRouteState } from './SendPage'
 
 export function HomePage() {
-  const { accounts, beneficiaries } = useBankData()
+  const { accounts, beneficiaries, limits } = useBankData()
   const { views } = useTxViews()
   const { toast } = useShell()
   const navigate = useNavigate()
@@ -28,6 +29,8 @@ export function HomePage() {
   // Le compte débité par défaut (1er) n'est pas un destinataire possible.
   const people = recipients(list, views ?? [], list[0]!.id, beneficiaries.data ?? []).slice(0, 6)
   const month = spendingPeriod(views ?? [], 'month', 0)
+  // Plafond du compte débité par défaut (1er) ; rien tant qu'il n'est pas connu (chargement / erreur).
+  const mainLimit = limits.data?.find((l) => l.accountId === list[0]!.id)
   const addAccount = () => toast('Ouverture de compte indisponible dans la démonstration')
   const sendTo = (to?: string) => navigate('/send', { state: { to } satisfies SendRouteState })
 
@@ -68,6 +71,15 @@ export function HomePage() {
         <span className="text-[13px] text-ink-3">
           Sur {list.length} compte{list.length > 1 ? 's' : ''} · au {new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
         </span>
+        {mainLimit && (
+          // La barre (role=meter) reste hors du bouton : un bouton n'admet que du contenu phrasé.
+          <div className="mt-2.5 flex flex-col gap-1.5">
+            <LimitBar limit={mainLimit} currency={list[0]!.currency} />
+            <button type="button" onClick={() => navigate('/limits')} className="min-h-11 self-start border-0 bg-transparent px-0 text-sm font-semibold text-ink-2 underline underline-offset-[3px]">
+              Voir les plafonds
+            </button>
+          </div>
+        )}
       </Card>
 
       <div className="grid items-stretch gap-[22px] [grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr))]">

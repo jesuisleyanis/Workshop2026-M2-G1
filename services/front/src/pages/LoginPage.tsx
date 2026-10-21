@@ -7,7 +7,8 @@ import { userMessage } from '../lib/errorMessages'
 
 // Raccourcis de démo : identifiants seulement. Les mots de passe ne sont jamais embarqués
 // dans le bundle (servi publiquement derrière le WAF, visible depuis le PC Attaquant).
-const DEMO_USERS = ['demo01', 'demo02']
+// demo01/demo02 : comptes de service (verify_tx, trafic normal), sans plafond ; demo03 : client avec plafond (#46).
+const DEMO_USERS = ['demo01', 'demo02', 'demo03']
 
 export function LoginPage() {
   const { isAuthenticated, login, notice } = useAuth()

@@ -22,6 +22,12 @@ from resilience_db.passwords import hash_password
 
 DEFAULT_USERS = 5
 DEFAULT_BALANCE_CENTS = 100_000  # 1 000,00 EUR fictifs par compte
+# Plafond mensuel (#46) des clients de démo « humains ». demo01/demo02 sont des comptes de
+# SERVICE (verify_tx, trafic normal, service_flood) : jamais plafonnés, sinon la vérification
+# de reprise et la baseline ML (ratio 4xx) casseraient après quelques heures de trafic.
+# Sous le solde (1 000 €) : le plafond se voit et se déclenche avant le solde insuffisant.
+DEFAULT_MONTHLY_LIMIT_CENTS = 80_000  # 800,00 EUR
+SERVICE_USERS = frozenset({"demo01", "demo02"})
 
 # Tiers FICTIFS destinataires de virements (#43). Comptes sans mot de passe utilisable : ils
 # existent pour être crédités, jamais pour se connecter. Banque fictive « 9999 » : espace
@@ -57,6 +63,20 @@ def demo_iban(n: int) -> str:
     return f"FR76 0000 0000 {n:04d} 0000 0000 000"
 
 
+def _backfill_limits(session: Session, users: int, limit: int) -> None:
+    """Clients de démo seedés avant #46 (colonne NULL après la migration) : plafond posé une fois.
+    Les comptes de service et un plafond déjà fixé ne sont jamais touchés."""
+    for n in range(1, users + 1):
+        username = demo_username(n)
+        if username in SERVICE_USERS:
+            continue
+        user = session.scalar(select(User).where(User.username == username))
+        for account in user.accounts if user else []:
+            if account.monthly_limit_cents is None:
+                account.monthly_limit_cents = limit
+    session.commit()
+
+
 def payee_iban(i: int) -> str:
     return f"FR76 9999 0000 {i:04d} 0000 0000 000"
 
@@ -71,6 +91,7 @@ def seed_demo_data(
     *,
     users: int = DEFAULT_USERS,
     balance_cents: int = DEFAULT_BALANCE_CENTS,
+    monthly_limit_cents: int = DEFAULT_MONTHLY_LIMIT_CENTS,
 ) -> list[str]:
     """Crée demo01..demoNN avec un compte chacun. Idempotent : ignore les existants.
 
@@ -88,11 +109,13 @@ def seed_demo_data(
                 iban_fake=demo_iban(n),
                 balance_cents=balance_cents,
                 currency="EUR",
+                monthly_limit_cents=None if username in SERVICE_USERS else monthly_limit_cents,
             )
         )
         session.add(user)
         created.append(username)
     session.commit()
+    _backfill_limits(session, users, monthly_limit_cents)
     seed_beneficiaries(session, users=users)
     seed_history(session, [demo_username(n) for n in range(1, users + 1)])
     return created
@@ -213,9 +236,10 @@ def seed_beneficiaries(session: Session, *, users: int = DEFAULT_USERS) -> int:
 def main() -> int:
     password = read_secret("SEED_PASSWORD")
     users = int(os.environ.get("SEED_USERS", DEFAULT_USERS))
+    limit = int(os.environ.get("SEED_MONTHLY_LIMIT_CENTS", DEFAULT_MONTHLY_LIMIT_CENTS))
     engine = make_engine()
     with make_session_factory(engine)() as session:
-        created = seed_demo_data(session, password, users=users)
+        created = seed_demo_data(session, password, users=users, monthly_limit_cents=limit)
     sys.stdout.write(f"seed: {len(created)} utilisateur(s) créé(s): {', '.join(created) or '-'}\n")
     return 0
 

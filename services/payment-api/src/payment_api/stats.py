@@ -26,6 +26,18 @@ def period_bounds(period: str, now: datetime, offset: int = 0) -> tuple[date, da
     return start, end
 
 
+def spend_scope(owner_id: int, since: datetime, until: datetime) -> tuple:
+    """Filtre « dépense » partagé par les stats (#44) et le plafond (#46) : virement accepté vers
+    un compte qui n'est pas au client, dans [since, until). La source est filtrée par l'appelant."""
+    own = select(Account.id).where(Account.user_id == owner_id)
+    return (
+        Transaction.dst_account.not_in(own),
+        Transaction.status == TransactionStatus.CREATED.value,
+        Transaction.created_at >= since,
+        Transaction.created_at < until,
+    )
+
+
 def _utc_day(session: Session, column):
     # Jour calendaire UTC calculé en base. PostgreSQL : timestamptz ramené en UTC quel que soit
     # le fuseau de session ; SQLite stocke déjà l'UTC sous forme de texte.
@@ -39,10 +51,11 @@ def spending(session: Session, user: User, period: str, now: datetime, offset: i
     own = select(Account.id).where(Account.user_id == user.id)
     scope = (
         Transaction.src_account.in_(own),
-        Transaction.dst_account.not_in(own),
-        Transaction.status == TransactionStatus.CREATED.value,
-        Transaction.created_at >= datetime.combine(start, time.min, tzinfo=UTC),
-        Transaction.created_at < datetime.combine(end, time.min, tzinfo=UTC),
+        *spend_scope(
+            user.id,
+            datetime.combine(start, time.min, tzinfo=UTC),
+            datetime.combine(end, time.min, tzinfo=UTC),
+        ),
     )
     total_col = func.sum(Transaction.amount_cents)
     by_category = session.execute(

@@ -1,5 +1,5 @@
 import { ApiError } from './errors'
-import type { Account, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
+import type { Account, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
 import { isCategory } from '../lib/categories'
 
 type Obj = Record<string, unknown>
@@ -151,4 +151,21 @@ export function parseSpending(v: unknown): Spending {
       return { date: str(r, 'date', 'jour'), amount: num(r, 'amount_cents', 'jour') / 100 }
     }),
   }
+}
+
+function optCents(o: Obj, key: string, what: string): number | null {
+  return o[key] === null || o[key] === undefined ? null : num(o, key, what) / 100
+}
+
+export function parseLimits(v: unknown): AccountLimit[] {
+  return list(v, 'limits', 'plafonds').map((x) => {
+    const o = asObj(x, 'plafond')
+    return {
+      accountId: str(o, 'account_id', 'plafond'),
+      limit: optCents(o, 'monthly_limit_cents', 'plafond'),
+      used: num(o, 'used_cents', 'plafond') / 100,
+      remaining: optCents(o, 'remaining_cents', 'plafond'),
+      periodEnd: str(o, 'period_end', 'plafond'),
+    }
+  })
 }

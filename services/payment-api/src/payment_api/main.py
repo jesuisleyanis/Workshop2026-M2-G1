@@ -24,7 +24,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from payment_api import beneficiaries, stats
+from payment_api import beneficiaries, limits, stats
 from payment_api.config import SERVICE_NAME, Settings
 from payment_api.ledger import Rejection, transfer
 from payment_api.observability import (
@@ -39,6 +39,7 @@ from payment_api.schemas import (
     AccountOut,
     BeneficiaryIn,
     BeneficiaryOut,
+    LimitOut,
     ServiceStatusOut,
     SpendingOut,
     TransactionIn,
@@ -206,6 +207,7 @@ def create_app(
                 body.amount_cents,
                 request_id_var.get(),
                 body.category,
+                now(),
             )
         except Rejection as rej:
             transactions_total.labels(result="rejected").inc()
@@ -272,6 +274,10 @@ def create_app(
         tx, sender, _ = row
         own = {tx.src_account} if sender == user.id else set()
         return _as_seen_by(tx, own)
+
+    @app.get("/api/v1/limits", response_model=list[LimitOut])
+    def list_limits(user: User = Depends(current_user), session=Depends(get_session)):
+        return limits.limits_for(session, user, now())
 
     @app.get("/api/v1/stats/spending", response_model=SpendingOut)
     def spending_stats(

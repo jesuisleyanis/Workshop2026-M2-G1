@@ -58,21 +58,23 @@ src/
     tokenStore.ts            JWT en sessionStorage + lecture des claims sub/exp
     index.ts                 endpoints /api/v1 (login, accounts, transactions) + instance branchée sur serviceStatus
   hooks/                     useAuth, useResource, useAccounts, useTransactions (tri), useBankData, useTxViews,
-                             useIsDesktop, useServiceStatus, useSecondsLeft, useBeneficiaries, useSpending (stats par
+                             useIsDesktop, useServiceStatus, useSecondsLeft, useBeneficiaries, useLimits, useSpending (stats par
                              catégorie, #44), shell-context (toast, retour d'en-tête)
   components/
     Layout.tsx               shell : barre latérale (desktop) / onglets (mobile), en-tête, bandeau d'état, toasts
     BankDataProvider.tsx     comptes + transactions (rafraîchis toutes les 15 s, onglet visible) + bénéficiaires (au chargement)
     ui.tsx                   AccountCard, TxRow, Segmented, Avatar, états chargement/vide/erreur, ConfirmDialog
     CategoryPicker.tsx       sélecteur de catégorie (Envoyer, filtres de l'historique)
+    LimitBar.tsx             barre « Plafond restant » (#46, D10)
     icons.tsx                pictogrammes SVG inline
   pages/                     Login, Home, Stats, Send (formulaire desktop + assistant mobile, glisser pour envoyer),
-                             History (+ feuille de filtres mobile, export CSV), TxDetail, Rib, Beneficiaries, Profile
+                             History (+ feuille de filtres mobile, export CSV), TxDetail, Rib, Beneficiaries, Limits, Profile
   lib/
     bank.ts                  vues métier pures : sens/montant signé, groupes par jour, dépenses par période,
                              destinataires connus, CSV (anti-injection de formules)
     serviceStatus.ts         état du service (ok / perturbé / rétabli) pour le bandeau D6
     categories.ts            9 catégories de dépense (#44) : libellé, icône, teinte de gris
+    limits.ts                plafonds (#46) : part restante, dépassement (avertissement), date de remise à zéro
     format, validation, errorMessages, labels
   test/                      setup Vitest, helpers (stub fetch, faux JWT, setViewport desktop/mobile)
 docker/                      nginx.conf (non-root, :8080), security-headers.conf
