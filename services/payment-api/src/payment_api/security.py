@@ -10,7 +10,7 @@ ALGORITHM = "HS256"
 
 
 def claims_from_token(token: str, secret: str) -> dict:
-    """Claims d'un JWT valide (mêmes règles que username_from_token), sinon ApiError(401)."""
+    """Claims d'un JWT valide (HS256 épinglé : rejette `alg: none` et la confusion d'algorithme ; exp et sub obligatoires), sinon ApiError(401)."""
     try:
         return jwt.decode(
             token, secret, algorithms=[ALGORITHM], options={"require": ["exp", "sub"]}
@@ -19,18 +19,6 @@ def claims_from_token(token: str, secret: str) -> dict:
         raise ApiError(401, "token_expired", "Token expired", _bearer("invalid_token"))
     except jwt.InvalidTokenError:
         raise ApiError(401, "invalid_token", "Invalid token", _bearer("invalid_token"))
-
-
-def username_from_token(token: str, secret: str) -> str:
-    """Renvoie le claim `sub` d'un JWT valide, sinon lève ApiError(401).
-
-    L'algorithme est ÉPINGLÉ à HS256 (rejette `alg: none` et la confusion d'algorithme),
-    `exp` et `sub` sont obligatoires.
-    """
-    sub = claims_from_token(token, secret)["sub"]
-    if not isinstance(sub, str) or not sub:
-        raise ApiError(401, "invalid_token", "Invalid token", _bearer("invalid_token"))
-    return sub
 
 
 def _bearer(error: str | None = None) -> dict:

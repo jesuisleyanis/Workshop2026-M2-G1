@@ -30,8 +30,10 @@ class TransactionIn(BaseModel):
     # StrictInt : pas de float ni de bool déguisé ; les montants sont des entiers en centimes.
     # Les bornes métier (montant > 0, ...) sont vérifiées dans le ledger afin d'être
     # tracées (event transaction_rejected + métrique) plutôt que rejetées en 422 muet.
-    src_account: StrictInt
-    dst_account: StrictInt
+    # Bornés à l'INTEGER Postgres : au-delà, un DataError deviendrait un faux db_error (503)
+    # exploitable par n'importe quel client pour déclencher la détection ML et la remédiation.
+    src_account: StrictInt = Field(ge=1, le=2**31 - 1)
+    dst_account: StrictInt = Field(ge=1, le=2**31 - 1)
     amount_cents: StrictInt
     # Facultatif (#44) : verify_tx et le trafic normal historique n'en envoient pas.
     category: TransactionCategory = TransactionCategory.TRANSFER
@@ -60,7 +62,9 @@ class ServiceStatusOut(BaseModel):
 class BeneficiaryIn(BaseModel):
     display_name: str = Field(min_length=1, max_length=64)
     # IBAN fictif tel qu'affiché (espaces tolérés) ; résolu vers un compte existant.
-    iban_fake: str = Field(min_length=4, max_length=42)
+    # Lettres, chiffres, espaces : un NUL ou un caractère de contrôle ferait lever un DataError
+    # psycopg (faux 503 db_error, signal ML exploitable par n'importe quel client).
+    iban_fake: str = Field(min_length=4, max_length=42, pattern=r"^[A-Za-z0-9 ]+$")
 
     @field_validator("display_name")
     @classmethod

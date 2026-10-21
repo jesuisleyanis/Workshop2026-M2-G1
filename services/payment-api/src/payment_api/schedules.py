@@ -90,6 +90,35 @@ def create(session: Session, user: User, body, today: date) -> ScheduledTransfer
     return s
 
 
+def open_amount(
+    session: Session,
+    user: User,
+    src_account: int,
+    exclude: int | None = None,
+    lock: bool = False,
+) -> int:
+    """Programmations actives d'un compte PLAFONNÉ vers des tiers (anti-fractionnement du step-up,
+    #51) — même périmètre que pour les virements immédiats. `lock` : verrou du compte source
+    jusqu'au commit, pour sérialiser deux créations concurrentes."""
+    q_src = select(Account.monthly_limit_cents).where(
+        Account.id == src_account, Account.user_id == user.id
+    )
+    if lock:
+        q_src = q_src.with_for_update()
+    if session.execute(q_src).scalar() is None:  # inconnu, d'autrui ou sans plafond (service)
+        return 0
+    own = select(Account.id).where(Account.user_id == user.id)
+    q = select(func.coalesce(func.sum(ScheduledTransfer.amount_cents), 0)).where(
+        ScheduledTransfer.owner_user_id == user.id,
+        ScheduledTransfer.src_account == src_account,
+        ScheduledTransfer.dst_account.not_in(own),
+        ScheduledTransfer.status == "active",
+    )
+    if exclude is not None:
+        q = q.where(ScheduledTransfer.id != exclude)
+    return session.scalar(q)
+
+
 def owned(session: Session, user: User, schedule_id: int) -> ScheduledTransfer:
     s = session.get(ScheduledTransfer, schedule_id, with_for_update=True)
     if s is None or s.owner_user_id != user.id:
@@ -105,12 +134,19 @@ def _first_on_or_after(s: ScheduledTransfer, day: date) -> date | None:
 
 
 def set_status(
-    session: Session, user: User, schedule_id: int, status: str, today: date
+    session: Session,
+    user: User,
+    schedule_id: int,
+    status: str,
+    today: date,
+    before_resume: Callable[[ScheduledTransfer], None] | None = None,
 ) -> ScheduledTransfer:
     s = owned(session, user, schedule_id)
     if s.status in ("cancelled", "completed"):
         raise Rejection(409, "schedule_closed", "This scheduled transfer is closed")
     if status == "active" and s.status == "paused":
+        if before_resume is not None:
+            before_resume(s)  # step-up (#51) : peut lever, rien n'est modifié
         # Reprise : seules les échéances À VENIR comptent, jamais celles manquées pendant la pause.
         s.next_run_on = _first_on_or_after(s, today)
         if s.next_run_on is None:

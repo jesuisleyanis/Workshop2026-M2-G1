@@ -8,6 +8,7 @@ import { useBankData } from '../hooks/useBankData'
 import { useTxViews } from '../hooks/useTxViews'
 import { groupByDay, historyCsv, signed, type TxView } from '../lib/bank'
 import { categoryLabel } from '../lib/categories'
+import { saveFile } from '../lib/statements'
 import type { Category } from '../types/api'
 
 type St = 'all' | 'ok' | 'rej'
@@ -63,14 +64,7 @@ export function HistoryPage() {
 
   function exportCsv() {
     const name = `operations-${new Date().toISOString().slice(0, 10)}.csv`
-    const url = URL.createObjectURL(new Blob([historyCsv(list)], { type: 'text/csv;charset=utf-8' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = name
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 1500)
+    saveFile(new Blob([historyCsv(list)], { type: 'text/csv;charset=utf-8' }), name)
     toast(`Fichier ${name} téléchargé`)
   }
 

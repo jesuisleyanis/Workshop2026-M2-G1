@@ -101,14 +101,14 @@ def test_limit_per_user(client, alice, monkeypatch):
 
 def test_audit_trail_events_without_the_typed_iban(client, alice, log_lines):
     created = _add(client, alice).json()
-    _add(client, alice, iban="FR76 SECRET-PROBE")
+    _add(client, alice, iban="FR76 SECRETPROBE")
     client.delete(f"{B}/{created['id']}", headers=alice)
     (added,) = log_lines("beneficiary_added")
     (rejected,) = log_lines("beneficiary_rejected")
     (removed,) = log_lines("beneficiary_removed")
     assert added["user"] == rejected["user"] == removed["user"] == "alice"
     assert rejected["level"] == "WARNING" and "account_not_found" in rejected["message"]
-    assert "SECRET-PROBE" not in str(log_lines()), "l'IBAN sondé n'est jamais journalisé"
+    assert "SECRETPROBE" not in str(log_lines()), "l'IBAN sondé n'est jamais journalisé"
     from resilience_common.logging import NORMALIZED_EVENTS
 
     assert {"beneficiary_added", "beneficiary_rejected", "beneficiary_removed"} <= NORMALIZED_EVENTS

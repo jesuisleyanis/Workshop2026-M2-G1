@@ -8,7 +8,7 @@ import logging
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Path, Query, Request, Response
@@ -18,9 +18,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from resilience_common.logging import get_logger
 from resilience_common.metrics import db_errors_total, instrument, transactions_total
 from resilience_db.config import make_engine, make_session_factory
-from resilience_db.migrate import upgrade
-from resilience_db.models import Account, Transaction, User
-from sqlalchemy import Engine, or_, select, text
+from resilience_db.migrate import upgrade_with_retry
+from resilience_db.models import Account, Transaction, TransactionStatus, User
+from sqlalchemy import Engine, and_, func, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -64,19 +64,6 @@ from payment_api.schemas import (
 from payment_api.security import claims_from_token, missing_token
 from payment_api.status import StatusCache
 
-
-def _migrate_with_retry(engine: Engine, log: logging.Logger, attempts: int = 5) -> None:
-    for attempt in range(1, attempts + 1):
-        try:
-            upgrade(engine)
-            return
-        except SQLAlchemyError:
-            if attempt == attempts:
-                raise
-            log.warning("DB not ready for migrations (attempt %d/%d)", attempt, attempts)
-            time.sleep(2)
-
-
 # Identifiant en chemin borné à l'INTEGER Postgres : au-delà, la BDD lèverait une DataError,
 # traduite en 503 db_unavailable + db_errors_total, soit un faux signal d'incident pour le ML.
 DbId = Annotated[int, Path(ge=1, le=2**31 - 1)]
@@ -85,7 +72,11 @@ DbId = Annotated[int, Path(ge=1, le=2**31 - 1)]
 def _as_seen_by(tx: Transaction, own_ids: set[int]) -> TransactionOut:
     # La catégorie est celle de l'émetteur : jamais divulguée au destinataire (#44).
     out = TransactionOut.model_validate(tx)
-    return out if tx.src_account in own_ids else out.model_copy(update={"category": None})
+    if tx.src_account in own_ids:
+        return out
+    # Catégorie et référence (ex. « sched-12-2026-10-21 » : programmation, périodicité) de
+    # l'émetteur : jamais divulguées au destinataire.
+    return out.model_copy(update={"category": None, "request_id": None})
 
 
 def _db_reachable(session) -> bool:
@@ -126,7 +117,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if settings.run_migrations:
-            _migrate_with_retry(engine, log)
+            upgrade_with_retry(engine, log)
         task = asyncio.create_task(_scheduler_loop()) if settings.scheduler_enabled else None
         yield
         if task is not None:
@@ -169,16 +160,29 @@ def create_app(
             raise ApiError(401, "invalid_token", "Invalid token", {"WWW-Authenticate": "Bearer"})
         return user
 
-    def require_recent_auth(amount_cents: int, request: Request, user: User) -> None:
-        """Step-up (#51) : gros montant -> mot de passe vérifié il y a moins de N secondes.
+    def spent_last_24h(session, src: Account, user: User) -> int:
+        t = now()
+        return session.scalar(
+            select(func.coalesce(func.sum(Transaction.amount_cents), 0)).where(
+                Transaction.src_account == src.id,
+                *stats.spend_scope(user.id, t - timedelta(hours=24), t + timedelta(seconds=1)),
+            )
+        )
 
-        `auth_time` vient du JWT déjà vérifié par current_user (pas de second décodage)."""
-        if amount_cents <= settings.step_up_threshold_cents:
-            return
+    def auth_is_recent(request: Request) -> bool:
         auth_time = getattr(request.state, "auth_time", None)
         age = now().timestamp() - auth_time if isinstance(auth_time, int | float) else None
         # Absent, trop ancien, ou dans le futur au-delà d'une dérive d'horloge raisonnable.
-        if age is None or age > settings.step_up_max_age_s or age < -60:
+        return age is not None and -60 <= age <= settings.step_up_max_age_s
+
+    def require_recent_auth(
+        amount_cents: int, request: Request, user: User, already_cents: int = 0
+    ) -> None:
+        """Step-up (#51) : `amount_cents + already_cents` au-delà du seuil -> mot de passe vérifié
+        il y a moins de N secondes. `auth_time` vient du JWT déjà vérifié par current_user."""
+        if amount_cents + already_cents <= settings.step_up_threshold_cents:
+            return
+        if not auth_is_recent(request):
             log_event(
                 log,
                 logging.WARNING,
@@ -265,6 +269,17 @@ def create_app(
         session=Depends(get_session),
     ):
         require_recent_auth(body.amount_cents, request, user)
+
+        def anti_splitting(src: Account, dst: Account) -> None:
+            # Appelé par le ledger SOUS le verrou de la source : des virements concurrents de 499 €
+            # se sérialisent, chacun voit les précédents. Exemptés (aucune requête) : comptes de
+            # service sans plafond (verify_tx, trafic normal), virement vers mes propres comptes
+            # (comme le plafond), session déjà ré-authentifiée.
+            external = dst.user_id != src.user_id
+            if src.monthly_limit_cents is not None and external and not auth_is_recent(request):
+                already = spent_last_24h(session, src, user)
+                require_recent_auth(body.amount_cents, request, user, already)
+
         try:
             tx = transfer(
                 session,
@@ -275,6 +290,7 @@ def create_app(
                 request_id_var.get(),
                 body.category,
                 now(),
+                guard=anti_splitting,
             )
         except Rejection as rej:
             transactions_total.labels(result="rejected").inc()
@@ -307,7 +323,17 @@ def create_app(
         own_ids = set(session.scalars(select(Account.id).where(Account.user_id == user.id)))
         rows = session.scalars(
             select(Transaction)
-            .where(or_(Transaction.src_account.in_(own_ids), Transaction.dst_account.in_(own_ids)))
+            .where(
+                or_(
+                    Transaction.src_account.in_(own_ids),
+                    # Reçu : seulement s'il a abouti. Le refus d'un tiers (solde, plafond) ne
+                    # regarde que lui — même règle que le relevé (#50).
+                    and_(
+                        Transaction.dst_account.in_(own_ids),
+                        Transaction.status == TransactionStatus.CREATED.value,
+                    ),
+                )
+            )
             .order_by(Transaction.id.desc())
             .limit(limit)
         ).all()
@@ -326,7 +352,11 @@ def create_app(
             .join(dst, dst.id == Transaction.dst_account)
             .where(Transaction.id == transaction_id)
         ).first()  # une seule requête : l'opération et ses deux titulaires
-        if row is None or user.id not in (row[1], row[2]):
+        # Refus d'un tiers vers moi : invisible pour moi, comme un id inconnu.
+        visible = row is not None and (
+            row[1] == user.id or (row[2] == user.id and row[0].status == "created")
+        )
+        if not visible:
             # Ni émetteur ni destinataire : même 404 qu'un id inconnu (pas 403, anti-énumération),
             # mais tracé côté SOC (balayage d'ids = tentative d'IDOR).
             log_event(
@@ -431,8 +461,15 @@ def create_app(
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
-        # Un virement permanent au-delà du seuil est aussi sensible qu'un virement immédiat.
-        require_recent_auth(body.amount_cents, request, user)
+        # Un virement permanent au-delà du seuil est aussi sensible qu'un virement immédiat ; les
+        # programmations déjà ouvertes vers des tiers comptent (pas de fractionnement en N × 499 €).
+        # Verrou du compte source jusqu'au commit : deux créations concurrentes se sérialisent.
+        require_recent_auth(
+            body.amount_cents,
+            request,
+            user,
+            schedules.open_amount(session, user, body.src_account, lock=True),
+        )
         try:
             s = schedules.create(session, user, body, now().astimezone(UTC).date())
         except Rejection as rej:
@@ -455,13 +492,25 @@ def create_app(
 
     @app.patch("/api/v1/scheduled-transfers/{schedule_id}", response_model=ScheduleOut)
     def set_schedule_status(
+        request: Request,
         schedule_id: DbId,
         body: ScheduleStatusIn,
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
+        # Reprendre un gros virement permanent relance des débits : même step-up qu'à la création.
         s = schedules.set_status(
-            session, user, schedule_id, body.status, now().astimezone(UTC).date()
+            session,
+            user,
+            schedule_id,
+            body.status,
+            now().astimezone(UTC).date(),
+            before_resume=lambda sched: require_recent_auth(
+                sched.amount_cents,
+                request,
+                user,
+                schedules.open_amount(session, user, sched.src_account, exclude=sched.id),
+            ),
         )
         _audit("scheduled_transfer_changed", f"Schedule {s.id} {s.status}", 200, user)
         return _schedule_out(s)

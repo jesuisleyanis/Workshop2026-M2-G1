@@ -13,7 +13,7 @@ import io
 from datetime import UTC, date, datetime, time, timedelta
 
 from resilience_db.models import Account, Transaction, User
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from payment_api.ledger import Rejection
@@ -56,7 +56,12 @@ def build(session: Session, user: User, account_id: int, start: date, end: date)
     txs = session.scalars(
         select(Transaction)
         .where(
-            or_(Transaction.src_account == account.id, Transaction.dst_account == account.id),
+            or_(
+                Transaction.src_account == account.id,
+                # Reçus aboutis seulement (en SQL : les refus d'un tiers ne comptent pas non plus
+                # dans MAX_ROWS — sinon n'importe qui pourrait rendre un relevé « trop gros »).
+                and_(Transaction.dst_account == account.id, Transaction.status == "created"),
+            ),
             Transaction.created_at >= lo,
             Transaction.created_at < hi,
         )
@@ -68,8 +73,6 @@ def build(session: Session, user: User, account_id: int, start: date, end: date)
     rows, debit, credit = [], 0, 0
     for t in txs:
         out = t.src_account == account.id
-        if not out and t.status != "created":
-            continue  # un refus d'un tiers ne regarde que lui : jamais sur le relevé du destinataire
         if t.status == "created":
             if out:
                 debit += t.amount_cents
@@ -81,7 +84,8 @@ def build(session: Session, user: User, account_id: int, start: date, end: date)
                 "created_at": t.created_at
                 if t.created_at.tzinfo
                 else t.created_at.replace(tzinfo=UTC),
-                "reference": t.request_id or f"#{t.id}",
+                # Référence de l'émetteur masquée sur un crédit (id de programmation, périodicité).
+                "reference": (t.request_id if out else None) or f"#{t.id}",
                 "direction": "debit" if out else "credit",
                 "counterparty_account": t.dst_account if out else t.src_account,
                 # Catégorie de l'émetteur : jamais divulguée au destinataire (#44).

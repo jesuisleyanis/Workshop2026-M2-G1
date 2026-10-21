@@ -9,6 +9,7 @@ export function ProtectedRoute() {
   const { isAuthenticated } = useAuth()
   const location = useLocation()
   if (isAuthenticated) return <Outlet />
-  const state: LoginRedirectState = { from: location.pathname }
+  // Chemin ET paramètres : /statements/print?account=… doit survivre à une reconnexion.
+  const state: LoginRedirectState = { from: location.pathname + location.search }
   return <Navigate to="/login" replace state={state} />
 }

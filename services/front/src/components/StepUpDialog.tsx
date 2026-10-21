@@ -4,8 +4,6 @@ import { useAuth } from '../hooks/useAuth'
 import { userMessage } from '../lib/errorMessages'
 import { Icon } from './icons'
 
-/** Seuil indicatif affiché (le serveur reste l'autorité : STEP_UP_THRESHOLD_CENTS). */
-
 /**
  * D15 — Confirmation renforcée d'un gros virement (#51). `onDone(true)` après une
  * ré-authentification réussie (l'appelant rejoue la requête), `onDone(false)` si annulée.
@@ -19,12 +17,16 @@ export function StepUpDialog({ onDone }: { onDone: (ok: boolean) => void }) {
   const [busy, setBusy] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const done = useRef(onDone)
+  // Pendant la vérification, on ne peut plus annuler : le jeton peut déjà être remplacé côté serveur,
+  // « annulé » afficherait un état faux.
+  const busyRef = useRef(false)
   useEffect(() => {
     done.current = onDone
+    busyRef.current = busy
   })
   useEffect(() => {
     inputRef.current?.focus()
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && done.current(false)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !busyRef.current && done.current(false)
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
@@ -91,7 +93,7 @@ export function StepUpDialog({ onDone }: { onDone: (ok: boolean) => void }) {
           </p>
         )}
         <div className="mt-1.5 grid grid-cols-2 gap-2.5">
-          <button type="button" onClick={() => onDone(false)} className="btn-ghost h-[52px] text-[15px]">
+          <button type="button" disabled={busy} onClick={() => onDone(false)} className="btn-ghost h-[52px] text-[15px]">
             {locked ? 'Fermer' : 'Annuler'}
           </button>
           <button type="submit" disabled={busy || locked || !password} className="btn-primary h-[52px] text-[15px]">

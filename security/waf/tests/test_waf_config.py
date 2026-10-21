@@ -240,3 +240,25 @@ def test_waf_exporter_image_is_non_root_and_bundles_shared_lib():
     assert re.search(r"^USER 10006:10006", EXPORTER_DOCKERFILE, re.M)
     assert "libs/python/resilience_common" in EXPORTER_DOCKERFILE
     assert 'CMD ["python", "/app/waf_exporter.py"]' in EXPORTER_DOCKERFILE
+
+
+
+def test_plain_http_only_redirects_to_https_and_hsts_is_sent():
+    conf = _directives(NGINX)
+    plain = re.search(r"server \{\s*listen 8080;(.*?)\n    \}", conf, re.S)
+    assert plain, "serveur HTTP clair dédié"
+    body = plain.group(1)
+    assert "return 301 https://$host$request_uri;" in body and "proxy_pass" not in body
+    assert re.search(r"location = /healthz", body), "sonde de vie conservée sur :8080"
+    tls = conf[conf.index("listen 8443 ssl;"):]
+    assert "listen 8080;" not in tls, "l'API n'est jamais servie en clair"
+    assert 'add_header Strict-Transport-Security "max-age=31536000" always;' in conf
+
+
+def test_modsecurity_audit_log_never_contains_request_bodies():
+    import yaml
+
+    env = yaml.safe_load(COMPOSE)["services"]["waf"]["environment"]
+    parts = env["MODSEC_AUDIT_LOG_PARTS"]
+    assert not set(parts) & set("CIJ"), "pas de corps de requête (mots de passe)"
+    assert {"A", "B", "H", "Z"} <= set(parts), "ce que lit waf-exporter (uri, règles)"

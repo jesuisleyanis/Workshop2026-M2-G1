@@ -25,7 +25,6 @@ const RUN_ERRORS: Record<string, string> = {
 
 export const runErrorLabel = (code: string | null) => (code && RUN_ERRORS[code]) || 'refus de la banque'
 
-/** Aujourd'hui en date locale « YYYY-MM-DD » (valeur d'un input type=date). */
 /** « Aujourd'hui » au sens du serveur (date UTC) : défaut et minimum de la date de début. */
 export function todayIso(now = new Date()): string {
   return now.toISOString().slice(0, 10)

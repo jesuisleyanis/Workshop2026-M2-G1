@@ -336,6 +336,104 @@ describe('Front - envoi (desktop)', () => {
   })
 })
 
+describe('Front - revue complète', () => {
+  const R = (post: () => Response) => ({
+    'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+    'GET /api/v1/transactions': () => jsonResponse([]),
+    'POST /api/v1/transactions': post,
+  })
+
+  it.each([502, 504, 500])('passerelle %i : statut inconnu, jamais « Réessayer » (double débit)', async (status) => {
+    loginAsStored()
+    const f = stubFetch(R(() => jsonResponse({ error: { code: 'upstream', message: 'x' } }, status)))
+    renderApp('/send')
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '10')
+    await user.click(screen.getByRole('button', { name: /^Envoyer 10,00/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
+    expect(await screen.findByRole('heading', { name: 'Statut du virement inconnu' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Réessayer' })).not.toBeInTheDocument()
+    expect(posts(f)).toHaveLength(1)
+  })
+
+  it('reconnexion : le chemin ET ses paramètres sont restitués (page imprimable d’un relevé)', async () => {
+    const jwt = fakeJwt(Math.floor(Date.now() / 1000) + 600)
+    const f = stubFetch({
+      'POST /api/v1/login': () => jsonResponse({ access_token: jwt, token_type: 'bearer', expires_in: 900 }),
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+    })
+    renderApp('/statements/print?account=1&from=2026-10-01&to=2026-10-21')
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Identifiant'), 'demo01')
+    await user.type(screen.getByLabelText('Mot de passe'), 'secret')
+    await user.click(screen.getByRole('button', { name: 'Se connecter' }))
+    await waitFor(() =>
+      expect(f.mock.calls.some(([u]) => String(u).includes('/api/v1/statements?account_id=1&from=2026-10-01&to=2026-10-21'))).toBe(true),
+    )
+  })
+
+  it('notifications : un seul chargement de la liste à l’ouverture', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: 1 }),
+      'GET /api/v1/notifications?unread=false': () =>
+        jsonResponse([{ id: 1, type: 'transfer_received', title: 'Virement reçu', body: 'x', created_at: new Date().toISOString(), read_at: null }]),
+    })
+    renderApp('/notifications')
+    expect(await screen.findByText('Virement reçu')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Notifications, 1 non lue/ })).toBeInTheDocument())
+    expect(f.mock.calls.filter(([u]) => String(u).endsWith('?unread=false'))).toHaveLength(1)
+  })
+
+  it('statistiques : jamais le total de la période précédente pendant le rechargement', async () => {
+    loginAsStored()
+    const today = new Date().toISOString().slice(0, 10)
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/stats/spending?period=week&offset=0': () =>
+        jsonResponse({ period: 'week', offset: 0, start: today, end: today, total_cents: 123456, by_category: [], by_day: [{ date: today, amount_cents: 123456 }] }),
+      'GET /api/v1/stats/spending?period=week&offset=-1': () => new Promise<Response>(() => {}), // ne répond jamais
+    })
+    renderApp('/stats')
+    await waitFor(() => expect(screen.getByTestId('stats-total')).toHaveTextContent(/1\s?234,56/))
+    await userEvent.click(screen.getByRole('button', { name: 'Période précédente' }))
+    expect(screen.getByTestId('stats-total')).toHaveTextContent('—')
+    expect(screen.getByText('Calcul en cours…')).toBeInTheDocument()
+  })
+
+  it('un statut d’opération inconnu n’est jamais affiché « Effectué » ni ne casse l’historique', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([{ ...TXS[0], id: 5, status: 'reversed' }, TXS[1]]),
+    })
+    renderApp('/history')
+    expect(await screen.findByText('1 opération')).toBeInTheDocument()
+    expect(screen.queryByText('Effectué')).not.toBeInTheDocument()
+  })
+
+  it('statistiques : total et barres = agrégat serveur de la période, pas les 50 dernières opérations', async () => {
+    loginAsStored()
+    const today = new Date().toISOString().slice(0, 10)
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/stats/spending?period=week&offset=0': () =>
+        jsonResponse({ period: 'week', offset: 0, start: today, end: today, total_cents: 123456, by_category: [], by_day: [{ date: today, amount_cents: 123456 }] }),
+    })
+    renderApp('/stats')
+    await waitFor(() => expect(screen.getByTestId('stats-total')).toHaveTextContent(/1\s?234,56/))
+  })
+})
+
 describe('Front - envoi : statut inconnu', () => {
   it('coupure réseau pendant l’envoi : pas de « Réessayer » (risque de double débit), renvoi vers l’historique', async () => {
     loginAsStored()

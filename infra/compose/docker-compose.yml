@@ -63,6 +63,9 @@ services:
       MODSEC_AUDIT_LOG_FORMAT: JSON
       MODSEC_AUDIT_LOG_TYPE: Serial
       MODSEC_AUDIT_LOG: /var/log/modsec/audit.json
+      # Parties journalisées : en-tête (A), requête sans corps (B), réponse (F), règles (H), fin (Z).
+      # Jamais les corps (C/I/J) : un /login bloqué y laisserait le mot de passe en clair.
+      MODSEC_AUDIT_LOG_PARTS: ABFHZ
     volumes:
       - waf-deny:/etc/nginx/deny:rw
       - waf-logs:/var/log/modsec:rw

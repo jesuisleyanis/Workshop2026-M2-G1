@@ -152,9 +152,13 @@ export function spendingPeriod(views: TxView[], mode: StatsMode, offset: number,
   return { label, days, total: days.reduce((s, d) => s + d.spent, 0) }
 }
 
-/** Neutralise l'injection de formules dans un tableur (=, +, -, @, tabulation, retour chariot). */
+/**
+ * Neutralise l'injection de formules dans un tableur (=, +, -, @, tabulation, retour chariot). Un montant
+ * purement numérique (« -20,00 ») n'est pas une formule : il reste un nombre, sinon SUM ignorerait les débits.
+ */
 export function csvCell(v: string): string {
-  const safe = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v
+  const numeric = /^-?\d+(,\d+)?$/.test(v)
+  const safe = !numeric && /^[=+\-@\t\r]/.test(v) ? `'${v}` : v
   return `"${safe.replace(/"/g, '""')}"`
 }
 
