@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import Enum, StrEnum
 
 from sqlalchemy import (
     BigInteger,
@@ -32,7 +32,7 @@ class TransactionStatus(str, Enum):
     REJECTED = "rejected"
 
 
-class TransactionCategory(str, Enum):
+class TransactionCategory(StrEnum):
     """Catégorie de dépense (#44). Pas un label de métrique : cardinalité figée par le contrat."""
 
     FOOD = "food"

@@ -1,5 +1,7 @@
 """Tests du module partagé : migrations == modèles, seed idempotent, config sans secret en dur."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from resilience_db import Base, build_database_url, make_engine, make_session_factory
 from resilience_db.migrate import upgrade
@@ -210,9 +212,37 @@ def test_seed_history_is_categorised_and_only_for_new_clients():
     with make_session_factory(engine)() as s:
         seed_demo_data(s, "s3cret-pass", users=2)
         assert s.query(Transaction).count() == 2 * len(HISTORY)
-        seed_demo_data(s, "s3cret-pass", users=3)  # demo03 nouveau, demo01/02 inchangés
+        seed_demo_data(s, "s3cret-pass", users=3)  # demo03 nouveau, demo01/02 déjà servis ce mois
         assert s.query(Transaction).count() == 3 * len(HISTORY)
         cats = {t.category for t in s.query(Transaction)}
         assert len(cats) >= 6 and cats <= {c.value for c in TransactionCategory}
         demo = s.query(User).filter_by(username="demo01").one()
         assert demo.accounts[0].balance_cents == 100_000, "solde de démo inchangé (verify_tx)"
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        datetime(2026, 11, 1, 0, 30, tzinfo=UTC),  # dimanche 1er, juste après minuit
+        datetime(2026, 10, 19, 9, 0, tzinfo=UTC),  # lundi
+        datetime(2026, 10, 31, 22, 0, tzinfo=UTC),
+    ],
+)
+def test_seed_history_always_lands_in_current_week_and_month(now):
+    from resilience_db.seed import WEEK_ENTRIES, seed_history
+
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "s3cret-pass", users=1)
+        s.query(Transaction).delete()
+        s.commit()
+        assert seed_history(s, ["demo01"], now=now) == len(HISTORY)
+        assert seed_history(s, ["demo01"], now=now) == 0, "idempotent dans le mois"
+        dates = [
+            t.created_at.replace(tzinfo=UTC) for t in s.query(Transaction).order_by(Transaction.id)
+        ]
+    month_start = now.replace(day=1, hour=0, minute=0)
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0)
+    assert all(month_start <= d <= now for d in dates)
+    assert all(d >= week_start for d in dates[:WEEK_ENTRIES])

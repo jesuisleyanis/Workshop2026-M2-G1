@@ -21,7 +21,7 @@ Coût accepté : les Dockerfile des services doivent être construits avec la **
 | `migrate.py` | `upgrade(engine)` : Alembic `upgrade head`, **verrou consultatif PostgreSQL** pour que `auth` et `payment-api` puissent démarrer en même temps |
 | `migrations/` | `versions/0001_initial_schema.py`, `0002_face_enrollment_and_roles.py`, `0003_beneficiaries.py`, `0004_transaction_category.py` |
 | `passwords.py` | bcrypt via passlib (coût 12), refus > 72 octets, hash factice anti-énumération |
-| `seed.py` | `seed_demo_data(session, password)` idempotent (+ tiers fictifs `tiersNN`, 5–8 bénéficiaires par client via `seed_beneficiaries`, 8 dépenses catégorisées sur 3 semaines pour chaque client **créé** via `seed_history`) ; CLI `python -m resilience_db.seed` |
+| `seed.py` | `seed_demo_data(session, password)` idempotent (+ tiers fictifs `tiersNN`, 5–8 bénéficiaires par client via `seed_beneficiaries`, 8 dépenses catégorisées dans la semaine et le mois **en cours** pour chaque client qui n'en a pas encore ce mois-ci, via `seed_history`) ; CLI `python -m resilience_db.seed` |
 | `factories.py` | `new_fake_iban()` (IBAN fictif, non valide mod-97) |
 
 ## Schéma
