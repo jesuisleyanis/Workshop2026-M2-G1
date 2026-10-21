@@ -59,6 +59,18 @@ ACTIONS = (
     ("bad_transfer", 0.03),   # compte destinataire inexistant -> 4xx légitime
     ("bad_login", 0.005),     # faute de frappe sur le mot de passe -> 401 légitime
 )
+#: Catégories des virements (#44), pondérées comme des dépenses courantes (somme = 1).
+CATEGORY_MIX = (
+    ("food", 0.30),
+    ("shopping", 0.18),
+    ("transport", 0.14),
+    ("subscriptions", 0.08),
+    ("leisure", 0.10),
+    ("health", 0.05),
+    ("housing", 0.03),
+    ("transfer", 0.10),
+    ("other", 0.02),
+)
 AMPLITUDE = 0.3          # ± 30 % autour du débit moyen
 CYCLE_S = 600.0          # période du cycle de charge
 SESSION_TTL_S = 300.0    # re-login toutes les ~5 min par client
@@ -99,6 +111,17 @@ def pick_action(rng: random.Random) -> str:
         if r < acc:
             return name
     return ACTIONS[0][0]
+
+
+def pick_category(amount_cents: int) -> str:
+    """Catégorie dérivée du montant (déterministe) : n'ajoute AUCUN tirage au générateur
+    aléatoire, donc la séquence d'actions d'une graine donnée (captures ML) est inchangée."""
+    u, acc = (amount_cents * 7919) % 1000 / 1000, 0.0
+    for name, weight in CATEGORY_MIX:
+        acc += weight
+        if u < acc:
+            return name
+    return CATEGORY_MIX[-1][0]
 
 
 def http(method: str, path: str, payload: dict | None = None, token: str | None = None,
@@ -209,9 +232,11 @@ class Client:
         return status
 
     def transfer(self, rng: random.Random, dst: int) -> int:
+        amount = rng.randint(1, 500)
         status, _ = self.send("POST", "/api/v1/transactions",
                               {"src_account": self.account_id, "dst_account": dst,
-                               "amount_cents": rng.randint(1, 500)}, token=self.token)
+                               "amount_cents": amount, "category": pick_category(amount)},
+                              token=self.token)
         return status
 
     def step(self, rng: random.Random, now: float) -> tuple[str, int]:
