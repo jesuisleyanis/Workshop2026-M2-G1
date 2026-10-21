@@ -5,6 +5,11 @@ export interface ApiClientOptions {
   getToken: () => string | null
   /** Appelé sur un 401 d'une requête authentifiée (déconnexion). */
   onUnauthorized?: () => void
+  /**
+   * Disponibilité observée : false sur réseau / timeout / 5xx, true sinon (bandeau d'état du service).
+   * `startedAt` = performance.now() au départ de la requête.
+   */
+  onAvailability?: (up: boolean, startedAt: number) => void
   fetchImpl?: typeof fetch
   timeoutMs?: number
 }
@@ -23,7 +28,7 @@ export interface ApiClient {
 
 /** Client HTTP centralisé : Bearer, JSON, erreurs normalisées du contrat, timeout. */
 export function createApiClient(opts: ApiClientOptions): ApiClient {
-  const { baseUrl, getToken, onUnauthorized, timeoutMs = 10_000 } = opts
+  const { baseUrl, getToken, onUnauthorized, onAvailability, timeoutMs = 10_000 } = opts
 
   async function request<T = unknown>(path: string, o: RequestOptions = {}): Promise<T> {
     const { method = 'GET', body, auth = true, signal } = o
@@ -35,6 +40,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       if (token) headers.Authorization = `Bearer ${token}`
     }
 
+    const startedAt = performance.now()
     const controller = new AbortController()
     const onAbort = () => controller.abort()
     signal?.addEventListener('abort', onAbort)
@@ -54,6 +60,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       })
     } catch (err) {
       if (signal?.aborted) throw err
+      onAvailability?.(false, startedAt)
       if (timedOut) throw new ApiError(0, 'timeout', 'Le serveur met trop de temps à répondre.')
       throw new ApiError(0, 'network_error', 'Impossible de joindre le serveur.')
     } finally {
@@ -61,6 +68,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       signal?.removeEventListener('abort', onAbort)
     }
 
+    onAvailability?.(res.status < 500, startedAt)
     const parsed = await readJson(res)
     if (!res.ok) {
       const error = errorFromResponse(res.status, parsed)

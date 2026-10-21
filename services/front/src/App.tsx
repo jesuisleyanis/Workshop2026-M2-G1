@@ -1,11 +1,14 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { ProtectedRoute } from './components/ProtectedRoute'
-import { AccountsPage } from './pages/AccountsPage'
-import { DashboardPage } from './pages/DashboardPage'
 import { HistoryPage } from './pages/HistoryPage'
+import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
-import { TransferPage } from './pages/TransferPage'
+import { ProfilePage } from './pages/ProfilePage'
+import { RibPage } from './pages/RibPage'
+import { SendPage } from './pages/SendPage'
+import { StatsPage } from './pages/StatsPage'
+import { TxDetailPage } from './pages/TxDetailPage'
 
 export function App() {
   return (
@@ -13,10 +16,16 @@ export function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route element={<ProtectedRoute />}>
         <Route element={<Layout />}>
-          <Route index element={<DashboardPage />} />
-          <Route path="accounts" element={<AccountsPage />} />
-          <Route path="transfer" element={<TransferPage />} />
+          <Route index element={<HomePage />} />
+          <Route path="stats" element={<StatsPage />} />
+          <Route path="send" element={<SendPage />} />
           <Route path="history" element={<HistoryPage />} />
+          <Route path="operations/:id" element={<TxDetailPage />} />
+          <Route path="rib" element={<RibPage />} />
+          <Route path="profile" element={<ProfilePage />} />
+          {/* Anciennes routes (liens existants, scripts de démo). */}
+          <Route path="transfer" element={<Navigate to="/send" replace />} />
+          <Route path="accounts" element={<Navigate to="/rib" replace />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

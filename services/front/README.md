@@ -40,33 +40,55 @@ Comptes de démo (seed) : `demo01`, `demo02` — mots de passe dans `scripts/see
 
 ## Architecture
 
+Maquettes Claude Design « Banque Résilience » (D1–D16) : `design/CLAUDE-DESIGN-PROMPT.md`, epic GitHub #52.
+Un seul code pour **desktop** (≥ 1024 px : barre latérale) et **mobile** (barre d'onglets flottante, assistant d'envoi
+en 4 étapes) ; le point de rupture est lu en JS (`useIsDesktop`) car les parcours diffèrent, pas seulement la mise en page.
+
 ```
 src/
-  main.tsx, App.tsx          point d'entrée, routes (react-router) : /login, /, /accounts, /transfer, /history
-  index.css                  jetons du design (@theme Tailwind v4), polices auto-hébergées, utilitaires
+  main.tsx, App.tsx          routes : /login, /, /stats, /send, /history, /operations/:id, /rib, /profile
+                             (anciennes /transfer -> /send, /accounts -> /rib)
+  index.css                  jetons du design (@theme Tailwind v4 : couleurs, ombres, animations), utilitaires
+                             (card, field, search, btn-primary, btn-ghost, round-btn), règles d'impression (RIB)
   config.ts                  API_BASE (VITE_API_BASE)
-  types/api.ts               Account, Transaction, LoginResponse, TransferRequest, ApiErrorBody
+  types/api.ts               Account, Transaction (+ requestId), LoginResponse, TransferRequest, ApiErrorBody
   api/
-    client.ts                client HTTP centralisé : Bearer, JSON, timeout, erreurs normalisées
-    errors.ts                ApiError + conversion du corps {error:{code,message,request_id}}
-    parsers.ts               validation/normalisation des réponses (centimes -> euros, iban_fake)
+    client.ts                client HTTP : Bearer, JSON, timeout, erreurs normalisées, signal de disponibilité
+    errors.ts / parsers.ts   ApiError ; normalisation des réponses (centimes -> euros, iban_fake, request_id)
     tokenStore.ts            JWT en sessionStorage + lecture des claims sub/exp
-    index.ts                 endpoints /api/v1 (login, accounts, transactions) + instance
-  hooks/                     useAuth (+ contexte), useResource, useAccounts, useTransactions (tri),
-                             useBankData (+ contexte)
+    index.ts                 endpoints /api/v1 (login, accounts, transactions) + instance branchée sur serviceStatus
+  hooks/                     useAuth, useResource, useAccounts, useTransactions (tri), useBankData, useTxViews,
+                             useIsDesktop, useServiceStatus, useSecondsLeft, shell-context (toast, retour d'en-tête)
   components/
-    AuthProvider.tsx         session (JWT, username = claim sub, expiration, message de déconnexion)
-    ProtectedRoute.tsx       garde -> /login (mémorise la page demandée)
-    Layout.tsx               cadre : barre latérale, carte de session (compte à rebours), en-tête de page
-    BankDataProvider.tsx     comptes + transactions chargés une fois pour l'espace client, libellés locaux
-    ui.tsx                   ErrorBlock, Empty, Skeleton/Loading, StatusPill, Brand, txView (sens/signe)
-  pages/                     LoginPage, DashboardPage, AccountsPage, TransferPage, HistoryPage
-  lib/                       format (EUR, dates, IBAN), validation du virement, messages d'erreur, labels
-  test/                      setup Vitest, helpers (stub fetch, faux JWT)
+    Layout.tsx               shell : barre latérale (desktop) / onglets (mobile), en-tête, bandeau d'état, toasts
+    BankDataProvider.tsx     comptes + transactions partagés, rafraîchis toutes les 15 s (onglet visible)
+    ui.tsx                   AccountCard, TxRow, Segmented, Avatar, états chargement/vide/erreur, ConfirmDialog
+    icons.tsx                pictogrammes SVG inline
+  pages/                     Login, Home, Stats, Send (formulaire desktop + assistant mobile, glisser pour envoyer),
+                             History (+ feuille de filtres mobile, export CSV), TxDetail, Rib, Profile
+  lib/
+    bank.ts                  vues métier pures : sens/montant signé, groupes par jour, dépenses par période,
+                             destinataires connus, CSV (anti-injection de formules)
+    serviceStatus.ts         état du service (ok / perturbé / rétabli) pour le bandeau D6
+    format, validation, errorMessages, labels
+  test/                      setup Vitest, helpers (stub fetch, faux JWT, setViewport desktop/mobile)
 docker/                      nginx.conf (non-root, :8080), security-headers.conf
 ```
 
 Flux d'authentification : `LoginPage` -> `AuthProvider.login` -> `POST /api/v1/login` -> JWT en `sessionStorage` -> `client.ts` ajoute `Authorization: Bearer`. Un `401` sur une route authentifiée, ou l'expiration du claim `exp`, vide le jeton et renvoie vers `/login` avec le message « Votre session a expiré ». Le libellé de virement n'existe pas dans l'API : il est gardé en `localStorage` (`resilience.labels`) et réaffiché dans l'historique.
+
+**Bandeau d'état du service (démo).** Toute requête qui échoue côté serveur (réseau, timeout, 5xx) passe l'app en
+« Service perturbé — reprise automatique en cours » ; la première réponse saine d'une requête partie *après* la panne
+affiche « Service rétabli » (4 s) et recharge les données. Le rafraîchissement périodique (15 s) et une sonde de reprise
+(5 s, seulement pendant l'incident) rendent l'incident et la reprise visibles **sans action de l'utilisateur**.
+
+**Statut inconnu.** Sur timeout ou coupure réseau pendant `POST /transactions`, le virement a pu être exécuté
+(payment-api n'a pas de clé d'idempotence) : l'écran de résultat renvoie vers l'historique au lieu de proposer
+« Réessayer », pour éviter un double débit. Un 5xx explicite garde « Réessayer ».
+
+**Données non fournies par l'API.** payment-api n'expose ni nom de compte, ni contrepartie nommée, ni catégorie,
+ni plafond : l'UI affiche « Compte n°X » et masque les blocs correspondants (catégories, plafond, bénéficiaires,
+cartes, notifications…) jusqu'aux tickets backend #43–#51, plutôt que d'afficher des données inventées.
 
 ## Tests
 
@@ -76,9 +98,14 @@ npm run test
 
 - `src/api/client.test.ts` : Bearer, URL de base, erreur du contrat, repli non conforme (HTML du WAF), 401, réseau, timeout, 204.
 - `src/api/endpoints.test.ts` : routes `/api/v1/*`, corps envoyés (centimes, ids entiers), parsing, claims JWT (`sub`, `exp`).
-- `src/lib/validation.test.ts` : règles du formulaire de virement (id bénéficiaire entier, décimales, solde).
-- `src/lib/format.test.ts`, `src/lib/labels.test.ts` : formatage EUR/IBAN/dates, libellés locaux.
-- `src/App.test.tsx` : redirection + message de garde, login OK/KO/champs vides, déconnexion manuelle et sur 401, chargement/erreur/réessai, comptes → virement pré-rempli, virement (validation, envoi, refus 409, erreur serveur), historique trié et filtré.
+- `src/lib/bank.test.ts` : sens/montants signés, groupes par jour, dépenses de la semaine/du mois, destinataires, CSV anti-injection.
+- `src/lib/serviceStatus.test.ts` : transitions perturbé → rétabli → masqué, réponses parallèles ignorées.
+- `src/lib/clipboard.test.ts` : copie via `navigator.clipboard`, repli hors contexte sécurisé (démo en HTTP), échec signalé.
+- `src/lib/validation.test.ts`, `format.test.ts`, `labels.test.ts` : règles du virement, formatage, libellés locaux.
+- `src/App.test.tsx` (desktop **et** mobile via `setViewport`) : login OK/KO/vide, 401, déconnexion confirmée ; shell
+  (barre latérale vs onglets) ; accueil chargement/erreur/réessai ; bandeau d'état (sur erreur et en l'absence d'action) ;
+  historique (groupes, filtres, feuille mobile, détail + référence) ; RIB ; envoi desktop (validation, récapitulatif,
+  POST, refus 409, erreur 503 + réessai, coupure réseau = statut inconnu sans réessai) ; assistant mobile 4 étapes avec « glisser pour envoyer » au clavier.
 
 ## Docker (prod)
 

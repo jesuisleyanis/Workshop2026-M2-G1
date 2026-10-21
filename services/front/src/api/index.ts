@@ -2,6 +2,7 @@ import { API_BASE } from '../config'
 import { createApiClient, type ApiClient } from './client'
 import { parseAccounts, parseLogin, parseTransaction, parseTransactions } from './parsers'
 import { tokenStore } from './tokenStore'
+import { serviceStatus } from '../lib/serviceStatus'
 import type { Account, LoginRequest, LoginResponse, Transaction, TransferRequest } from '../types/api'
 
 /** Endpoints métier /api/v1 (docs/contracts.md : préfixe /api/v1, JWT Bearer). */
@@ -42,6 +43,7 @@ export const client = createApiClient({
   baseUrl: API_BASE,
   getToken: () => tokenStore.get(),
   onUnauthorized: () => unauthorizedHandler?.(),
+  onAvailability: (up, startedAt) => serviceStatus.report(up, startedAt),
 })
 
 export const api = createEndpoints(client)

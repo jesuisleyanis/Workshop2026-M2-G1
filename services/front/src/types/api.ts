@@ -42,6 +42,8 @@ export interface Transaction {
   status: TransactionStatus
   label: string | null
   createdAt: string
+  /** `request_id` de la requête de création (référence affichée au client, corrélée aux logs). */
+  requestId: string | null
 }
 
 export interface TransferRequest {

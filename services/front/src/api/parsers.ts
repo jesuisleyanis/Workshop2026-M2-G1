@@ -92,6 +92,7 @@ export function parseTransaction(v: unknown): Transaction {
     status: parseStatus(o.status),
     label: optStr(o, 'label'),
     createdAt: optStr(o, 'created_at') ?? '',
+    requestId: optStr(o, 'request_id'),
   }
 }
 
