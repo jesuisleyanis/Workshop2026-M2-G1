@@ -152,8 +152,9 @@ services:
     profiles: [iot]
     user: "1883:1883"
     networks: [app]
-    # Seule l'interface du point d'accès est joignable par l'ESP8266.
-    ports: ["192.168.137.1:1883:1883"]
+    # Seule l'interface du point d'accès est joignable par l'ESP8266. Hors hotspot (poste de
+    # dev), MQTT_BIND_ADDR=127.0.0.1 ; jamais 0.0.0.0 (cf. docs/network.md).
+    ports: ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]
     environment:
       MQTT_AUTH_PASSWORD: ${MQTT_AUTH_PASSWORD:-}
       MQTT_LED_PASSWORD: ${MQTT_LED_PASSWORD:-}

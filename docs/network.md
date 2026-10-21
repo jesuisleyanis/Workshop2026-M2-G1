@@ -17,7 +17,7 @@ Point d'accès : partage de connexion Windows **`RESILIENCE-G1`**, sous-réseau 
 | Réseau | `internal` | Services | Ports publiés |
 |---|---|---|---|
 | `edge` | non | waf | **80, 443** (HTTP/HTTPS) |
-| `app` | non | front, payment-api, auth, mosquitto (`iot`), collector, detector, remediation, docker-socket-proxy, dashboard, assistant | **1883** sur `192.168.137.1` pour Mosquitto (`iot`) |
+| `app` | non | front, payment-api, auth, mosquitto (`iot`), collector, detector, remediation, docker-socket-proxy, dashboard, assistant | **1883** sur `192.168.137.1` pour Mosquitto (`iot` ; `MQTT_BIND_ADDR=127.0.0.1` hors hotspot, jamais `0.0.0.0`) |
 | `data` | **oui** | postgres, pg-exporter, remediation (uniquement pour `pg_restore` : correction de corruption) | aucun |
 | `obs` | oui | prometheus, loki, promtail, grafana, alertmanager, cadvisor, waf-exporter | aucun (accès via tunnel/port-forward local pour le dev) |
 

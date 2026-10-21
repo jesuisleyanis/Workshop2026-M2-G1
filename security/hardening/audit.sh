@@ -86,8 +86,10 @@ if [[ -f "${COMPOSE}" ]]; then
   ' "${COMPOSE}" | sort -u)"
   if [[ -n "${offenders}" ]]; then
     fail "des services autres que WAF/Mosquitto publient des ports : ${offenders}"
-  elif ! grep -Fq 'ports: ["192.168.137.1:1883:1883"]' "${COMPOSE}"; then
-    fail "Mosquitto doit être lié uniquement à 192.168.137.1:1883"
+  elif ! grep -Fq 'ports: ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]' "${COMPOSE}"; then
+    fail "Mosquitto doit être lié uniquement à 192.168.137.1:1883 (surchargeable par MQTT_BIND_ADDR)"
+  elif [[ "${MQTT_BIND_ADDR:-192.168.137.1}" == "0.0.0.0" ]]; then
+    fail "MQTT_BIND_ADDR=0.0.0.0 exposerait le broker sur toutes les interfaces"
   else
     pass "WAF HTTP et Mosquitto lié au PA ; DB/API/obs internes"
   fi

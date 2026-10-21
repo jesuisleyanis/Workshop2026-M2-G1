@@ -99,7 +99,7 @@ def test_compose_publishes_80_443_to_unprivileged_ports_with_valid_healthcheck()
     test = waf["healthcheck"]["test"]
     assert test[0] == "CMD-SHELL" and "8443/healthz" in test[1], "healthcheck exec-form malformé (ticket #10)"
     assert all("ports" not in svc for name, svc in services.items() if name not in {"waf", "mosquitto"}), "seuls WAF et MQTT publient des ports"
-    assert services["mosquitto"]["ports"] == ["192.168.137.1:1883:1883"]
+    assert services["mosquitto"]["ports"] == ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]
 
 
 # --------------------------------------------------------------------------- #12 waf-exporter
