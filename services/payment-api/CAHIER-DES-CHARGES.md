@@ -26,6 +26,9 @@ API métier de la plateforme de paiement **fictive** : consultation des comptes,
 | `GET /api/v1/accounts` | JWT | Comptes de l'utilisateur : `[{id, iban_fake, balance_cents, currency}]` |
 | `POST /api/v1/transactions` | JWT | `{src_account, dst_account, amount_cents}` → `201` transaction. Refus : `409 insufficient_funds`, `422 invalid_amount / amount_too_large / same_account / currency_mismatch`, `404 account_not_found / destination_not_found` |
 | `GET /api/v1/transactions?limit=50` | JWT | Historique (transactions touchant un compte de l'utilisateur), plus récentes d'abord, `limit` 1–200 |
+| `GET /api/v1/beneficiaries` | JWT | Bénéficiaires de l'utilisateur (#43), triés par nom |
+| `POST /api/v1/beneficiaries` | JWT | `{display_name, iban_fake}` → `201`. IBAN ramené à la forme stockée (groupes de 4) : recherche exacte sur l'index unique, sans balayage. Refus : `404 account_not_found` (IBAN inconnu), `409 beneficiary_exists` (contrôle + contrainte BDD : sûr en concurrence ; toute autre violation d'intégrité = `503 db_unavailable`), `422 own_account`, `409 beneficiary_limit` (100/client). Piste d'audit : `beneficiary_added` / `beneficiary_rejected` (motif seul, **jamais l'IBAN sondé**) / `beneficiary_removed` |
+| `DELETE /api/v1/beneficiaries/{id}` | JWT | `204` ; objet d'autrui = `404 beneficiary_not_found` (anti-IDOR). Id borné à l'INTEGER Postgres (`422` au-delà, jamais un faux `db_error`) |
 | `GET /api/v1/status` | **aucune** | État public pour le bandeau client (#42) : `200 {status:"ok", checked_at}` / `503 {status:"degraded", checked_at}`. Rien d'autre (pas de version, d'hôte ni d'exception). Cache `STATUS_CACHE_S` = 2 s : **au plus une requête BDD par fenêtre**, quel que soit le trafic (pas d'amplification) ; le WAF limite en plus par IP |
 | `GET /health` | — | Liveness |
 | `GET /ready` | — | `200` si la DB répond ; `503 db_unavailable` sinon |

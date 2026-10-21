@@ -31,6 +31,18 @@ describe('endpoints /api/v1', () => {
     await expect(down.api.getStatus()).rejects.toMatchObject({ status: 503 })
   })
 
+  it('bénéficiaires : GET, POST {display_name, iban_fake}, DELETE /{id} (204)', async () => {
+    const row = { id: 5, display_name: 'Léa', account_id: 42, iban_fake: 'FR76 9001', created_at: '2026-10-21T10:00:00Z' }
+    const { api, f } = endpointsWith((_u, init) =>
+      init?.method === 'DELETE' ? new Response(null, { status: 204 }) : jsonResponse(init?.method === 'POST' ? row : [row]),
+    )
+    expect(await api.listBeneficiaries()).toEqual([{ id: '5', name: 'Léa', accountId: '42', iban: 'FR76 9001', createdAt: '2026-10-21T10:00:00Z' }])
+    await api.addBeneficiary({ name: 'Léa', iban: 'FR76 9001' })
+    expect(JSON.parse((f.mock.calls[1]![1] as RequestInit).body as string)).toEqual({ display_name: 'Léa', iban_fake: 'FR76 9001' })
+    await expect(api.deleteBeneficiary('5')).resolves.toBeUndefined()
+    expect(f.mock.calls[2]).toEqual(['/api/v1/beneficiaries/5', expect.objectContaining({ method: 'DELETE' })])
+  })
+
   it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {
     const { api, f } = endpointsWith(() =>
       jsonResponse([{ id: 1, iban_fake: 'FR76 0000 0001', balance_cents: 125050, currency: 'EUR' }]),

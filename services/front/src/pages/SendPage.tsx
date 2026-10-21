@@ -37,7 +37,8 @@ export function SendPage() {
 }
 
 function SendFlow({ accounts }: { accounts: Account[] }) {
-  const { accounts: accountsRes, transactions, saveLabel } = useBankData()
+  const { accounts: accountsRes, transactions, beneficiaries: beneficiariesRes, saveLabel } = useBankData()
+  const beneficiaries = useMemo(() => beneficiariesRes.data ?? [], [beneficiariesRes.data])
   const { views } = useTxViews()
   const { isDesktop, toast } = useShell()
   const navigate = useNavigate()
@@ -57,14 +58,14 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
 
   const src = accounts.find((a) => a.id === accId) ?? accounts[0]!
   const amount = parseAmount(amt) ?? 0
-  const known = useMemo(() => recipients(accounts, views ?? [], src.id), [accounts, views, src.id])
+  const known = useMemo(() => recipients(accounts, views ?? [], src.id, beneficiaries), [accounts, views, src.id, beneficiaries])
   const query = q.trim().toLowerCase()
   const matches = known.filter((r) => !query || r.name.toLowerCase().includes(query) || r.id === query.replace(/^n°|^#/, ''))
   const typedId = /^\d+$/.test(query) && Number(query) > 0 ? String(Number(query)) : null
   if (typedId && typedId !== src.id && !matches.some((r) => r.id === typedId)) {
-    matches.push({ id: typedId, name: accountName(typedId), mask: 'Nouveau destinataire', own: false })
+    matches.push({ id: typedId, name: accountName(typedId), mask: 'Nouveau destinataire', own: false, badge: accountBadge(typedId), short: `n°${typedId}` })
   }
-  const toRec: Recipient | null = to ? (known.find((r) => r.id === to) ?? { id: to, name: accountName(to), mask: `Compte n°${to}`, own: false }) : null
+  const toRec: Recipient | null = to ? (known.find((r) => r.id === to) ?? { id: to, name: accountName(to), mask: `Compte n°${to}`, own: false, badge: accountBadge(to), short: `n°${to}` }) : null
   const toIndex = Math.max(0, known.findIndex((r) => r.id === to))
 
   const goStep = useCallback(
@@ -299,9 +300,9 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
                 className="flex w-[60px] flex-col items-center gap-1.5 border-0 bg-transparent p-0"
               >
                 <span className={`rounded-full outline-offset-2 ${r.id === to ? 'outline-[3px] outline-ink outline-solid' : ''}`}>
-                  <Avatar text={accountBadge(r.id)} index={i} size={54} />
+                  <Avatar text={r.badge} index={i} size={54} />
                 </span>
-                <span className="max-w-[60px] truncate text-xs text-ink-2">{r.own ? 'Vous' : `n°${r.id}`}</span>
+                <span className="max-w-[60px] truncate text-xs text-ink-2">{r.own ? 'Vous' : r.short}</span>
               </button>
             ))}
             {!all && !query && matches.length > 4 && (
@@ -354,7 +355,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
   const anim = dir < 0 ? 'animate-wz-back' : 'animate-wz-in'
   const toChip = toRec && (
     <div className="flex items-center gap-3 rounded-[18px] bg-white py-2.5 pr-2.5 pl-3 shadow-[0_1px_2px_rgba(18,19,22,.04)]">
-      <Avatar text={accountBadge(toRec.id)} index={toIndex} size={40} />
+      <Avatar text={toRec.badge} index={toIndex} size={40} />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="text-xs text-ink-3">À</span>
         <span className="truncate text-[15px] font-semibold">{toRec.name}</span>
@@ -404,7 +405,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
                   }}
                   className={`flex min-h-16 items-center gap-3 rounded-[18px] border-0 px-3 py-2 text-left active:bg-mute ${on ? 'bg-page' : 'bg-transparent'}`}
                 >
-                  <Avatar text={accountBadge(r.id)} index={i} size={44} />
+                  <Avatar text={r.badge} index={i} size={44} />
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="truncate text-[15px] font-semibold">{r.name}</span>
                     <span className="font-mono text-xs text-ink-3">{r.mask}</span>
@@ -455,7 +456,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
         <div className={`flex flex-col gap-4 ${anim}`}>
           <section aria-label="Récapitulatif" className="flex flex-col gap-2.5 rounded-3xl bg-white px-[18px] pt-5 pb-2 shadow-card">
             <div className="flex flex-col items-center gap-2.5 pt-1 pb-2.5">
-              <Avatar text={accountBadge(toRec.id)} index={toIndex} size={56} />
+              <Avatar text={toRec.badge} index={toIndex} size={56} />
               <span className="text-sm font-medium text-ink-3">Vous envoyez à {toRec.name}</span>
               <span className="tnum text-[44px] leading-none font-bold tracking-[-0.03em]">{formatMoney(amount, src.currency)}</span>
             </div>

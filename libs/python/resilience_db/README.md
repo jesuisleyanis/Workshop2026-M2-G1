@@ -16,12 +16,12 @@ Coût accepté : les Dockerfile des services doivent être construits avec la **
 
 | Module | Rôle |
 |---|---|
-| `models.py` | `User`, `Account` (CHECK `balance_cents >= 0`), `Transaction` (CHECK `amount_cents > 0`), `TransactionStatus` |
+| `models.py` | `User`, `Account` (CHECK `balance_cents >= 0`), `Transaction` (CHECK `amount_cents > 0`), `TransactionStatus`, `FaceEnrollment`, `Beneficiary` (UNIQUE owner+compte, #43) |
 | `config.py` | `build_database_url()`, `make_engine()`, `read_secret()` (`NAME` ou `NAME_FILE`) |
 | `migrate.py` | `upgrade(engine)` : Alembic `upgrade head`, **verrou consultatif PostgreSQL** pour que `auth` et `payment-api` puissent démarrer en même temps |
-| `migrations/` | `versions/0001_initial_schema.py` |
+| `migrations/` | `versions/0001_initial_schema.py`, `0002_face_enrollment_and_roles.py`, `0003_beneficiaries.py` |
 | `passwords.py` | bcrypt via passlib (coût 12), refus > 72 octets, hash factice anti-énumération |
-| `seed.py` | `seed_demo_data(session, password)` idempotent ; CLI `python -m resilience_db.seed` |
+| `seed.py` | `seed_demo_data(session, password)` idempotent (+ tiers fictifs `tiersNN` et 5–8 bénéficiaires par client via `seed_beneficiaries`) ; CLI `python -m resilience_db.seed` |
 | `factories.py` | `new_fake_iban()` (IBAN fictif, non valide mod-97) |
 
 ## Schéma
@@ -31,7 +31,13 @@ users(id PK, username UNIQUE, password_hash, created_at)
 accounts(id PK, user_id FK users, iban_fake UNIQUE, balance_cents BIGINT CHECK >= 0, currency)
 transactions(id PK, src_account FK accounts, dst_account FK accounts,
              amount_cents BIGINT CHECK > 0, status ['created'|'rejected'], created_at, request_id)
+beneficiaries(id PK, owner_user_id FK users, display_name, account_id FK accounts, iban_fake,
+              created_at, UNIQUE(owner_user_id, account_id))
 ```
+
+Sauvegarde / restauration `data_corruption` : `pg_backup.yml` dumpe **toute** la base (`pg_dump --format=custom`)
+et `pg_restore.yml` la restaure en `--clean` : toute nouvelle table (ex. `beneficiaries`) est couverte sans
+changement de playbook. `attacks/reset.sh` re-seed : bénéficiaires recréés (idempotent).
 
 Les montants sont des **entiers en centimes** (jamais de flottant).
 

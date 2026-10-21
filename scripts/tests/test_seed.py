@@ -7,7 +7,8 @@ pytest.importorskip("resilience_db")
 
 import seed  # noqa: E402  (scripts/ est dans sys.path via conftest)
 from resilience_db.config import make_engine, make_session_factory  # noqa: E402
-from resilience_db.models import Account, User  # noqa: E402
+from resilience_db.models import Beneficiary, User  # noqa: E402
+from resilience_db.seed import PAYEES  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 
@@ -25,11 +26,15 @@ def test_seed_direct_funds_accounts_and_is_idempotent(db_env, capsys):
     assert "5 utilisateur(s)" in capsys.readouterr().out
     assert seed.main() == 0  # rejouable sans doublon
     with make_session_factory(make_engine(db_env))() as s:
-        users = s.scalars(select(User).order_by(User.username)).all()
-        accounts = s.scalars(select(Account)).all()
+        users = s.scalars(select(User).where(User.username.like("demo%")).order_by(User.username)).all()
+        accounts = [a for u in users for a in u.accounts]
+        beneficiaries = s.scalars(select(Beneficiary)).all()
+        payees = s.scalars(select(User).where(User.username.like("tiers%"))).all()
     assert [u.username for u in users] == ["demo01", "demo02", "demo03", "demo04", "demo05"]
     assert len(accounts) == 5
     assert all(a.balance_cents == 100_000 and a.currency == "EUR" for a in accounts), "comptes financés"
+    assert len(payees) == len(PAYEES), "tiers fictifs destinataires (#43)"
+    assert len(beneficiaries) == 5 * 8, "8 bénéficiaires par client de démo, sans doublon au 2e passage"
 
 
 def test_without_db_config_delegates_to_compose(monkeypatch):

@@ -407,3 +407,102 @@ describe('Front - envoi (mobile, assistant 4 étapes)', () => {
     expect(screen.getByText('Compte n°99')).toBeInTheDocument()
   })
 })
+
+describe('Front - bénéficiaires (#43)', () => {
+  const LEA = { id: 5, display_name: 'Léa Martin', account_id: 42, iban_fake: 'FR76 0000 0000 9001 0000 0000 000', created_at: '2026-10-21T10:00:00Z' }
+  const HUGO = { id: 6, display_name: 'Hugo Bernard', account_id: 43, iban_fake: 'FR76 0000 0000 9002 0000 0000 000', created_at: '2026-10-21T10:00:00Z' }
+
+  it('accueil : « Envoyer à » propose les bénéficiaires par leur nom, puis Envoyer pré-remplit le destinataire', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/beneficiaries': () => jsonResponse([LEA]),
+    })
+    renderApp('/', { desktop: false })
+    await userEvent.click(await screen.findByRole('button', { name: 'Envoyer à Léa Martin' }))
+    expect(await screen.findByText('Étape 2 sur 4')).toBeInTheDocument()
+    expect(screen.getByText('Léa Martin')).toBeInTheDocument()
+  })
+
+  it('liste + recherche, ajout refusé (IBAN inconnu) puis accepté, suppression confirmée', async () => {
+    loginAsStored()
+    let list = [LEA]
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/beneficiaries': () => jsonResponse(list),
+      'POST /api/v1/beneficiaries': (init) => {
+        const body = JSON.parse(init!.body as string)
+        if (body.iban_fake !== HUGO.iban_fake) return jsonResponse({ error: { code: 'account_not_found', message: 'x' } }, 404)
+        list = [LEA, HUGO]
+        return jsonResponse(HUGO, 201)
+      },
+      'DELETE /api/v1/beneficiaries/5': () => {
+        list = [HUGO]
+        return new Response(null, { status: 204 })
+      },
+    })
+    renderApp('/beneficiaries')
+    const user = userEvent.setup()
+    const rows = await screen.findByRole('list', { name: 'Bénéficiaires' })
+    expect(within(rows).getByText('Léa Martin')).toBeInTheDocument()
+    await user.type(screen.getByRole('searchbox', { name: 'Rechercher un bénéficiaire' }), 'zzz')
+    expect(screen.getByText('Aucun résultat')).toBeInTheDocument()
+    await user.clear(screen.getByRole('searchbox', { name: 'Rechercher un bénéficiaire' }))
+
+    await user.click(screen.getByRole('button', { name: 'Ajouter' }))
+    const form = screen.getByRole('form', { name: 'Nouveau bénéficiaire' })
+    await user.type(within(form).getByLabelText('Nom'), 'Hugo Bernard')
+    await user.type(within(form).getByLabelText('IBAN'), 'FR76 NOPE')
+    await user.click(within(form).getByRole('button', { name: 'Enregistrer le bénéficiaire' }))
+    expect(await within(form).findByText('Aucun compte ne correspond à cet IBAN.')).toBeInTheDocument()
+    await user.clear(within(form).getByLabelText('IBAN'))
+    await user.type(within(form).getByLabelText('IBAN'), HUGO.iban_fake)
+    await user.click(within(form).getByRole('button', { name: 'Enregistrer le bénéficiaire' }))
+    expect(await screen.findByText('Hugo Bernard')).toBeInTheDocument()
+    expect(JSON.parse((posts(f).at(-1)![1] as RequestInit).body as string)).toEqual({ display_name: 'Hugo Bernard', iban_fake: HUGO.iban_fake })
+
+    await user.click(screen.getByRole('button', { name: 'Supprimer Léa Martin' }))
+    const dlg = screen.getByRole('alertdialog')
+    await user.click(within(dlg).getByRole('button', { name: 'Supprimer' }))
+    await waitFor(() => expect(screen.queryByText('Léa Martin')).not.toBeInTheDocument())
+    expect(f.mock.calls.some(([u, i]) => String(u).endsWith('/api/v1/beneficiaries/5') && (i as RequestInit).method === 'DELETE')).toBe(true)
+  })
+
+  it('bénéficiaires en échec pendant un incident : rechargés sans action à la reprise', async () => {
+    loginAsStored()
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    let down = true
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/beneficiaries': () => (down ? jsonResponse({ error: { code: 'db_unavailable', message: 'x' } }, 503) : jsonResponse([LEA])),
+      'GET /api/v1/status': () => jsonResponse({ status: 'ok', checked_at: '2026-10-21T10:00:00Z' }),
+    })
+    try {
+      renderApp('/', { desktop: false })
+      await screen.findByTestId('balance')
+      expect(screen.queryByRole('button', { name: 'Envoyer à Léa Martin' })).not.toBeInTheDocument()
+      down = false
+      act(() => vi.advanceTimersByTime(15_000))
+      expect(await screen.findByRole('button', { name: 'Envoyer à Léa Martin' })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('annuler la suppression ne supprime rien', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/beneficiaries': () => jsonResponse([LEA]),
+    })
+    renderApp('/beneficiaries')
+    await userEvent.click(await screen.findByRole('button', { name: 'Supprimer Léa Martin' }))
+    await userEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: /Annuler/ }))
+    expect(screen.getByText('Léa Martin')).toBeInTheDocument()
+    expect(f.mock.calls.some(([, i]) => (i as RequestInit | undefined)?.method === 'DELETE')).toBe(false)
+  })
+})

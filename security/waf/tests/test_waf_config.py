@@ -40,9 +40,35 @@ def test_api_upstreams_target_service_ports():
 def test_only_public_routes_are_proxied():
     locations = re.findall(r"location\s+(?:=\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
-                              "/api/v1/status", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
+                              "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
+
+
+def test_crs_allows_delete_but_not_put_or_patch():
+    # #43 : DELETE /api/v1/beneficiaries/{id}. Sans ALLOWED_METHODS, la règle CRS 911100 le bloque.
+    m = re.search(r'ALLOWED_METHODS="([^"]+)"', DOCKERFILE)
+    assert m, "ALLOWED_METHODS doit être fixé dans l'image WAF"
+    assert set(m.group(1).split()) == {"GET", "HEAD", "POST", "OPTIONS", "DELETE"}
+
+
+def test_delete_is_denied_everywhere_except_one_beneficiary():
+    conf = _directives(NGINX)
+    m = re.search(r'map "\$request_method:\$uri" \$method_denied \{\s*default 0;\s*"~([^"]+)" 1;\s*\}', conf)
+    assert m, "map $method_denied absente"
+    assert re.search(r"if \(\$method_denied\)\s*\{\s*return 405;\s*\}", conf)
+    denied = re.compile(m.group(1))
+    assert not denied.search("DELETE:/api/v1/beneficiaries/12")
+    for probe in ("DELETE:/api/v1/beneficiaries", "DELETE:/api/v1/beneficiaries/12/x",
+                  "DELETE:/api/v1/accounts", "DELETE:/api/v1/auth/session", "DELETE:/"):
+        assert denied.search(probe), probe
+    assert not denied.search("GET:/api/v1/accounts") and not denied.search("POST:/api/v1/beneficiaries")
+
+
+def test_beneficiaries_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=beneficiaries_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/beneficiaries \{\s*limit_req zone=beneficiaries_per_ip", conf)
 
 
 def test_public_status_route_is_exact_rate_limited_and_read_only():

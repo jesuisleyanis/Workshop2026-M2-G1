@@ -3,9 +3,9 @@
 import pytest
 from resilience_db import Base, build_database_url, make_engine, make_session_factory
 from resilience_db.migrate import upgrade
-from resilience_db.models import Account, FaceEnrollment, User
+from resilience_db.models import Account, Beneficiary, FaceEnrollment, User
 from resilience_db.passwords import hash_password, verify_password
-from resilience_db.seed import seed_demo_data
+from resilience_db.seed import PAYEES, demo_iban, payee_iban, seed_demo_data
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
@@ -16,9 +16,7 @@ def test_migration_creates_same_schema_as_models(tmp_path):
     insp = inspect(engine)
     assert set(Base.metadata.tables) <= set(insp.get_table_names())
     for name, table in Base.metadata.tables.items():
-        assert {c["name"] for c in insp.get_columns(name)} == {
-            c.name for c in table.columns
-        }
+        assert {c["name"] for c in insp.get_columns(name)} == {c.name for c in table.columns}
 
 
 def test_migration_is_idempotent(tmp_path):
@@ -40,7 +38,41 @@ def test_seed_is_idempotent_and_hashes_password():
         user = s.query(User).filter_by(username="demo01").one()
         assert user.password_hash != "s3cret-pass"
         assert verify_password("s3cret-pass", user.password_hash)
-        assert s.query(Account).count() == 3
+        assert s.query(Account).count() == 3 + len(PAYEES)
+
+
+def test_seed_registers_5_to_8_beneficiaries_per_demo_client_idempotently():
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "s3cret-pass", users=5)
+        seed_demo_data(s, "s3cret-pass", users=5)  # rejouable sans doublon
+        for n in range(1, 6):
+            owner = s.query(User).filter_by(username=f"demo{n:02d}").one()
+            rows = s.query(Beneficiary).filter_by(owner_user_id=owner.id).all()
+            assert 5 <= len(rows) <= 8
+            assert owner.accounts[0].id not in {b.account_id for b in rows}, "jamais soi-même"
+        # Les tiers fictifs ne sont pas connectables avec le mot de passe de démo.
+        payee = s.query(User).filter_by(username=PAYEES[0][0]).one()
+        assert not verify_password("s3cret-pass", payee.password_hash)
+
+
+def test_beneficiary_is_unique_per_owner_and_account():
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "s3cret-pass", users=2)
+        b = s.query(Beneficiary).first()
+        s.add(
+            Beneficiary(
+                owner_user_id=b.owner_user_id,
+                display_name="dup",
+                account_id=b.account_id,
+                iban_fake=b.iban_fake,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            s.commit()
 
 
 def test_user_role_defaults_to_customer_and_rejects_unknown_role():
@@ -113,9 +145,7 @@ def test_postgres_url_defaults_and_no_hardcoded_password(monkeypatch):
         "resilience",
         "resilience",
     )
-    assert (
-        url.password == "p@ss/word"
-    )  # caractères spéciaux correctement encodés par URL.create
+    assert url.password == "p@ss/word"  # caractères spéciaux correctement encodés par URL.create
 
 
 def test_password_from_file(monkeypatch, tmp_path):
@@ -125,3 +155,8 @@ def test_password_from_file(monkeypatch, tmp_path):
     monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
     monkeypatch.setenv("POSTGRES_PASSWORD_FILE", str(f))
     assert build_database_url().password == "from-file"
+
+
+def test_payee_ibans_never_collide_with_demo_ibans():
+    demo = {demo_iban(n) for n in range(1, 10_000)}
+    assert not demo & {payee_iban(i) for i in range(1, len(PAYEES) + 1)}

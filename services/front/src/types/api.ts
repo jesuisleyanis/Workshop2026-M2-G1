@@ -59,3 +59,17 @@ export interface ServiceHealth {
   status: 'ok' | 'degraded'
   checkedAt: string
 }
+
+/** Bénéficiaire enregistré (payment-api, #43). `accountId` = dst_account d'un virement. */
+export interface Beneficiary {
+  id: string
+  name: string
+  accountId: string
+  iban: string
+  createdAt: string | null
+}
+
+export interface NewBeneficiary {
+  name: string
+  iban: string
+}

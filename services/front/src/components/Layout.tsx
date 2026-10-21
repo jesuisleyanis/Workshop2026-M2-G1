@@ -28,12 +28,16 @@ const TABS: Screen[] = [
 ]
 
 /** Services (barre latérale desktop, menu Profil sur mobile). Les autres arrivent avec leurs tickets backend. */
-export const SERVICES: Screen[] = [{ path: '/rib', label: 'RIB', icon: 'bank', title: 'Relevé d’identité bancaire' }]
+export const SERVICES: Screen[] = [
+  { path: '/beneficiaries', label: 'Bénéficiaires', icon: 'user', title: 'Bénéficiaires' },
+  { path: '/rib', label: 'RIB', icon: 'bank', title: 'Relevé d’identité bancaire' },
+]
 
 /** Écrans hors onglets : titre + onglet parent (retour). */
 const SUBSCREENS: { prefix: string; title: string; parent: string }[] = [
   { prefix: '/operations/', title: 'Détail de l’opération', parent: '/history' },
   { prefix: '/rib', title: 'Relevé d’identité bancaire', parent: '/profile' },
+  { prefix: '/beneficiaries', title: 'Bénéficiaires', parent: '/profile' },
 ]
 
 export function Layout() {
@@ -216,7 +220,7 @@ function Sidebar({ pathname, activeTab, expiresAt }: { pathname: string; activeT
  */
 function ServiceBanner({ isDesktop }: { isDesktop: boolean }) {
   const status = useServiceStatus()
-  const { accounts, transactions } = useBankData()
+  const { accounts, transactions, beneficiaries } = useBankData()
   const prev = useRef(status)
 
   useEffect(() => {
@@ -234,9 +238,10 @@ function ServiceBanner({ isDesktop }: { isDesktop: boolean }) {
     if (prev.current === 'degraded' && status === 'restored') {
       accounts.reload()
       transactions.reload()
+      beneficiaries.reload()
     }
     prev.current = status
-  }, [status, accounts, transactions])
+  }, [status, accounts, transactions, beneficiaries])
 
   if (status === 'ok') return null
   const margin = isDesktop ? 'mx-10 mb-3' : 'mx-3 mb-2.5'

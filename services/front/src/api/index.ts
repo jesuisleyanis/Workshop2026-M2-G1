@@ -1,9 +1,9 @@
 import { API_BASE } from '../config'
 import { createApiClient, type ApiClient } from './client'
-import { parseAccounts, parseLogin, parseServiceHealth, parseTransaction, parseTransactions } from './parsers'
+import { parseAccounts, parseBeneficiaries, parseBeneficiary, parseLogin, parseServiceHealth, parseTransaction, parseTransactions } from './parsers'
 import { tokenStore } from './tokenStore'
 import { serviceStatus } from '../lib/serviceStatus'
-import type { Account, LoginRequest, LoginResponse, ServiceHealth, Transaction, TransferRequest } from '../types/api'
+import type { Account, Beneficiary, LoginRequest, LoginResponse, NewBeneficiary, ServiceHealth, Transaction, TransferRequest } from '../types/api'
 
 /** Endpoints métier /api/v1 (docs/contracts.md : préfixe /api/v1, JWT Bearer). */
 export function createEndpoints(client: ApiClient) {
@@ -16,6 +16,15 @@ export function createEndpoints(client: ApiClient) {
       parseServiceHealth(await client.request('/api/v1/status', { auth: false, signal, reportRecovery: false })),
     getAccounts: async (signal?: AbortSignal): Promise<Account[]> =>
       parseAccounts(await client.request('/api/v1/accounts', { signal })),
+    listBeneficiaries: async (signal?: AbortSignal): Promise<Beneficiary[]> =>
+      parseBeneficiaries(await client.request('/api/v1/beneficiaries', { signal })),
+    addBeneficiary: async (b: NewBeneficiary): Promise<Beneficiary> =>
+      parseBeneficiary(
+        await client.request('/api/v1/beneficiaries', { method: 'POST', body: { display_name: b.name, iban_fake: b.iban } }),
+      ),
+    deleteBeneficiary: async (id: string): Promise<void> => {
+      await client.request(`/api/v1/beneficiaries/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    },
     listTransactions: async (signal?: AbortSignal): Promise<Transaction[]> =>
       parseTransactions(await client.request('/api/v1/transactions', { signal })),
     createTransaction: async (req: TransferRequest): Promise<Transaction> =>
