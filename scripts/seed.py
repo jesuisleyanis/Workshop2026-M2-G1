@@ -40,7 +40,8 @@ def seed_direct(env: dict[str, str]) -> int:
     engine = make_engine()
     upgrade(engine)
     with make_session_factory(engine)() as session:
-        created = seed_demo_data(session, password, users=users)
+        created = seed_demo_data(session, password, users=users,
+                                 reset_passwords=env.get("SEED_RESET_PASSWORDS") == "1")
     print(f"seed: {len(created)} utilisateur(s) créé(s): {', '.join(created) or '-'} "
           f"({users} au total, idempotent)")
     return 0
@@ -53,11 +54,12 @@ def seed_via_compose(env: dict[str, str]) -> int:
         return 1
     cmd = [
         "docker", "compose", "-f", str(COMPOSE_FILE), "exec", "-T",
-        "-e", "SEED_PASSWORD", "-e", "SEED_USERS",
+        "-e", "SEED_PASSWORD", "-e", "SEED_USERS", "-e", "SEED_RESET_PASSWORDS",
         SEED_SERVICE, "python", "-m", "resilience_db.seed",
     ]
     try:
-        return subprocess.run(cmd, env={**env, "SEED_USERS": env.get("SEED_USERS", "5")}).returncode
+        return subprocess.run(cmd, env={**env, "SEED_USERS": env.get("SEED_USERS", "5"),
+                                        "SEED_RESET_PASSWORDS": env.get("SEED_RESET_PASSWORDS", "0")}).returncode
     except FileNotFoundError:
         print("seed: docker introuvable et DB non configurée (DATABASE_URL / POSTGRES_PASSWORD)", file=sys.stderr)
         return 1

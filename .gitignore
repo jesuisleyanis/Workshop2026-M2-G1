@@ -63,3 +63,5 @@ attacks/.run.pid
 
 # Graphe de connaissance local (graphify) — régénérable
 graphify-out/
+# Résultats du banc de latence de détection (make bench)
+bench-detection*.json
