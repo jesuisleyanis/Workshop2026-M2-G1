@@ -47,7 +47,9 @@ def test_only_public_routes_are_proxied():
 
 # --------------------------------------------------------------------------- #6 Dockerfile / non-root / TLS
 def test_dockerfile_is_pinned_owasp_crs_nginx_and_non_root():
-    assert re.search(r"^FROM owasp/modsecurity-crs:\d+\.\d+\.\d+-nginx-alpine", DOCKERFILE, re.M), "image CRS épinglée"
+    assert re.search(r"^FROM owasp/modsecurity-crs:\d+\.\d+\.\d+-nginx-alpine\S*@sha256:[0-9a-f]{64}$", DOCKERFILE, re.M), (
+        "image CRS épinglée par tag ET digest (un tag peut être republié, R5)"
+    )
     assert re.search(r"^USER nginx\s*$", DOCKERFILE, re.M), "le WAF tourne en utilisateur non-root"
     assert "ENTRYPOINT" not in DOCKERFILE and "CMD [" not in DOCKERFILE, "l'entrypoint de l'image (ModSec/CRS) doit rester actif"
 

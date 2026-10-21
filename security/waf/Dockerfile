@@ -6,7 +6,9 @@
 # ModSecurity + CRS préinstallés et configurés par les scripts d'entrypoint de l'image
 # (variables MODSEC_* / BLOCKING_PARANOIA / ANOMALY_*). L'image tourne non-root : elle ne peut
 # écouter que sur des ports > 1024 (8080 / 8443) ; Compose publie 80->8080 et 443->8443.
-FROM owasp/modsecurity-crs:4.25.2-nginx-alpine-lts
+# Tag + DIGEST : le tag seul a été republié en amont (nouveaux scripts d'entrypoint -> WAF en boucle).
+# Mise à jour volontaire : docker buildx imagetools inspect owasp/modsecurity-crs:<tag> puis tests WAF.
+FROM owasp/modsecurity-crs:4.25.2-nginx-alpine-lts@sha256:57fd215e2894638a02d235f88510fa2a129d64740f0edb6798ca0e4aa2f02457
 
 USER root
 
