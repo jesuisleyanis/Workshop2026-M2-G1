@@ -16,6 +16,15 @@ function make(fetchImpl: typeof fetch, extra: Partial<Parameters<typeof createAp
 }
 
 describe('client API centralisé', () => {
+  it('logoutOnUnauthorized:false : un 401 (mauvais mot de passe au step-up) ne déconnecte pas', async () => {
+    const f = vi.fn(async () => jsonResponse({ error: { code: 'invalid_credentials', message: 'x' } }, 401))
+    const { client, onUnauthorized } = make(f as unknown as typeof fetch)
+    await expect(client.request('/api/v1/auth/step-up', { method: 'POST', body: {}, logoutOnUnauthorized: false })).rejects.toMatchObject({ status: 401 })
+    expect(onUnauthorized).not.toHaveBeenCalled()
+    await expect(client.request('/api/v1/accounts')).rejects.toMatchObject({ status: 401 })
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
+  })
+
   it('reportRecovery:false : un 429 ou un 200 ne vaut pas reprise, un 5xx reste signalé', async () => {
     const onAvailability = vi.fn()
     let status = 429

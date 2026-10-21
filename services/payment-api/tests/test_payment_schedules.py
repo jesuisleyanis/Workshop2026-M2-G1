@@ -32,6 +32,14 @@ def clock():
 
 
 @pytest.fixture
+def alice(world, clock):
+    """Jeton dont `auth_time` suit l'horloge injectée (step-up #51 évalué à cette heure-là)."""
+    from paykit import bearer, make_token
+
+    return bearer(make_token("alice", auth_time=int(clock().timestamp())))
+
+
+@pytest.fixture
 def api(engine, world, clock):
     settings = Settings(jwt_secret=JWT_SECRET, run_migrations=False, scheduler_enabled=False)
     return TestClient(create_app(settings, engine, now=clock))

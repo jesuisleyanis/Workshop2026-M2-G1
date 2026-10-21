@@ -24,6 +24,12 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class StepUpRequest(BaseModel):
+    """Ré-authentification d'une session existante avant un gros virement (#51)."""
+
+    password: str = Field(min_length=1, max_length=256)
+
+
 class UserOut(BaseModel):
     id: int
     username: str

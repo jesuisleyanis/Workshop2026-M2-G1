@@ -55,6 +55,8 @@ Le schéma (`users`, `accounts`, `transactions`), la config de connexion, les mi
 | `LOG_LEVEL` | non | `INFO` | Niveau de log |
 | `SCHEDULER_ENABLED` | non | `true` | Tâche de fond des virements programmés (#48) |
 | `SCHEDULER_INTERVAL_S` | non | `60` | Intervalle entre deux passes de l'exécuteur |
+| `STEP_UP_THRESHOLD_CENTS` | non | `50000` | Seuil (#51) au-delà duquel un virement exige une ré-authentification récente |
+| `STEP_UP_MAX_AGE_S` | non | `300` | Fraîcheur maximale du claim `auth_time` (30–3600 s) |
 | `STATUS_CACHE_S` | non | `2` | Durée de cache de `GET /api/v1/status`, bornée à [0,5 ; 30] s (refus au démarrage sinon) |
 
 ## Lancement local

@@ -28,6 +28,14 @@ def clock():
 
 
 @pytest.fixture
+def alice(world, clock):
+    """Jeton dont `auth_time` suit l'horloge injectée (step-up #51 évalué à cette heure-là)."""
+    from paykit import bearer, make_token
+
+    return bearer(make_token("alice", auth_time=int(clock().timestamp())))
+
+
+@pytest.fixture
 def capped(engine, world, db, clock):
     """alice : compte 1 plafonné à 50,00 € ; compte 2 sans plafond. Horloge injectée."""
     acc = db.get(Account, 1)

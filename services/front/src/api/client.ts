@@ -25,6 +25,11 @@ export interface RequestOptions {
    * sondes qui ne prouvent pas que les routes métier répondent (GET /api/v1/status, un 429 du WAF).
    */
   reportRecovery?: boolean
+  /**
+   * false : un 401 ne déconnecte pas (ré-authentification #51 : un mauvais mot de passe répond
+   * 401 invalid_credentials, l'appelant décide).
+   */
+  logoutOnUnauthorized?: boolean
 }
 
 export interface DownloadedFile {
@@ -44,7 +49,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   const { baseUrl, getToken, onUnauthorized, onAvailability, timeoutMs = 10_000 } = opts
 
   async function send(path: string, o: RequestOptions, accept: string): Promise<Response> {
-    const { method = 'GET', body, auth = true, signal, reportRecovery = true } = o
+    const { method = 'GET', body, auth = true, signal, reportRecovery = true, logoutOnUnauthorized = true } = o
     const doFetch = opts.fetchImpl ?? fetch
     const headers: Record<string, string> = { Accept: accept }
     if (body !== undefined) headers['Content-Type'] = 'application/json'
@@ -84,7 +89,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     if (res.status >= 500 || reportRecovery) onAvailability?.(res.status < 500, startedAt)
     if (!res.ok) {
       const error = errorFromResponse(res.status, await readJson(res))
-      if (res.status === 401 && auth) onUnauthorized?.()
+      if (res.status === 401 && auth && logoutOnUnauthorized) onUnauthorized?.()
       throw error
     }
     return res

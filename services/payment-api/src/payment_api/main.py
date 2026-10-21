@@ -61,7 +61,7 @@ from payment_api.schemas import (
     TransactionIn,
     TransactionOut,
 )
-from payment_api.security import missing_token, username_from_token
+from payment_api.security import claims_from_token, missing_token
 from payment_api.status import StatusCache
 
 
@@ -152,17 +152,42 @@ def create_app(
             yield session
 
     def current_user(
+        request: Request,
         creds: HTTPAuthorizationCredentials | None = Depends(bearer),
         session=Depends(get_session),
     ) -> User:
         """Dépendance commune : toutes les routes métier exigent un JWT valide."""
         if creds is None:
             raise missing_token()
-        username = username_from_token(creds.credentials, settings.jwt_secret)
+        claims = claims_from_token(creds.credentials, settings.jwt_secret)  # décodé une fois
+        username = claims["sub"]
+        if not isinstance(username, str) or not username:
+            raise ApiError(401, "invalid_token", "Invalid token", {"WWW-Authenticate": "Bearer"})
+        request.state.auth_time = claims.get("auth_time")  # lu par require_recent_auth (#51)
         user = session.scalar(select(User).where(User.username == username))
         if user is None:  # JWT valide mais compte supprimé
             raise ApiError(401, "invalid_token", "Invalid token", {"WWW-Authenticate": "Bearer"})
         return user
+
+    def require_recent_auth(amount_cents: int, request: Request, user: User) -> None:
+        """Step-up (#51) : gros montant -> mot de passe vérifié il y a moins de N secondes.
+
+        `auth_time` vient du JWT déjà vérifié par current_user (pas de second décodage)."""
+        if amount_cents <= settings.step_up_threshold_cents:
+            return
+        auth_time = getattr(request.state, "auth_time", None)
+        age = now().timestamp() - auth_time if isinstance(auth_time, int | float) else None
+        # Absent, trop ancien, ou dans le futur au-delà d'une dérive d'horloge raisonnable.
+        if age is None or age > settings.step_up_max_age_s or age < -60:
+            log_event(
+                log,
+                logging.WARNING,
+                "step_up_required",
+                f"Step-up required for {amount_cents} cents",
+                http_status=403,
+                user=user.username,
+            )
+            raise ApiError(403, "step_up_required", "Recent password confirmation required")
 
     # ---------------------------------------------------------------- erreurs
     @app.exception_handler(ApiError)
@@ -234,8 +259,12 @@ def create_app(
 
     @app.post("/api/v1/transactions", response_model=TransactionOut, status_code=201)
     def create_transaction(
-        body: TransactionIn, user: User = Depends(current_user), session=Depends(get_session)
+        request: Request,
+        body: TransactionIn,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
     ):
+        require_recent_auth(body.amount_cents, request, user)
         try:
             tx = transfer(
                 session,
@@ -397,8 +426,13 @@ def create_app(
 
     @app.post("/api/v1/scheduled-transfers", response_model=ScheduleOut, status_code=201)
     def create_schedule(
-        body: ScheduleIn, user: User = Depends(current_user), session=Depends(get_session)
+        request: Request,
+        body: ScheduleIn,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
     ):
+        # Un virement permanent au-delà du seuil est aussi sensible qu'un virement immédiat.
+        require_recent_auth(body.amount_cents, request, user)
         try:
             s = schedules.create(session, user, body, now().astimezone(UTC).date())
         except Rejection as rej:

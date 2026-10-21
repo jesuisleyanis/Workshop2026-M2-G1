@@ -1234,3 +1234,156 @@ describe('Front - relevés, revue (#50)', () => {
     expect(await screen.findByText('31/10/2026 23:30 UTC')).toBeInTheDocument()
   })
 })
+
+describe('Front - confirmation renforcée des gros virements (#51)', () => {
+  const STEP_UP = () => jsonResponse({ error: { code: 'step_up_required', message: 'x' } }, 403)
+  const NEW_TOKEN = fakeJwt(Math.floor(Date.now() / 1000) + 900)
+  const authOf = (call: unknown[]) => ((call[1] as RequestInit).headers as Record<string, string>).Authorization
+  const txPosts = (f: ReturnType<typeof stubFetch>) => posts(f).filter(([u]) => String(u).endsWith('/api/v1/transactions'))
+
+  async function bigTransfer(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '600')
+    await user.click(screen.getByRole('button', { name: /^Envoyer 600,00/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
+  }
+
+  function routes(stepUp: (init: RequestInit | undefined) => Response) {
+    let calls = 0
+    return stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'POST /api/v1/transactions': () => (++calls === 1 ? STEP_UP() : jsonResponse({ ...CREATED, amount_cents: 60000 }, 201)),
+      'POST /api/v1/auth/step-up': stepUp,
+    })
+  }
+
+  it('mobile : annuler la confirmation renforcée garde le message à l’étape 4, sans second envoi', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse([{ ...ACCOUNTS[0]!, balance_cents: 1_000_000 }]),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'POST /api/v1/transactions': STEP_UP,
+    })
+    renderApp('/send', { desktop: false })
+    const user = userEvent.setup()
+    await user.click(within(await screen.findByRole('region', { name: 'Destinataires' })).getByRole('button', { name: /Compte n°99/ }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '600')
+    await user.click(screen.getByRole('button', { name: /Continuer/ }))
+    await user.click(screen.getByRole('button', { name: /Vérifier le virement/ }))
+    screen.getByRole('button', { name: /^Envoyer 600,00/ }).focus()
+    await user.keyboard('{Enter}')
+    const dlg = await screen.findByRole('dialog')
+    await user.click(within(dlg).getByRole('button', { name: /Annuler/ }))
+    expect(await screen.findByText('Virement non envoyé : la confirmation renforcée a été annulée.')).toBeInTheDocument()
+    expect(screen.getByText('Étape 4 sur 4')).toBeInTheDocument()
+    expect(txPosts(f)).toHaveLength(1)
+  })
+
+  it('403 step_up_required → modale → mot de passe → rejeu identique avec le nouveau jeton → succès', async () => {
+    loginAsStored()
+    const oldToken = tokenStore.get()
+    const f = routes(() => jsonResponse({ access_token: NEW_TOKEN, token_type: 'bearer', expires_in: 900 }))
+    renderApp('/send')
+    const user = userEvent.setup()
+    await bigTransfer(user)
+    const dlg = await screen.findByRole('dialog', { name: 'Confirmation renforcée' })
+    expect(within(dlg).getByText(/montant important/)).toBeInTheDocument()
+    const pwd = within(dlg).getByLabelText('Mot de passe')
+    expect(pwd).toHaveFocus()
+    expect(pwd).toHaveAttribute('autocomplete', 'current-password')
+    await user.type(pwd, 's3cret')
+    await user.click(within(dlg).getByRole('button', { name: 'Confirmer' }))
+    expect(await screen.findByRole('heading', { name: 'Virement envoyé' })).toBeInTheDocument()
+    const sent = txPosts(f)
+    expect(sent).toHaveLength(2)
+    expect((sent[0]![1] as RequestInit).body).toBe((sent[1]![1] as RequestInit).body)
+    expect(authOf(sent[0]!)).toBe(`Bearer ${oldToken}`)
+    expect(authOf(sent[1]!)).toBe(`Bearer ${NEW_TOKEN}`)
+    const stepCall = f.mock.calls.find(([u]) => String(u).endsWith('/api/v1/auth/step-up'))!
+    expect(JSON.parse((stepCall[1] as RequestInit).body as string)).toEqual({ password: 's3cret' })
+    expect(tokenStore.get()).toBe(NEW_TOKEN)
+  })
+
+  it('mot de passe incorrect : message, modale ouverte, aucun rejeu, toujours connecté', async () => {
+    loginAsStored()
+    const f = routes(() => jsonResponse({ error: { code: 'invalid_credentials', message: 'x' } }, 401))
+    renderApp('/send')
+    const user = userEvent.setup()
+    await bigTransfer(user)
+    const dlg = await screen.findByRole('dialog', { name: 'Confirmation renforcée' })
+    await user.type(within(dlg).getByLabelText('Mot de passe'), 'faux')
+    await user.click(within(dlg).getByRole('button', { name: 'Confirmer' }))
+    expect(await within(dlg).findByText('Mot de passe incorrect.')).toBeInTheDocument()
+    expect(within(dlg).getByLabelText('Mot de passe')).toHaveValue('')
+    expect(txPosts(f)).toHaveLength(1)
+    expect(tokenStore.get()).not.toBeNull()
+  })
+
+  it('trop de tentatives (429) : message et bouton Fermer ; fermer = aucun rejeu', async () => {
+    loginAsStored()
+    const f = routes(() => jsonResponse({ error: { code: 'rate_limited', message: 'x' } }, 429))
+    renderApp('/send')
+    const user = userEvent.setup()
+    await bigTransfer(user)
+    const dlg = await screen.findByRole('dialog', { name: 'Confirmation renforcée' })
+    await user.type(within(dlg).getByLabelText('Mot de passe'), 'x')
+    await user.click(within(dlg).getByRole('button', { name: 'Confirmer' }))
+    expect(await within(dlg).findByText(/Trop de tentatives/)).toBeInTheDocument()
+    await user.click(within(dlg).getByRole('button', { name: 'Fermer' }))
+    expect(await screen.findByText(/Virement non envoyé/)).toBeInTheDocument()
+    expect(txPosts(f)).toHaveLength(1)
+  })
+
+  it('annulation (Échap) : retour au récapitulatif « Virement non envoyé », aucun second envoi', async () => {
+    loginAsStored()
+    const f = routes(() => jsonResponse({ access_token: NEW_TOKEN }))
+    renderApp('/send')
+    const user = userEvent.setup()
+    await bigTransfer(user)
+    await screen.findByRole('dialog', { name: 'Confirmation renforcée' })
+    await user.keyboard('{Escape}')
+    expect(await screen.findByText(/Virement non envoyé/)).toBeInTheDocument()
+    expect(screen.getByText('Récapitulatif')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(txPosts(f)).toHaveLength(1)
+    expect(f.mock.calls.some(([u]) => String(u).endsWith('/api/v1/auth/step-up'))).toBe(false)
+  })
+
+  it('programmation au-dessus du seuil : même flux, rejeu du POST /scheduled-transfers', async () => {
+    loginAsStored()
+    let calls = 0
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'POST /api/v1/auth/step-up': () => jsonResponse({ access_token: NEW_TOKEN, token_type: 'bearer', expires_in: 900 }),
+      'POST /api/v1/scheduled-transfers': (init) => {
+        if (++calls === 1) return STEP_UP()
+        const b = JSON.parse(init!.body as string)
+        return jsonResponse({ id: 5, ...b, category: 'transfer', next_run_on: b.start_on, end_on: null, status: 'active', last_run: null }, 201)
+      },
+    })
+    renderApp('/send')
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '600')
+    await user.click(screen.getByRole('switch', { name: 'Programmer le virement' }))
+    await user.click(screen.getByRole('button', { name: /^Programmer 600,00/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmer la programmation' }))
+    const dlg = await screen.findByRole('dialog', { name: 'Confirmation renforcée' })
+    await user.type(within(dlg).getByLabelText('Mot de passe'), 's3cret')
+    await user.click(within(dlg).getByRole('button', { name: 'Confirmer' }))
+    expect(await screen.findByRole('heading', { name: 'Virement programmé' })).toBeInTheDocument()
+    const sched = posts(f).filter(([u]) => String(u).endsWith('/api/v1/scheduled-transfers'))
+    expect(sched).toHaveLength(2)
+    expect((sched[0]![1] as RequestInit).body).toBe((sched[1]![1] as RequestInit).body)
+  })
+})

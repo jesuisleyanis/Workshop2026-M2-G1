@@ -5,6 +5,7 @@ import { ApiError } from '../api/errors'
 import { Icon } from '../components/icons'
 import { CategoryPicker } from '../components/CategoryPicker'
 import { AccountCard, Alert, Avatar, Card, EmptyState, ErrorState, H2, LoadingState, Segmented } from '../components/ui'
+import { StepUpDialog } from '../components/StepUpDialog'
 import { Switch } from '../components/Switch'
 import { useBackOverride, useShell } from '../hooks/shell-context'
 import { useBankData } from '../hooks/useBankData'
@@ -47,6 +48,9 @@ const PLAN_ERRORS: Record<string, string> = {
   schedule_limit: 'Vous avez atteint le nombre maximal de virements programmés actifs (20). Annulez-en un pour en créer un autre.',
 }
 
+/** Marqueur d'annulation de la confirmation renforcée (#51). */
+const CANCELLED = Symbol('step-up-cancelled')
+
 const QUICK = [50, 100, 150, 200]
 const WIZARD = ['Destinataire', 'Montant', 'Détails', 'Confirmation']
 
@@ -79,6 +83,8 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
   const [dir, setDir] = useState<1 | -1>(1)
   const [err, setErr] = useState<string | null>(null)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
+  // Résolution de la modale de confirmation renforcée en attente (#51), sinon null.
+  const [stepUp, setStepUp] = useState<((ok: boolean) => void) | null>(null)
 
   const src = accounts.find((a) => a.id === accId) ?? accounts[0]!
   const amount = parseAmount(amt) ?? 0
@@ -132,11 +138,33 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
     setErr(null)
   }
 
+  /**
+   * Gros virement (#51) : sur 403 step_up_required, ouvre la modale puis rejoue UNE fois la même
+   * requête. Renvoie CANCELLED si l'utilisateur annule : rien n'est envoyé une seconde fois.
+   */
+  async function withStepUp<T>(send: () => Promise<T>): Promise<T | typeof CANCELLED> {
+    try {
+      return await send()
+    } catch (e) {
+      if (!(e instanceof ApiError && e.code === 'step_up_required')) throw e
+      const ok = await new Promise<boolean>((resolve) => setStepUp(() => resolve))
+      setStepUp(null)
+      if (!ok) return CANCELLED
+      return await send()
+    }
+  }
+  function stepUpCancelled() {
+    // goStep efface le message d'erreur : on revient d'abord à l'étape, PUIS on pose le message.
+    if (isDesktop) setStep('recap')
+    else goStep(4)
+    setErr('Virement non envoyé : la confirmation renforcée a été annulée.')
+  }
+
   async function schedule() {
     if (!to) return
     setStep('sending')
     try {
-      const s = await api.createSchedule({
+      const s = await withStepUp(() => api.createSchedule({
         fromAccount: src.id,
         toAccount: to,
         amount,
@@ -144,7 +172,8 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
         frequency: plan.frequency,
         startOn: plan.startOn,
         endOn: plan.frequency === 'once' ? null : plan.endOn || null,
-      })
+      }))
+      if (s === CANCELLED) return stepUpCancelled()
       setOutcome({ kind: 'scheduled', schedule: s })
       setStep('result')
     } catch (e) {
@@ -169,7 +198,9 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
     setStep('sending')
     try {
       // « Virement » = défaut serveur : inutile de l'envoyer (corps identique à avant #44).
-      const tx = await api.createTransaction({ from_account: src.id, to_account: to, amount, ...(category !== 'transfer' ? { category } : {}) })
+      const req = { from_account: src.id, to_account: to, amount, ...(category !== 'transfer' ? { category } : {}) }
+      const tx = await withStepUp(() => api.createTransaction(req))
+      if (tx === CANCELLED) return stepUpCancelled()
       if (label.trim()) saveLabel(tx.id, label.trim())
       setOutcome(tx.status === 'rejected' ? { kind: 'refused', error: null } : { kind: 'success', tx })
     } catch (e) {
@@ -219,11 +250,14 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
 
   if (step === 'sending') {
     return (
-      <div role="status" aria-live="polite" className="mx-auto mt-10 flex w-full max-w-[560px] flex-col items-center gap-[18px] rounded-[28px] bg-white px-6 py-12 text-center">
+      <>
+        {stepUp && <StepUpDialog onDone={stepUp} />}
+        <div role="status" aria-live="polite" className="mx-auto mt-10 flex w-full max-w-[560px] flex-col items-center gap-[18px] rounded-[28px] bg-white px-6 py-12 text-center">
         <span className="h-14 w-14 animate-spin-fast rounded-full border-4 border-[#e6e8eb] border-t-ink" />
         <span className="text-lg font-semibold">{plan.on ? 'Programmation en cours…' : 'Envoi en cours…'}</span>
         <span className="text-sm text-ink-3">Ne fermez pas l’application.</span>
-      </div>
+        </div>
+      </>
     )
   }
 
@@ -363,6 +397,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
               <span className="tnum text-[42px] font-bold tracking-[-0.03em]">{formatMoney(amount, src.currency)}</span>
             </div>
             <Recap rows={recapRows} />
+            {err && <Alert>{err}</Alert>}
             <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fit,minmax(160px,1fr))]">
               <button type="button" onClick={() => setStep('form')} className="btn-ghost">
                 Modifier
@@ -580,6 +615,7 @@ function SendFlow({ accounts }: { accounts: Account[] }) {
             </div>
             <Recap rows={recapRows.filter(([k]) => k !== 'Vers')} />
           </section>
+          {errBox}
           <SlideToConfirm ariaLabel={`${cta} à ${toRec.name}. Faites glisser ou appuyez sur Entrée.`} onConfirm={() => void execute()} />
           <span className="text-center text-xs text-ink-3">Faites glisser jusqu’au bout pour confirmer</span>
         </div>

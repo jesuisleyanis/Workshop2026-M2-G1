@@ -67,6 +67,7 @@ src/
     CategoryPicker.tsx       sélecteur de catégorie (Envoyer, filtres de l'historique)
     LimitBar.tsx             barre « Plafond restant » (#46, D10)
     Switch.tsx               interrupteur accessible role=switch (réglages de carte, #47)
+    StepUpDialog.tsx         confirmation renforcée par mot de passe d'un gros virement (#51, D15)
     icons.tsx                pictogrammes SVG inline
   pages/                     Login, Home, Stats, Send (formulaire desktop + assistant mobile, glisser pour envoyer),
                              History (+ feuille de filtres mobile, export CSV), TxDetail, Rib, Beneficiaries, Limits, Cards, Scheduled, Notifications,

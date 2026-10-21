@@ -44,11 +44,17 @@ from auth_service.schemas import (
     LoginRequest,
     RateLimitOut,
     RegisterRequest,
+    StepUpRequest,
     TightenRequest,
     TokenOut,
     UserOut,
 )
-from auth_service.security import create_access_token, internal_token_matches
+from auth_service.security import (
+    claims_from_bearer,
+    create_access_token,
+    internal_token_matches,
+    reissue_with_fresh_auth_time,
+)
 
 
 def _migrate_with_retry(engine: Engine, log: logging.Logger, attempts: int = 5) -> None:
@@ -201,7 +207,9 @@ def create_app(
         return UserOut(id=user.id, username=user.username)
 
     @app.post("/api/v1/login", response_model=TokenOut)
-    @limiter.limit(rate)
+    # Quota PARTAGÉ avec /auth/step-up (scope commun) : deux portes, un seul budget d'essais de
+    # mot de passe par IP.
+    @limiter.shared_limit(rate, scope="password_attempts")
     def login(request: Request, body: LoginRequest, session=Depends(get_session)):
         user = session.scalar(select(User).where(User.username == body.username))
         # Vérification systématique (hash factice si inconnu) : temps de réponse constant.
@@ -224,6 +232,49 @@ def create_app(
             logging.INFO,
             "auth_login_success",
             f"User {user.username} logged in",
+            http_status=200,
+            user=user.username,
+        )
+        return TokenOut(access_token=token, expires_in=expires_in)
+
+    @app.post("/api/v1/auth/step-up", response_model=TokenOut)
+    @limiter.shared_limit(rate, scope="password_attempts")  # même budget que /login
+    def step_up(
+        request: Request,
+        body: StepUpRequest,
+        authorization: str | None = Header(default=None),
+        session=Depends(get_session),
+    ):
+        """Ré-authentification (#51) : session valide + mot de passe -> même session (même `exp`,
+        même `role`), `auth_time` frais. Ne prolonge jamais la session : pas de rafraîchissement
+        infini par cette porte.
+
+        Un échec est un essai de mot de passe raté : compté dans resilience_auth_logins_total
+        (failed), comme sur /login, pour que la détection de force brute le voie aussi.
+        """
+        claims = claims_from_bearer(authorization, settings.jwt_secret)
+        username = claims.get("sub") if claims else None
+        if not isinstance(username, str) or not username:
+            raise ApiError(401, "invalid_token", "Invalid token", {"WWW-Authenticate": "Bearer"})
+        user = session.scalar(select(User).where(User.username == username))
+        valid = verify_password(body.password, user.password_hash if user else DUMMY_HASH)
+        if user is None or not valid:
+            auth_logins_total.labels(result="failed").inc()
+            log_event(
+                log,
+                logging.WARNING,
+                "auth_step_up_failed",
+                f"Step-up failed for user {username}",
+                http_status=401,
+                user=username,
+            )
+            raise ApiError(401, "invalid_credentials", "Invalid credentials")
+        token, expires_in = reissue_with_fresh_auth_time(claims, settings.jwt_secret)
+        log_event(
+            log,
+            logging.INFO,
+            "auth_step_up_success",
+            f"User {user.username} re-authenticated",
             http_status=200,
             user=user.username,
         )
