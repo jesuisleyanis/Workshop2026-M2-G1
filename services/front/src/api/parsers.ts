@@ -1,5 +1,5 @@
 import { ApiError } from './errors'
-import type { AppNotification, NotificationType, ScheduledTransfer, Account, Card, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
+import type { AppNotification, NotificationType, ScheduledTransfer, Account, Card, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Statement, Transaction, TransactionStatus } from '../types/api'
 import { isCategory } from '../lib/categories'
 
 type Obj = Record<string, unknown>
@@ -268,4 +268,30 @@ export function parseNotification(v: unknown): AppNotification {
 
 export function parseNotifications(v: unknown): AppNotification[] {
   return list(v, 'notifications', 'notifications').map(parseNotification)
+}
+
+export function parseStatement(v: unknown): Statement {
+  const o = asObj(v, 'relevé')
+  return {
+    accountId: str(o, 'account_id', 'relevé'),
+    iban: str(o, 'iban_fake', 'relevé'),
+    holder: str(o, 'holder', 'relevé'),
+    from: str(o, 'from', 'relevé'),
+    to: str(o, 'to', 'relevé'),
+    rows: list(o.rows ?? [], 'rows', 'lignes du relevé').map((r) => {
+      const x = asObj(r, 'ligne du relevé')
+      return {
+        id: str(x, 'id', 'ligne'),
+        createdAt: str(x, 'created_at', 'ligne'),
+        reference: str(x, 'reference', 'ligne'),
+        direction: oneOf(x.direction, ['debit', 'credit'] as const, 'sens'),
+        counterpartyAccount: str(x, 'counterparty_account', 'ligne'),
+        category: parseTxCategory(x.category),
+        amount: num(x, 'amount_cents', 'ligne') / 100,
+        status: oneOf(x.status, ['created', 'rejected'] as const, 'statut'),
+      }
+    }),
+    totalDebit: num(o, 'total_debit_cents', 'relevé') / 100,
+    totalCredit: num(o, 'total_credit_cents', 'relevé') / 100,
+  }
 }

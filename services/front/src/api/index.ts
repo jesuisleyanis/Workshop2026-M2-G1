@@ -1,10 +1,11 @@
 import { API_BASE } from '../config'
 import { ApiError } from './errors'
 import { createApiClient, type ApiClient } from './client'
-import { parseNotification, parseNotifications, parseAccounts, parseBeneficiaries, parseBeneficiary, parseCard, parseCards, parseLimits, parseLogin, parseSchedule, parseSchedules, parseServiceHealth, parseSpending, parseTransaction, parseTransactions } from './parsers'
+import { parseAccounts, parseBeneficiaries, parseBeneficiary, parseCard, parseCards, parseLimits, parseLogin, parseNotification, parseNotifications, parseSchedule, parseSchedules, parseServiceHealth, parseSpending, parseStatement, parseTransaction, parseTransactions } from './parsers'
 import { tokenStore } from './tokenStore'
+import { saveFile, statementPath } from '../lib/statements'
 import { serviceStatus } from '../lib/serviceStatus'
-import type { AppNotification, Account, AccountLimit, Beneficiary, Card, CardPatch, LoginRequest, LoginResponse, NewBeneficiary, NewSchedule, ScheduledTransfer, ScheduleStatus, ServiceHealth, Spending, Transaction, TransferRequest } from '../types/api'
+import type { Account, AccountLimit, AppNotification, Beneficiary, Card, CardPatch, LoginRequest, LoginResponse, NewBeneficiary, NewSchedule, ScheduleStatus, ScheduledTransfer, ServiceHealth, Spending, Statement, StatementQuery, Transaction, TransferRequest } from '../types/api'
 
 /** Endpoints métier /api/v1 (docs/contracts.md : préfixe /api/v1, JWT Bearer). */
 export function createEndpoints(client: ApiClient) {
@@ -47,6 +48,15 @@ export function createEndpoints(client: ApiClient) {
           },
         }),
       ),
+    getStatement: async (q: StatementQuery, signal?: AbortSignal): Promise<Statement> =>
+      parseStatement(await client.request(statementPath(q, 'json'), { signal })),
+    /** CSV via le client (Bearer, timeout, 401) puis téléchargement navigateur. */
+    downloadStatement: async (q: StatementQuery): Promise<string> => {
+      const file = await client.download(statementPath(q, 'csv'))
+      const name = file.filename ?? `releve-${q.accountId}-${q.from}-${q.to}.csv`
+      saveFile(file.blob, name)
+      return name
+    },
     listTransactions: async (signal?: AbortSignal): Promise<Transaction[]> =>
       parseTransactions(await client.request('/api/v1/transactions', { signal })),
     createTransaction: async (req: TransferRequest): Promise<Transaction> =>

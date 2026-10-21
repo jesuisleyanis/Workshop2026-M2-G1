@@ -69,7 +69,8 @@ src/
     Switch.tsx               interrupteur accessible role=switch (réglages de carte, #47)
     icons.tsx                pictogrammes SVG inline
   pages/                     Login, Home, Stats, Send (formulaire desktop + assistant mobile, glisser pour envoyer),
-                             History (+ feuille de filtres mobile, export CSV), TxDetail, Rib, Beneficiaries, Limits, Cards, Scheduled, Notifications, Profile
+                             History (+ feuille de filtres mobile, export CSV), TxDetail, Rib, Beneficiaries, Limits, Cards, Scheduled, Notifications,
+                             Statements + StatementPrint (relevés #50), Profile
   lib/
     bank.ts                  vues métier pures : sens/montant signé, groupes par jour, dépenses par période,
                              destinataires connus, CSV (anti-injection de formules)
@@ -78,6 +79,8 @@ src/
     limits.ts                plafonds (#46) : part restante, dépassement (avertissement), date de remise à zéro
     notifications.ts         notifications (#49) : icône par type, badge « 9+ », groupes par jour
     schedules.ts             virements programmés (#48) : libellés fréquence/statut/motif d'échec, dates YYYY-MM-DD
+    statements.ts            relevés (#50) : raccourcis de période UTC, chemins API/impression, erreurs, téléchargement blob
+    bankInfo.ts              coordonnées fictives de la banque (RIB, relevé imprimable)
     format, validation, errorMessages, labels
   test/                      setup Vitest, helpers (stub fetch, faux JWT, setViewport desktop/mobile)
 docker/                      nginx.conf (non-root, :8080), security-headers.conf
@@ -110,6 +113,7 @@ npm run test
 - `src/lib/serviceStatus.test.ts` : transitions perturbé → rétabli → masqué, réponses parallèles ignorées.
 - `src/lib/clipboard.test.ts` : copie via `navigator.clipboard`, repli hors contexte sécurisé (démo en HTTP), échec signalé.
 - `src/lib/validation.test.ts`, `format.test.ts`, `labels.test.ts` : règles du virement, formatage, libellés locaux.
+- `src/lib/statements.test.ts` : raccourcis de période en UTC (changement d'année), chemins du relevé et de la page imprimable.
 - `src/App.test.tsx` (desktop **et** mobile via `setViewport`) : login OK/KO/vide, 401, déconnexion confirmée ; shell
   (barre latérale vs onglets) ; accueil chargement/erreur/réessai ; bandeau d'état (sur erreur et en l'absence d'action) ;
   historique (groupes, filtres, feuille mobile, détail + référence) ; RIB ; envoi desktop (validation, récapitulatif,

@@ -113,3 +113,22 @@ describe('client API centralisé', () => {
     expect(await client.request('/x')).toBeNull()
   })
 })
+
+describe('client API : téléchargement (#50)', () => {
+  it('download : Bearer, corps binaire et nom tiré de Content-Disposition ; erreur JSON normalisée', async () => {
+    const f = vi.fn(async () =>
+      new Response('﻿Date;Référence\n', {
+        status: 200,
+        headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="releve-1-2026-03-01-2026-03-15.csv"' },
+      }),
+    )
+    const { client } = make(f as unknown as typeof fetch)
+    const file = await client.download('/api/v1/statements?format=csv')
+    expect(file.filename).toBe('releve-1-2026-03-01-2026-03-15.csv')
+    expect(await file.blob.text()).toContain('Date;Référence')
+    const [, init] = f.mock.calls[0] as unknown as [string, RequestInit]
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok123')
+    const bad = make((async () => jsonResponse({ error: { code: 'invalid_period', message: 'x' } }, 422)) as unknown as typeof fetch)
+    await expect(bad.client.download('/x')).rejects.toMatchObject({ status: 422, code: 'invalid_period' })
+  })
+})

@@ -7,12 +7,9 @@ import { copyText } from '../lib/clipboard'
 import { useAuth } from '../hooks/useAuth'
 import { useBankData } from '../hooks/useBankData'
 import { accountName } from '../lib/bank'
+import { ADDRESS, BANK, BIC } from '../lib/bankInfo'
 import { formatIban } from '../lib/format'
 
-/** Coordonnées fictives de la banque de démonstration. */
-const BIC = 'BRESFRPPXXX'
-const BANK = 'Banque Résilience — Agence Démo'
-const ADDRESS = '12 rue de l’Exemple, 75000 Paris'
 
 export function RibPage() {
   const { accounts } = useBankData()

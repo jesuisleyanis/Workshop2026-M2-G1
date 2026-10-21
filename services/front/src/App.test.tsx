@@ -1084,3 +1084,117 @@ describe('Front - notifications (#49)', () => {
     expect(await screen.findByRole('button', { name: 'Réessayer' })).toBeInTheDocument()
   })
 })
+
+describe('Front - relevés (#50)', () => {
+  const base = { 'GET /api/v1/accounts': () => jsonResponse(TWO_ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) }
+  const STATEMENT = {
+    account_id: 1,
+    iban_fake: 'FR76 0000 0001',
+    holder: 'CAMILLE DURAND',
+    from: '2026-10-01',
+    to: '2026-10-21',
+    rows: [
+      { id: 10, created_at: '2026-10-02T10:00:00Z', reference: 'req-10', direction: 'debit', counterparty_account: 7, category: 'food', amount_cents: 1250, status: 'created' },
+      { id: 11, created_at: '2026-10-03T10:00:00Z', reference: 'req-11', direction: 'debit', counterparty_account: 7, category: 'shopping', amount_cents: 99900, status: 'rejected' },
+      { id: 12, created_at: '2026-10-04T10:00:00Z', reference: 'req-12', direction: 'credit', counterparty_account: 8, category: null, amount_cents: 5000, status: 'created' },
+    ],
+    total_debit_cents: 1250,
+    total_credit_cents: 5000,
+  }
+
+  it('télécharge le CSV avec le Bearer, via une URL blob nommée comme le serveur', async () => {
+    loginAsStored()
+    // stubFetch route sur le chemin exact : on accepte ici toute query de /api/v1/statements.
+    const f = stubFetch(base)
+    f.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/v1/statements')) {
+        return new Response('﻿Date;Référence', { status: 200, headers: { 'Content-Disposition': 'attachment; filename="releve-2-x.csv"' } })
+      }
+      const key = `${init?.method ?? 'GET'} ${url}`
+      return key === 'GET /api/v1/accounts' ? jsonResponse(TWO_ACCOUNTS) : jsonResponse([])
+    })
+    const create = vi.fn(() => 'blob:fake')
+    const revoke = vi.fn()
+    Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke })
+    const clicked: HTMLAnchorElement[] = []
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this)
+    })
+    try {
+      renderApp('/statements')
+      await userEvent.click(await screen.findByRole('button', { name: 'Compte n°2' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Mois dernier' }))
+      await userEvent.click(screen.getByRole('button', { name: /Télécharger CSV/ }))
+      await waitFor(() => expect(clicked).toHaveLength(1))
+      const call = f.mock.calls.find(([u]) => String(u).startsWith('/api/v1/statements'))!
+      const url = new URL(String(call[0]), 'http://x')
+      expect(url.searchParams.get('account_id')).toBe('2')
+      expect(url.searchParams.get('format')).toBe('csv')
+      const now = new Date()
+      const first = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 10)
+      expect(url.searchParams.get('from')).toBe(first)
+      expect(((call[1] as RequestInit).headers as Record<string, string>).Authorization).toMatch(/^Bearer /)
+      expect(clicked[0]!.download).toBe('releve-2-x.csv')
+      expect(clicked[0]!.href).toBe('blob:fake')
+      await waitFor(() => expect(revoke).toHaveBeenCalledWith('blob:fake'))
+    } finally {
+      click.mockRestore()
+    }
+  })
+
+  it.each([
+    ['invalid_period', 'Période invalide'],
+    ['statement_too_large', 'Trop d’opérations sur cette période'],
+  ])('erreur %s : message clair', async (code, text) => {
+    loginAsStored()
+    const f = stubFetch(base)
+    f.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/v1/statements')) return jsonResponse({ error: { code, message: 'x' } }, 422)
+      return url === '/api/v1/accounts' ? jsonResponse(TWO_ACCOUNTS) : jsonResponse([])
+    })
+    renderApp('/statements')
+    await userEvent.click(await screen.findByRole('button', { name: /Télécharger CSV/ }))
+    expect(await screen.findByText(new RegExp(text))).toBeInTheDocument()
+  })
+
+  it('période personnalisée : saisie des dates puis version imprimable avec ces paramètres', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/statements?account_id=1&from=2026-09-01&to=2026-09-30&format=json': () => jsonResponse({ ...STATEMENT, from: '2026-09-01', to: '2026-09-30' }) })
+    renderApp('/statements')
+    await userEvent.click(await screen.findByRole('button', { name: 'Personnalisée' }))
+    const from = screen.getByLabelText('Du')
+    const to = screen.getByLabelText('Au')
+    await userEvent.clear(from)
+    await userEvent.type(from, '2026-09-01')
+    await userEvent.clear(to)
+    await userEvent.type(to, '2026-09-30')
+    expect(screen.getByTestId('statement-range')).toHaveTextContent('Du 2026-09-01 au 2026-09-30')
+    await userEvent.click(screen.getByRole('button', { name: /Version imprimable/ }))
+    expect(await screen.findByRole('region', { name: 'Relevé de compte' })).toHaveTextContent('Du 2026-09-01 au 2026-09-30')
+  })
+
+  it('page imprimable : lignes, refusée barrée, totaux, bouton imprimer', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/statements?account_id=1&from=2026-10-01&to=2026-10-21&format=json': () => jsonResponse(STATEMENT) })
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {})
+    try {
+      renderApp('/statements/print?account=1&from=2026-10-01&to=2026-10-21')
+      const doc = await screen.findByRole('region', { name: 'Relevé de compte' })
+      expect(doc).toHaveTextContent('CAMILLE DURAND')
+      expect(doc).toHaveTextContent('Banque Résilience')
+      const rows = screen.getAllByTestId('statement-row')
+      expect(rows).toHaveLength(3)
+      expect(rows[0]).toHaveTextContent(/Alimentation.*12,50/)
+      expect(rows[1]).toHaveClass('line-through')
+      expect(rows[1]).toHaveTextContent('Refusé')
+      expect(screen.getByTestId('total-debit')).toHaveTextContent(/12,50/)
+      expect(screen.getByTestId('total-credit')).toHaveTextContent(/50,00/)
+      await userEvent.click(screen.getByRole('button', { name: /Imprimer/ }))
+      expect(print).toHaveBeenCalled()
+    } finally {
+      print.mockRestore()
+    }
+  })
+})

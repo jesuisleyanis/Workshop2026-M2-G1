@@ -35,6 +35,7 @@ export const SERVICES: Screen[] = [
   { path: '/rib', label: 'RIB', icon: 'bank', title: 'Relevé d’identité bancaire' },
   { path: '/limits', label: 'Plafonds', icon: 'sliders', title: 'Plafonds de virement' },
   { path: '/scheduled', label: 'Virements programmés', icon: 'clock', title: 'Virements programmés' },
+  { path: '/statements', label: 'Relevés', icon: 'download', title: 'Relevés' },
 ]
 
 /** Écrans hors onglets : titre + onglet parent (retour). */
@@ -45,6 +46,8 @@ const SUBSCREENS: { prefix: string; title: string; parent: string }[] = [
   { prefix: '/limits', title: 'Plafonds de virement', parent: '/profile' },
   { prefix: '/cards', title: 'Cartes', parent: '/profile' },
   { prefix: '/scheduled', title: 'Virements programmés', parent: '/profile' },
+  { prefix: '/statements/print', title: 'Relevé imprimable', parent: '/statements' },
+  { prefix: '/statements', title: 'Relevés', parent: '/profile' },
   { prefix: '/notifications', title: 'Notifications', parent: '/' },
 ]
 

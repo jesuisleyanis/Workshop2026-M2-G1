@@ -27,18 +27,26 @@ export interface RequestOptions {
   reportRecovery?: boolean
 }
 
+export interface DownloadedFile {
+  blob: Blob
+  /** Nom tiré de `Content-Disposition` (filename="…"), sinon null. */
+  filename: string | null
+}
+
 export interface ApiClient {
   request<T = unknown>(path: string, options?: RequestOptions): Promise<T>
+  /** Même client (Bearer, timeout, disponibilité, 401) mais corps lu en binaire : export CSV. */
+  download(path: string, options?: RequestOptions): Promise<DownloadedFile>
 }
 
 /** Client HTTP centralisé : Bearer, JSON, erreurs normalisées du contrat, timeout. */
 export function createApiClient(opts: ApiClientOptions): ApiClient {
   const { baseUrl, getToken, onUnauthorized, onAvailability, timeoutMs = 10_000 } = opts
 
-  async function request<T = unknown>(path: string, o: RequestOptions = {}): Promise<T> {
+  async function send(path: string, o: RequestOptions, accept: string): Promise<Response> {
     const { method = 'GET', body, auth = true, signal, reportRecovery = true } = o
     const doFetch = opts.fetchImpl ?? fetch
-    const headers: Record<string, string> = { Accept: 'application/json' }
+    const headers: Record<string, string> = { Accept: accept }
     if (body !== undefined) headers['Content-Type'] = 'application/json'
     if (auth) {
       const token = getToken()
@@ -74,16 +82,26 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     }
 
     if (res.status >= 500 || reportRecovery) onAvailability?.(res.status < 500, startedAt)
-    const parsed = await readJson(res)
     if (!res.ok) {
-      const error = errorFromResponse(res.status, parsed)
+      const error = errorFromResponse(res.status, await readJson(res))
       if (res.status === 401 && auth) onUnauthorized?.()
       throw error
     }
-    return parsed as T
+    return res
   }
 
-  return { request }
+  async function request<T = unknown>(path: string, o: RequestOptions = {}): Promise<T> {
+    return (await readJson(await send(path, o, 'application/json'))) as T
+  }
+
+  async function download(path: string, o: RequestOptions = {}): Promise<DownloadedFile> {
+    const res = await send(path, o, 'text/csv, application/json')
+    const disposition = res.headers.get('Content-Disposition') ?? ''
+    const m = /filename="?([^";]+)"?/i.exec(disposition)
+    return { blob: await res.blob(), filename: m ? m[1]! : null }
+  }
+
+  return { request, download }
 }
 
 async function readJson(res: Response): Promise<unknown> {

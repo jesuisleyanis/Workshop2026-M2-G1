@@ -176,3 +176,31 @@ export interface AppNotification {
   createdAt: string
   readAt: string | null
 }
+
+/** Paramètres d'un relevé (#50) : bornes incluses, jours UTC (YYYY-MM-DD). */
+export interface StatementQuery {
+  accountId: string
+  from: string
+  to: string
+}
+
+/** GET /api/v1/statements?format=json (#50), montants en euros. */
+export interface Statement {
+  accountId: string
+  iban: string
+  holder: string
+  from: string
+  to: string
+  rows: {
+    id: string
+    createdAt: string
+    reference: string
+    direction: 'debit' | 'credit'
+    counterpartyAccount: string
+    category: Category | null
+    amount: number
+    status: TransactionStatus
+  }[]
+  totalDebit: number
+  totalCredit: number
+}
