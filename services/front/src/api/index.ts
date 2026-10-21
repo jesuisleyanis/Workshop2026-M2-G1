@@ -1,4 +1,5 @@
 import { API_BASE } from '../config'
+import { ApiError } from './errors'
 import { createApiClient, type ApiClient } from './client'
 import { parseNotification, parseNotifications, parseAccounts, parseBeneficiaries, parseBeneficiary, parseCard, parseCards, parseLimits, parseLogin, parseSchedule, parseSchedules, parseServiceHealth, parseSpending, parseTransaction, parseTransactions } from './parsers'
 import { tokenStore } from './tokenStore'
@@ -87,6 +88,14 @@ export function createEndpoints(client: ApiClient) {
     },
     listNotifications: async (unread = false, signal?: AbortSignal): Promise<AppNotification[]> =>
       parseNotifications(await client.request(`/api/v1/notifications?unread=${unread ? 'true' : 'false'}`, { signal })),
+    // Badge de la cloche : un compteur serveur (COUNT), pas la liste des 100 dernières.
+    getUnreadCount: async (signal?: AbortSignal): Promise<number> => {
+      const o = (await client.request('/api/v1/notifications/unread-count', { signal })) as { count?: unknown }
+      if (typeof o?.count !== 'number' || !Number.isInteger(o.count) || o.count < 0) {
+        throw new ApiError(0, 'invalid_response', 'Compteur de notifications invalide.')
+      }
+      return o.count
+    },
     markNotificationRead: async (id: string): Promise<AppNotification> =>
       parseNotification(await client.request(`/api/v1/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' })),
     markAllNotificationsRead: async (): Promise<number> => {

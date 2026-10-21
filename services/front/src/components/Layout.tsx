@@ -223,8 +223,8 @@ function Sidebar({ pathname, activeTab, expiresAt }: { pathname: string; activeT
 
 /** Cloche D13 : badge des non-lues (en erreur ou à zéro : pas de badge, rien ne casse). */
 function Bell({ onOpen }: { onOpen: () => void }) {
-  const { unreadNotifications } = useBankData()
-  const count = unreadNotifications.data?.length ?? 0
+  const { unreadCount } = useBankData()
+  const count = unreadCount.data ?? 0
   const badge = badgeText(count)
   return (
     <button type="button" aria-label={bellLabel(count)} onClick={onOpen} className="round-btn relative flex-none">
@@ -246,7 +246,7 @@ function Bell({ onOpen }: { onOpen: () => void }) {
  */
 function ServiceBanner({ isDesktop }: { isDesktop: boolean }) {
   const status = useServiceStatus()
-  const { accounts, transactions, beneficiaries, limits, unreadNotifications } = useBankData()
+  const { accounts, transactions, beneficiaries, limits, unreadCount } = useBankData()
   const prev = useRef(status)
 
   useEffect(() => {
@@ -266,10 +266,10 @@ function ServiceBanner({ isDesktop }: { isDesktop: boolean }) {
       transactions.reload()
       beneficiaries.reload()
       limits.reload()
-      unreadNotifications.reload()
+      unreadCount.reload()
     }
     prev.current = status
-  }, [status, accounts, transactions, beneficiaries, limits, unreadNotifications])
+  }, [status, accounts, transactions, beneficiaries, limits, unreadCount])
 
   if (status === 'ok') return null
   const margin = isDesktop ? 'mx-10 mb-3' : 'mx-3 mb-2.5'

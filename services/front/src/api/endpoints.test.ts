@@ -138,6 +138,10 @@ describe('endpoints /api/v1', () => {
     await api.markNotificationRead('7')
     expect(await api.markAllNotificationsRead()).toBe(3)
     expect(f.mock.calls.map(([u]) => u)).toEqual(['/api/v1/notifications?unread=true', '/api/v1/notifications/7/read', '/api/v1/notifications/read-all'])
+    const count = endpointsWith(() => jsonResponse({ count: 4 }))
+    expect(await count.api.getUnreadCount()).toBe(4)
+    expect((count.f.mock.calls[0] as unknown as [string])[0]).toBe('/api/v1/notifications/unread-count')
+    await expect(endpointsWith(() => jsonResponse({ count: -1 })).api.getUnreadCount()).rejects.toMatchObject({ code: 'invalid_response' })
   })
 
   it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {

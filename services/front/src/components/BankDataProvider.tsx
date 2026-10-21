@@ -3,7 +3,7 @@ import { BankDataContext, type BankData } from '../hooks/bank-data-context'
 import { useAccounts } from '../hooks/useAccounts'
 import { useBeneficiaries } from '../hooks/useBeneficiaries'
 import { useLimits } from '../hooks/useLimits'
-import { useNotifications } from '../hooks/useNotifications'
+import { useUnreadCount } from '../hooks/useUnreadCount'
 import { NOTIFICATIONS_POLL_MS } from '../lib/notifications'
 import { useTransactions } from '../hooks/useTransactions'
 import { labelStore } from '../lib/labels'
@@ -17,8 +17,8 @@ export function BankDataProvider({ children }: { children: ReactNode }) {
   const transactions = useTransactions()
   const beneficiaries = useBeneficiaries()
   const limits = useLimits()
-  const unreadNotifications = useNotifications(true)
-  const { reload: reloadUnread } = unreadNotifications
+  const unreadCount = useUnreadCount()
+  const { reload: reloadUnread } = unreadCount
   const { reload: reloadAccounts } = accounts
   const { reload: reloadTransactions } = transactions
   const { reload: reloadBeneficiaries, error: beneficiariesError } = beneficiaries
@@ -46,8 +46,8 @@ export function BankDataProvider({ children }: { children: ReactNode }) {
   const saveLabel = useCallback((txId: string, label: string) => setLabels(labelStore.save(txId, label)), [])
 
   const value = useMemo<BankData>(
-    () => ({ accounts, transactions, beneficiaries, limits, unreadNotifications, labels, saveLabel }),
-    [accounts, transactions, beneficiaries, limits, unreadNotifications, labels, saveLabel],
+    () => ({ accounts, transactions, beneficiaries, limits, unreadCount, labels, saveLabel }),
+    [accounts, transactions, beneficiaries, limits, unreadCount, labels, saveLabel],
   )
   return <BankDataContext.Provider value={value}>{children}</BankDataContext.Provider>
 }

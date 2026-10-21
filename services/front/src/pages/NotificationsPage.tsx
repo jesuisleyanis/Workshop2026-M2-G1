@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { Icon } from '../components/icons'
 import { EmptyState, ErrorState, LoadingState } from '../components/ui'
@@ -13,7 +13,12 @@ import type { AppNotification } from '../types/api'
 /** D13 — Notifications : groupées par jour, lue / non lue, clic = lue, « Tout marquer comme lu ». */
 export function NotificationsPage() {
   const all = useNotifications(false)
-  const { unreadNotifications } = useBankData()
+  const { unreadCount } = useBankData()
+  // Le sondage du badge (30 s) rafraîchit aussi la liste affichée : un nouveau compteur = recharger.
+  const { reload: reloadAll } = all
+  useEffect(() => {
+    if (unreadCount.data !== null) reloadAll()
+  }, [unreadCount.data, reloadAll])
   const { toast } = useShell()
   // Réponses serveur après un marquage, valables pour CE chargement : un rechargement l'emporte.
   const [read, setRead] = useState<{ data: AppNotification[] | null; map: Record<string, AppNotification> }>({ data: null, map: {} })
@@ -33,7 +38,7 @@ export function NotificationsPage() {
     if (n.readAt) return
     try {
       keep(await api.markNotificationRead(n.id))
-      unreadNotifications.reload()
+      unreadCount.reload()
     } catch (e) {
       toast(userMessage(e))
     }
@@ -43,7 +48,7 @@ export function NotificationsPage() {
     try {
       await api.markAllNotificationsRead()
       all.reload()
-      unreadNotifications.reload()
+      unreadCount.reload()
     } catch (e) {
       toast(userMessage(e))
     } finally {
