@@ -1,5 +1,5 @@
 import { ApiError } from './errors'
-import type { ScheduledTransfer, Account, Card, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
+import type { AppNotification, NotificationType, ScheduledTransfer, Account, Card, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Transaction, TransactionStatus } from '../types/api'
 import { isCategory } from '../lib/categories'
 
 type Obj = Record<string, unknown>
@@ -237,4 +237,35 @@ export function parseSchedule(v: unknown): ScheduledTransfer {
 
 export function parseSchedules(v: unknown): ScheduledTransfer[] {
   return list(v, 'scheduled_transfers', 'virements programmés').map(parseSchedule)
+}
+
+const NOTIFICATION_TYPES: readonly NotificationType[] = [
+  'transfer_sent',
+  'transfer_received',
+  'transfer_rejected',
+  'limit_80',
+  'card_frozen',
+  'card_unfrozen',
+  'scheduled_executed',
+  'scheduled_failed',
+]
+
+/** Type inconnu toléré (« other ») ; id, titre, corps et date restent exigés. */
+export function parseNotification(v: unknown): AppNotification {
+  const o = asObj(v, 'notification')
+  const type = NOTIFICATION_TYPES.find((t) => t === o.type) ?? 'other'
+  const body = o.body
+  if (typeof body !== 'string') throw new ApiError(0, 'invalid_response', 'Champ « body » manquant (notification).')
+  return {
+    id: str(o, 'id', 'notification'),
+    type,
+    title: str(o, 'title', 'notification'),
+    body,
+    createdAt: str(o, 'created_at', 'notification'),
+    readAt: optStr(o, 'read_at'),
+  }
+}
+
+export function parseNotifications(v: unknown): AppNotification[] {
+  return list(v, 'notifications', 'notifications').map(parseNotification)
 }

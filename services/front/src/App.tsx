@@ -7,6 +7,7 @@ import { HistoryPage } from './pages/HistoryPage'
 import { LimitsPage } from './pages/LimitsPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
+import { NotificationsPage } from './pages/NotificationsPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { RibPage } from './pages/RibPage'
 import { ScheduledPage } from './pages/ScheduledPage'
@@ -31,6 +32,7 @@ export function App() {
           <Route path="limits" element={<LimitsPage />} />
           <Route path="scheduled" element={<ScheduledPage />} />
           <Route path="profile" element={<ProfilePage />} />
+          <Route path="notifications" element={<NotificationsPage />} />
           {/* Anciennes routes (liens existants, scripts de démo). */}
           <Route path="transfer" element={<Navigate to="/send" replace />} />
           <Route path="accounts" element={<Navigate to="/rib" replace />} />

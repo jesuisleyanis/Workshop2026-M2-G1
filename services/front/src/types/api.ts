@@ -154,3 +154,25 @@ export interface NewSchedule {
   startOn: string
   endOn?: string | null
 }
+
+/** Notification in-app (#49, D13). Titre et corps rédigés côté serveur : affichés en texte brut. */
+export type NotificationType =
+  | 'transfer_sent'
+  | 'transfer_received'
+  | 'transfer_rejected'
+  | 'limit_80'
+  | 'card_frozen'
+  | 'card_unfrozen'
+  | 'scheduled_executed'
+  | 'scheduled_failed'
+  /** Type inconnu d'un serveur plus récent : affiché avec une icône neutre. */
+  | 'other'
+
+export interface AppNotification {
+  id: string
+  type: NotificationType
+  title: string
+  body: string
+  createdAt: string
+  readAt: string | null
+}

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createApiClient } from './client'
 import { createEndpoints } from './index'
 import { decodeJwtClaims, decodeJwtExp } from './tokenStore'
-import { parseAccounts, parseCard, parseLimits, parseLogin, parseSchedule, parseTransaction } from './parsers'
+import { parseAccounts, parseCard, parseLimits, parseLogin, parseNotification, parseSchedule, parseTransaction } from './parsers'
 import { fakeJwt, jsonResponse } from '../test/helpers'
 
 function endpointsWith(handler: (url: string, init?: RequestInit) => Response) {
@@ -126,6 +126,18 @@ describe('endpoints /api/v1', () => {
   it('parseSchedule : une exécution interrompue (pending) reste lisible', () => {
     const row = { id: 1, src_account: 1, dst_account: 2, amount_cents: 100, category: 'transfer', frequency: 'once', start_on: '2026-10-21', next_run_on: null, end_on: null, status: 'completed', last_run: { run_on: '2026-10-21', status: 'pending', error_code: null } }
     expect(parseSchedule(row).lastRun?.status).toBe('pending')
+  })
+
+  it('notifications : type inconnu => « other », id/titre/corps exigés, endpoints', async () => {
+    const row = { id: 7, type: 'card_frozen', title: 'Carte gelée', body: 'x', created_at: '2026-10-21T10:00:00Z', read_at: null }
+    expect(parseNotification(row)).toEqual({ id: '7', type: 'card_frozen', title: 'Carte gelée', body: 'x', createdAt: '2026-10-21T10:00:00Z', readAt: null })
+    expect(parseNotification({ ...row, type: 'nouveau' }).type).toBe('other')
+    expect(() => parseNotification({ ...row, title: undefined })).toThrow()
+    const { api, f } = endpointsWith((u) => (u.endsWith('read-all') ? jsonResponse({ updated: 3 }) : jsonResponse(u.includes('?') ? [row] : row)))
+    expect(await api.listNotifications(true)).toHaveLength(1)
+    await api.markNotificationRead('7')
+    expect(await api.markAllNotificationsRead()).toBe(3)
+    expect(f.mock.calls.map(([u]) => u)).toEqual(['/api/v1/notifications?unread=true', '/api/v1/notifications/7/read', '/api/v1/notifications/read-all'])
   })
 
   it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {

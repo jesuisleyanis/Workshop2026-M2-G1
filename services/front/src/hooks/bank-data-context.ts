@@ -1,6 +1,6 @@
 import { createContext } from 'react'
 import type { Resource } from './useResource'
-import type { Account, AccountLimit, Beneficiary, Transaction } from '../types/api'
+import type { Account, AccountLimit, AppNotification, Beneficiary, Transaction } from '../types/api'
 
 export interface BankData {
   accounts: Resource<Account[]>
@@ -10,6 +10,8 @@ export interface BankData {
   beneficiaries: Resource<Beneficiary[]>
   /** Plafonds mensuels (#46) ; rechargés après un virement, en cas d'échec et à la reprise du service. */
   limits: Resource<AccountLimit[]>
+  /** Notifications non lues (#49) : badge de la cloche, sondé toutes les 30 s et à la reprise. */
+  unreadNotifications: Resource<AppNotification[]>
   /** Libellés saisis localement (l'API n'en stocke pas), par id de transaction. */
   labels: Record<string, string>
   saveLabel: (txId: string, label: string) => void
