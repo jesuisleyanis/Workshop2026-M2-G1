@@ -74,6 +74,13 @@ def test_spending_stats_route_is_rate_limited_and_read_only():
     assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
 
 
+def test_transaction_detail_is_reachable_through_the_prefix_location():
+    # #45 : GET /api/v1/transactions/{id} passe par la location préfixe (pas de `=` exact).
+    conf = _directives(NGINX)
+    assert re.search(r"location /api/v1/transactions\s+\{\s*proxy_pass http://payment_api;", conf)
+    assert "location = /api/v1/transactions" not in conf
+
+
 def test_beneficiaries_route_is_rate_limited_per_ip():
     conf = _directives(NGINX)
     assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=beneficiaries_per_ip:\d+m\s+rate=\d+r/m;", conf)
