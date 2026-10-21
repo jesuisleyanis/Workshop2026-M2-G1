@@ -40,7 +40,8 @@ def test_api_upstreams_target_service_ports():
 def test_only_public_routes_are_proxied():
     locations = re.findall(r"location\s+(?:=\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
-                              "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
+                              "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/stats/spending",
+                              "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
 
