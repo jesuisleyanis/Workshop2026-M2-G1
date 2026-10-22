@@ -29,7 +29,7 @@ Phase 5  Dashboard        [#########.]  90%   dashboard branché sur le moteur r
 Phase 6  Cyber & attaques [########..]  85%   WAF, SOPS, durcissement, 4 scénarios OK
 Phase 7  Assistant RAG    [#########.]  90%   RAG livré (98 tests)
 Phase 8  Gouvernance      [########..]  80%   EBIOS/PCA/NIS2 rédigés, reliés à l'archi
-Phase 9  Consigne add. 1  [#####.....]  50%   L0+L1+L2 faits + L3 login (49+15+14 tests) ; reste habilitations + câblage LED/infra + gouvernance
+Phase 9  Consigne add. 1  [#######...]  75%   intégration de bout en bout codée+testée hors stack (auth 186, face-id 93, back-office 131, infra/WAF 54) ; reste recette PC Hôte (caméra, dlib, ESP, broker), e2e, NIS2/DORA, `make test`
 ```
 
 > Scaffold initial généré en J1 (structure pro, tests par composant, docs). Les services backend, le moteur de remédiation, le dashboard et les docs de gouvernance sont en cours de finalisation. Validation live (`make up`) et ré-entraînement ML sur vraies séries Prometheus restent à faire.
@@ -107,17 +107,19 @@ Phase 9  Consigne add. 1  [#####.....]  50%   L0+L1+L2 faits + L3 login (49+15+1
 
 | Lot | Objet | Composant(s) | Statut | Preuve |
 |---|---|---|---|---|
-| L0 | Delta contrat + ADR 0004/0005/0006 + modèle données (rôles, `face_enrollments`) | `docs/contracts.md`, `docs/adr`, `resilience_db` | ✅ | contrat §5 + migration `0002` ; tests verts |
-| L1 | Service `face-id` (IA légère, reconnaissance 1:1, enrôlement) | `services/face-id` | ✅ | service + **16 tests verts** (dans `make test` ; FastAPI/pydantic alignés sur auth, sinon `/metrics` empêche le démarrage) ; smoke modèle réel en recette |
-| L2 | Auth à étapes (identifiant→visage→mdp) + verrouillage 1 reprise/5 min **[critique]** | `services/auth` | ✅ | 13 tests (49 auth au total) ; LED fail-open + rôle dans le JWT |
-| L3 | Back-office React + capture webcam (`getUserMedia`, caméra PC Hôte) **[critique]** | `services/backoffice` | 🟨 | login à étapes + webcam + miroir LED livrés (14 tests) ; reste habilitations (L6) |
-| L4 | Firmware ESP8266 LED bicolore (CLion/PlatformIO, machine à états) | `iot/esp8266-led` | 🟨 | modules LED/Wi-Fi/HTTP/MQTT séparés, 3 routes HTTP ; build ESP8266 + 6 tests native verts ; recette matérielle |
-| L5 | Transport MQTT (broker Mosquitto durci + client auth fail-open) | `infra/compose`, `services/auth` | 🟨 | service Compose profil `iot` + ACL + mots de passe tmpfs, smoke broker/auth→led réussi ; client MQTT de `auth` à câbler |
-| L6 | Habilitations (rôles + enrôlement/révocation visage) | `services/{auth,face-id,backoffice}` | ⬜ | backlog L6 |
-| L7 | Infra & observabilité (compose, Prometheus, SOPS, durcissement) | `infra/*`, `security/sops` | ⬜ | backlog L7 |
-| L8 | Sécurité & RGPD (biométrie, surface MQTT/caméra, pas de bypass) | `security/*`, `services/face-id` | ⬜ | backlog L8 |
-| L9 | Gouvernance (EBIOS biométrie, PCA/PRA break-glass, NIS2/DORA accès) | `docs/{ebios-rm,pca-pra,nis2-dora}.md` | ⬜ | backlog L9 |
-| L10 | Recette & e2e (flux complet + **ZTR inchangé** + checklist matériel) | `tests/e2e`, `docs/` | ⬜ | backlog L10 |
+| L0 | Delta contrat + ADR 0004/0005/0006/**0007** + modèle données (rôles, `face_enrollments`, photos chiffrées) | `docs/contracts.md`, `docs/adr`, `resilience_db` | ✅ | contrat §5 v2 (§5.1-5.6) + migrations `0002`/`0009` (ex-`0003`, renumérotée à la fusion avec `main`) ; `resilience_db` 10 + `resilience_common` 5 tests verts |
+| L1 | Service `face-id` v2 (modèle équipe dlib, 3 poses, photos chiffrées AES-256-GCM) | `services/face-id` | 🟨 | **94 tests verts** ; reste le `docker build` de dlib et le smoke du modèle réel (recette) |
+| L2 | Auth à étapes (identifiant→visage→mdp) : poses aléatoires, refroidissements 30 s / 3 s, verrouillage 5 min **[critique]** | `services/auth` | ✅ | **197 tests auth verts** |
+| L3 | Back-office React : login v2, `FaceScanner`, habilitations, assistant « Nouvel agent », initialisation **[critique]** | `services/backoffice` | 🟨 | **134 tests Vitest** ; reste caméra réelle + calibrage des marges de capture (recette) |
+| L4 | Firmware ESP8266 LED bicolore (CLion/PlatformIO, machine à états) | `iot/esp8266-led` | 🟨 | machine à états ; modules LED/Wi-Fi/HTTP/MQTT séparés, 3 routes HTTP (contrat §5.3) ; build ESP8266 + 6 tests native verts ; recette matérielle |
+| L5 | Transport MQTT (broker Mosquitto durci + `MqttLedNotifier` fail-open + `GET /auth/device`) | `infra/compose`, `services/auth` | 🟨 | broker de l'équipe : profil `iot` (`make up-iot`), ACL + mots de passe en tmpfs `/run/mosquitto`, smoke broker/auth→led réussi ; ACL `auth` étendue à la lecture de `status` (jumeau LED) ; 30 tests MQTT + tests infra ; reste broker live avec l'auth v2 + ESP (recette) |
+| L6 | Habilitations (rôles, API admin, enrôlement/révocation, garde `last_admin`, bootstrap du premier admin) | `services/{auth,face-id,backoffice}` | ✅ | tests auth (`test_admin.py`) + Vitest |
+| L7 | Infra & observabilité (compose, listener hôte WAF 9443, SOPS, scrape `face-id`) | `infra/*`, `security/*` | 🟨 | 57 tests infra + WAF ; L7-4 ✅ (`make test` agrège face-id et back-office, `1c57b64`) ; reste `compose up`, `nginx -t`, Loki (recette) |
+| L8 | Sécurité & RGPD (biométrie chiffrée, amendement de « jamais d'image », surface MQTT/caméra) | `security/*`, `services/face-id` | 🟨 | L8-2 ✅ (ADR 0007, chiffrement testé) ; **amendement à valider par l'équipe (Yanis)** ; reste revue sécurité du flux (L8-1), `audit.sh` (L8-3) |
+| L9 | Gouvernance (EBIOS biométrie, PCA/PRA break-glass, NIS2/DORA accès) | `docs/{ebios-rm,pca-pra,nis2-dora}.md` | 🟨 | EBIOS (annexe) + PCA/PRA §5.7 rédigés ; reste NIS2/DORA (L9-3) |
+| L10 | Recette & e2e (flux complet + **ZTR inchangé** + checklist matériel) | `tests/e2e`, `docs/` | ⬜ | backlog L10 : **aucune recette n'a été faite** (caméra, dlib, ESP, broker) |
+
+> **Intégration de bout en bout (2026-10-20, branche `feat/face-auth-integration`) :** modèle de l'équipe, vivacité par poses aléatoires, photos et gabarits chiffrés, habilitations, LED MQTT réelle, back-office accessible via le listener hôte `127.0.0.1:9443`. Preuves et commits : [`docs/consigne-additionnelle-1-roadmap.md`](docs/consigne-additionnelle-1-roadmap.md) § « Intégration de bout en bout ». Décisions : [ADR 0007](docs/adr/0007-acces-hote-vivacite-poses-photos-chiffrees.md).
 
 > **Garde-fou résilience (D4) :** le facteur visage/LED ne s'applique qu'à l'**accès privilégié** du back-office. La boucle Zero-Touch Recovery (`verify_tx`, détection, remédiation) et le Clip Chrono **ne dépendent jamais** de la caméra/du visage/du broker/de l'ESP — pas d'auto-DoS de la démo notée.
 
@@ -152,9 +154,10 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | J1 | SOC = règles Loki/Grafana (pas Wazuh par défaut) | acté |
 | J1 | Remédiation via docker-socket-proxy, jamais le socket brut | acté |
 | J1 | Attaque depuis PC physique pour la démo (profil `attack` = dev) | acté |
-| Consigne 1 | Back-office = app dédiée `services/backoffice` (ADR 0004) | cadré |
+| Consigne 1 | Back-office = app dédiée `services/backoffice` (ADR 0004) | acté |
 | Consigne 1 | Caméra USB lue dans le navigateur de l'hôte, pas montée dans Docker (ADR 0005) | cadré |
-| Consigne 1 | LED pilotée via MQTT, auth publie des états, le firmware rend les motifs ; facteur visage limité à l'accès privilégié (ADR 0006) | cadré |
+| Consigne 1 | LED pilotée via MQTT, auth publie des états, le firmware rend les motifs ; facteur visage limité à l'accès privilégié (ADR 0006) | acté |
+| Consigne 1 | Listener WAF `127.0.0.1:9443` réservé à l'hôte (back-office + `/auth/*` + `/admin/*`), vivacité par poses aléatoires, gabarits + photos chiffrés AES-256-GCM — **amende « jamais d'image stockée »** (ADR 0007) | acté, **à valider par l'équipe (Yanis)** |
 
 ## Points d'intégration
 

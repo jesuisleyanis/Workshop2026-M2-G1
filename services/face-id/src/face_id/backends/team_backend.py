@@ -1,44 +1,58 @@
-"""Point de branchement du modèle de reconnaissance de l'équipe (consigne additionnelle 1).
+"""Backend `team` : modèle de l'équipe (notebook) basé sur `face_recognition` (dlib).
 
-Le service face-id dépend de l'interface `Recognizer` (face_id/recognizer.py), jamais d'un
-modèle concret. Pour brancher le modèle d'un coéquipier, il suffit d'implémenter `embed()`
-ci-dessous — tout le reste (vérification 1:1, enrôlement, RGPD, API, LED) est déjà en place.
-
-Mode d'emploi complet : services/face-id/INTEGRATION-ML.md. Activation : RECOGNIZER_BACKEND=team.
+Activation : RECOGNIZER_BACKEND=team. Les dépendances (`face_recognition`, `dlib`, numpy) sont
+importées paresseusement dans la classe : le paquet reste importable sans elles (tests, CI).
+Mode d'emploi : services/face-id/INTEGRATION-ML.md.
 """
 
 from __future__ import annotations
 
-from face_id.recognizer import NoFaceError
+import os
+from io import BytesIO
+
+from face_id.poses import pose_from_rotation, rotation_from_points
+from face_id.recognizer import FaceSample, MultipleFacesError, NoFaceError
 
 
-class TeamRecognizer:  # pragma: no cover - rempli par l'équipe, validé en recette
-    """Adaptateur du modèle de l'équipe vers l'interface `Recognizer`.
+class TeamRecognizer:  # pragma: no cover - validé en recette, dlib non installé pour les tests
+    """Gabarits 128-d dlib, distance euclidienne, pose déduite des landmarks du visage."""
 
-    Contrat à respecter (voir INTEGRATION-ML.md) :
-      - `model_version` : identifie la version du modèle (pour la garde de compatibilité).
-      - `threshold`     : seuil de similarité cosinus au-dessus duquel c'est une correspondance.
-      - `embed(image)`  : octets d'une image -> vecteur de flottants (descripteur du visage).
-                          Même visage -> vecteurs proches (cosinus élevé) ; visages différents
-                          -> vecteurs éloignés. Lève NoFaceError si aucun visage exploitable.
-                          RGPD : c'est CE vecteur qui est stocké, jamais l'image.
-    """
+    model_version = "team-dlib-face_recognition-1.3.0"
 
-    #: À remplacer par la vraie version du modèle de l'équipe.
-    model_version = "team-model-TODO"
-
-    def __init__(self, threshold: float = 0.5) -> None:
+    def __init__(self, threshold: float = 0.6, upsample: int | None = None) -> None:
         self.threshold = threshold
-        # TODO(équipe) : charger le modèle ici (une seule fois).
-        #   ex. : self._model = charger_le_modele_de_lequipe()
+        # Levier de recette (latence) : nombre de suréchantillonnages du détecteur HOG de dlib.
+        # 1 = défaut dlib ; 0 suffit pour un visage proche sur une capture 640 px et divise le
+        # temps de détection (~x4). Variable FACE_DETECT_UPSAMPLE ; ne change pas les gabarits.
+        if upsample is None:
+            upsample = int(os.getenv("FACE_DETECT_UPSAMPLE", "1"))
+        self.upsample = max(0, upsample)
+        import face_recognition  # échoue tôt si la dépendance manque
 
-    def embed(self, image: bytes) -> list[float]:
-        if not image:
-            raise NoFaceError("image vide")
-        # TODO(équipe) : décoder l'image, détecter le visage, renvoyer le descripteur.
-        #   visage = self._model.detecter(image)
-        #   if visage is None: raise NoFaceError("aucun visage détecté")
-        #   return [float(x) for x in self._model.embedding(visage)]
-        raise NotImplementedError(
-            "Brancher le modèle de l'équipe ici — voir services/face-id/INTEGRATION-ML.md"
-        )
+        self._fr = face_recognition
+
+    def analyze(self, image: bytes, *, precise: bool = False) -> FaceSample:
+        fr = self._fr
+        try:
+            img = fr.load_image_file(BytesIO(image))
+        except Exception as exc:  # image illisible = pas de visage exploitable
+            raise NoFaceError("image illisible") from exc
+        locations = fr.face_locations(img, number_of_times_to_upsample=self.upsample)
+        if not locations:
+            raise NoFaceError("aucun visage détecté")
+        if len(locations) > 1:
+            raise MultipleFacesError(f"{len(locations)} visages détectés")
+        pose = None
+        landmarks = fr.face_landmarks(img, locations)
+        if landmarks:
+            chin = landmarks[0]["chin"]
+            nose_tip = landmarks[0]["nose_tip"]
+            rotation = rotation_from_points(chin[0][0], chin[-1][0], [p[0] for p in nose_tip])
+            pose = pose_from_rotation(rotation)
+        encodings = fr.face_encodings(img, [locations[0]], num_jitters=5 if precise else 1)
+        return FaceSample([float(x) for x in encodings[0]], pose)
+
+    def distance(self, a: list[float], b: list[float]) -> float:
+        import numpy as np
+
+        return float(self._fr.face_distance(np.array([a]), np.array(b))[0])

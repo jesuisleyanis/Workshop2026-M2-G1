@@ -1,51 +1,60 @@
 # Brancher le modèle de reconnaissance de l'équipe sur `face-id`
 
-> Le service `face-id` est déjà complet (vérification 1:1, enrôlement, RGPD, API, LED, 15 tests).
-> Le modèle de reconnaissance est **isolé derrière l'interface `Recognizer`** : y brancher le
-> modèle d'un coéquipier ne touche **aucun** autre composant. Objectif : handoff en ~15 min.
+> Le service `face-id` est complet (enrôlement 3 poses, vérification de séquence, chiffrement au
+> repos, API, tests). Le modèle de reconnaissance est **isolé derrière l'interface `Recognizer`** :
+> le modèle de l'équipe (Valentin, `face_recognition` / dlib) y est branché par le backend `team`
+> (`src/face_id/backends/team_backend.py`) sans toucher aucun autre composant.
 
-## Ce dont on a besoin du modèle (le contrat)
+## Le contrat du modèle (v2)
 
-Une classe qui expose **trois choses** (voir le gabarit `src/face_id/backends/team_backend.py`) :
+Une classe qui expose **quatre choses** :
 
 | Membre | Rôle |
 |---|---|
-| `model_version: str` | identifie la version du modèle (garde de compatibilité des embeddings) |
-| `threshold: float` | seuil de **similarité cosinus** au-dessus duquel deux visages sont « la même personne » |
-| `embed(image: bytes) -> list[float]` | octets d'une image → **vecteur descripteur** du visage. Même personne → vecteurs proches (cosinus élevé) ; personnes différentes → vecteurs éloignés. Lève `NoFaceError` si aucun visage exploitable. |
+| `model_version: str` | identifie la version du modèle (garde de compatibilité des gabarits : un changement impose un réenrôlement) |
+| `threshold: float` | **distance maximale** (plus petit = plus proche) en deçà de laquelle deux visages sont « la même personne ». `team` : 0,6 |
+| `analyze(image: bytes, *, precise: bool = False) -> FaceSample` | octets d'image → `FaceSample(embedding, pose)`. `embedding` = vecteur descripteur du visage ; `pose` ∈ `face` / `gauche` / `droite` ou `None` si indéterminée (zone morte). Lève `NoFaceError` (0 visage ou image illisible) ou `MultipleFacesError` (> 1 visage). `precise=True` (enrôlement) autorise un calcul plus coûteux (plus de *jitters*). |
+| `distance(a, b) -> float` | distance entre deux embeddings (euclidienne pour dlib 128-d) |
 
-**C'est tout.** `face-id` se charge du reste : il stocke le vecteur (jamais l'image — RGPD), compare en cosinus, applique le seuil, renvoie `match`/`score`, et gère enrôlement/révocation/API/LED.
+> **RGPD :** on a besoin d'un **embedding par image**, pas d'une fonction « compare(imgA, imgB) » :
+> seuls des gabarits (chiffrés) et des vignettes (chiffrées) sont conservés, jamais les photos pleine résolution.
 
-> **Important (RGPD) :** on a besoin d'un **embedding par image** (un vecteur), pas d'une fonction
-> « compare(imgA, imgB) ». C'est ce qui permet de ne stocker qu'un vecteur à l'enrôlement et de
-> ne **jamais** conserver la photo. Si le modèle de l'équipe ne sait faire que du pairwise compare
-> ou renvoie un label de classe, **dis-le-moi** : on adapte l'interface (et on en discute l'impact RGPD).
+### La pose
 
-## Deux façons de brancher
+La pose est déduite des landmarks du visage (cf. `src/face_id/poses.py`, portée du notebook) :
+`rotation = (x moyen du nez − x mâchoire gauche) / largeur mâchoire − 0,5`, puis
+`|rot| ≤ 0,10` → `face`, `rot ≥ 0,15` → `gauche`, `rot ≤ −0,15` → `droite`, sinon `None`.
+Un modèle qui fournit déjà la pose peut la renvoyer directement dans `FaceSample.pose`.
 
-### A. En Python, dans le process (le plus simple si le modèle est une lib Python)
-1. Remplir `embed()` et `model_version` dans `src/face_id/backends/team_backend.py` (TODO balisés).
-2. Ajouter les dépendances du modèle dans `requirements.txt`.
-3. Lancer avec `RECOGNIZER_BACKEND=team` (et éventuellement `FACE_MATCH_THRESHOLD=…`).
+## Backend `team` (déjà branché)
 
-### B. En side-car HTTP (si le modèle n'est pas importable en Python / autre techno)
-Le modèle tourne comme un petit service ; `face-id` l'appelle. On écrit alors un
-`HttpTeamRecognizer` (même interface, `embed` fait un POST). Dis-moi si c'est ce cas, je le fournis.
+`TeamRecognizer` (dlib 128-d via `face_recognition`) : `face_locations` → un seul visage exigé,
+`face_landmarks` → pose, `face_encodings(num_jitters=5 si precise)` → embedding, `face_distance` →
+distance. Dépendances dans `requirements-team.txt` (compilation de dlib : `cmake`, `build-essential`) ;
+l'**image Docker** `services/face-id/Dockerfile` les installe et fixe `RECOGNIZER_BACKEND=team`.
+
+Pour brancher **un autre modèle**, créer `backends/<nom>_backend.py` avec les quatre membres
+ci-dessus, l'enregistrer dans `build_recognizer` (`recognizer.py`) et lancer avec `RECOGNIZER_BACKEND=<nom>`.
+Si le modèle n'est pas importable en Python, un side-car HTTP (`HttpTeamRecognizer`, même interface,
+`analyze` fait un POST) est possible.
 
 ## Vérifier que le branchement est bon
 
 ```bash
-# 1) Contrat d'interface (structure, déterminisme, NoFaceError) :
-PYTHONPATH=services/face-id/src python -m pytest services/face-id/tests/test_recognizer_contract.py -q
+# 1) Contrat d'interface (structure, déterminisme, erreurs) — tourne sur le stub :
+cd services/face-id && python -m pytest tests/test_recognizer_contract.py -q
 
-# 2) Qualité réelle (recette, avec de vraies photos) :
-#    2 photos de la MÊME personne  -> match (cosinus >= threshold)
-#    2 photos de personnes DIFFÉRENTES -> no-match (cosinus < threshold)
-#    -> calibrer threshold sur ces mesures.
+# 2) Qualité réelle (recette, avec de vraies photos, backend team) :
+#    3 poses de la MÊME personne  -> enrôlement 200 puis verify match
+#    3 poses d'une personne DIFFÉRENTE -> verify match:false (face_mismatch dans les logs)
+#    tête tournée du mauvais côté -> 422 wrong_pose (enrôlement) / match:false (verify)
+#    -> calibrer FACE_MATCH_THRESHOLD sur ces mesures. Recette pas à pas : README.md.
+#    Latence : mesurer verify (3 images 640 px) ; si elle approche BACKOFFICE_FACE_TIMEOUT (8 s
+#    dans le compose), poser FACE_DETECT_UPSAMPLE=0 (détecteur dlib sans suréchantillonnage).
 ```
 
 ## Ce que ça ne change pas
 
-Rien côté `auth` (étapes), back-office, LED, contrats : `face-id /verify` garde la même réponse
-`{match, score, threshold, model_version}`. Le reste de la chaîne tourne déjà aujourd'hui avec le
-backend `stub` (déterministe) ; on bascule sur `team` quand le modèle est prêt.
+Rien côté `auth` (étapes), back-office, LED, contrats : `face-id /verify` répond `{match, model_version}`
+quel que soit le modèle. Le reste de la chaîne tourne avec le backend `stub` (déterministe) ;
+on bascule sur `team` quand l'image dlib est construite sur le PC Hôte.

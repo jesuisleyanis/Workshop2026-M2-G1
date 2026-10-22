@@ -21,15 +21,17 @@ from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from auth_service.admin import add_admin_api
 from auth_service.backoffice import (
     FaceVerifier,
-    HttpFaceVerifier,
     LedNotifier,
     LogLedNotifier,
     add_backoffice_auth,
 )
-from auth_service.challenge import ChallengeStore, LockoutStore
+from auth_service.challenge import ChallengeStore, CooldownStore, LockoutStore
 from auth_service.config import SERVICE_NAME, Settings
+from auth_service.face_client import FaceIdClient
+from auth_service.led_mqtt import MqttLedNotifier
 from auth_service.observability import (
     ApiError,
     RequestContextMiddleware,
@@ -62,6 +64,7 @@ def create_app(
     settings: Settings | None = None,
     engine: Engine | None = None,
     *,
+    face_client: FaceIdClient | None = None,
     face_verifier: FaceVerifier | None = None,
     led_notifier: LedNotifier | None = None,
     clock=None,
@@ -89,11 +92,44 @@ def create_app(
         key_func=lambda request: client_ip_var.get() or "unknown", storage_uri="memory://"
     )
 
+    if led_notifier is None:
+        # MQTT_HOST vide (dev/tests) : la LED est simplement journalisée.
+        led_notifier = (
+            MqttLedNotifier(
+                settings.mqtt_host,
+                settings.mqtt_port,
+                settings.mqtt_username,
+                settings.mqtt_password,
+                log,
+            )
+            if settings.mqtt_host
+            else LogLedNotifier(log)
+        )
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if settings.run_migrations:
             upgrade_with_retry(engine, log)
-        yield
+        # connect_async + loop_start : non bloquant, la reconnexion au broker est automatique.
+        # Fail-open : une panne au démarrage du notifieur LED ne doit jamais empêcher auth (et
+        # donc le WAF qui en dépend) de démarrer — la LED n'est qu'un témoin.
+        start = getattr(led_notifier, "start", None)
+        if callable(start):
+            try:
+                start()
+            except Exception as exc:  # noqa: BLE001
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "led_publish_failed",
+                    f"LED notifier start failed ({type(exc).__name__}): LED disabled, auth continues",
+                )
+        try:
+            yield
+        finally:
+            stop = getattr(led_notifier, "stop", None)
+            if callable(stop):
+                stop()
 
     docs = "/docs" if settings.enable_docs else None
     app = FastAPI(
@@ -123,7 +159,7 @@ def create_app(
     # ---------------------------------------------------------------- erreurs
     @app.exception_handler(ApiError)
     async def _api_error(_req: Request, exc: ApiError):
-        return error_response(exc.status, exc.code, exc.message, exc.headers)
+        return error_response(exc.status, exc.code, exc.message, exc.headers, exc.details)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(_req: Request, exc: StarletteHTTPException):
@@ -322,21 +358,35 @@ def create_app(
         failure_window_seconds=settings.backoffice_failure_window,
         **store_kwargs,
     )
+    cooldowns = CooldownStore(**store_kwargs)
+    # Un seul client face-id : vérification (login) ET administration des gabarits (T5).
+    face_client = face_client or FaceIdClient(
+        settings.face_id_url, settings.face_internal_token, settings.face_timeout_seconds
+    )
     add_backoffice_auth(
         app,
         settings=settings,
         session_factory=session_factory,
         log=log,
-        face_verifier=face_verifier
-        or HttpFaceVerifier(
-            settings.face_id_url, settings.face_internal_token, settings.face_timeout_seconds
-        ),
-        led=led_notifier or LogLedNotifier(log),
+        face_verifier=face_verifier or face_client,
+        led=led_notifier,
         challenges=challenges,
         lockouts=lockouts,
+        cooldowns=cooldowns,
+        limiter=limiter,
+    )
+    add_admin_api(
+        app,
+        settings=settings,
+        session_factory=session_factory,
+        log=log,
+        face_client=face_client,
         limiter=limiter,
     )
     app.state.challenges = challenges
     app.state.lockouts = lockouts
+    app.state.cooldowns = cooldowns
+    app.state.face_client = face_client
+    app.state.led = led_notifier
 
     return app

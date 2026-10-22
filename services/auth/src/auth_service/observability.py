@@ -131,14 +131,28 @@ def log_event(
 class ApiError(Exception):
     """Erreur métier rendue au format REST du contrat."""
 
-    def __init__(self, status: int, code: str, message: str, headers: dict | None = None) -> None:
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        headers: dict | None = None,
+        details: list | None = None,
+    ) -> None:
         self.status, self.code, self.message, self.headers = status, code, message, headers
+        self.details = details  # relayé tel quel dans le corps (ex. enrollment_rejected)
         super().__init__(message)
 
 
 def error_response(
-    status: int, code: str, message: str, headers: dict | None = None
+    status: int,
+    code: str,
+    message: str,
+    headers: dict | None = None,
+    details: list | None = None,
 ) -> JSONResponse:
-    """Corps d'erreur du contrat : { "error": { code, message, request_id } }."""
+    """Corps d'erreur du contrat : { "error": { code, message, request_id[, details] } }."""
     body = {"error": {"code": code, "message": message, "request_id": request_id_var.get()}}
+    if details is not None:
+        body["error"]["details"] = details
     return JSONResponse(body, status_code=status, headers=headers)

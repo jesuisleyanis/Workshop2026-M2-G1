@@ -9,7 +9,7 @@
 
 ## Rôle
 
-Reverse-proxy unique en frontal de la plateforme. **Seul composant exposé** sur le hotspot (80/443, TLS auto-signé). Protège le front et les API métier via ModSecurity + le jeu de règles OWASP CRS, et porte la **liste de blocage IP** pilotée par la remédiation.
+Reverse-proxy unique en frontal de la plateforme. **Seul composant HTTP exposé** sur le hotspot (80/443, TLS auto-signé), plus le listener hôte-seulement `127.0.0.1:9443` du back-office. Protège le front et les API métier via ModSecurity + le jeu de règles OWASP CRS, et porte la **liste de blocage IP** pilotée par la remédiation.
 
 ## Arborescence
 
@@ -28,11 +28,14 @@ security/waf/
 
 | Point | Choix |
 |---|---|
-| Base | `owasp/modsecurity-crs:4.25.2-nginx-alpine-lts` (ModSecurity v3 + OWASP CRS préinstallés, configurés par l'entrypoint de l'image : `BLOCKING_PARANOIA=1`, `ANOMALY_INBOUND=5`, `ANOMALY_OUTBOUND=4`, `ALLOWED_METHODS="GET HEAD POST OPTIONS DELETE PATCH"` — DELETE pour les bénéficiaires #43, PATCH pour les réglages de carte #47, PATCH/DELETE d'un virement programmé #48, refusés en 405 par `$method_denied` sur tout autre chemin ; PUT refusé) |
-| Utilisateur | **non-root** (`nginx`, image *unprivileged*) → écoute **8080 / 8443** ; Compose publie `80:8080` et `443:8443` (seul service avec `ports:`) |
+| Base | `owasp/modsecurity-crs:4.25.2-nginx-alpine-lts` (ModSecurity v3 + OWASP CRS préinstallés, configurés par l'entrypoint de l'image : `BLOCKING_PARANOIA=1`, `ANOMALY_INBOUND=5`, `ANOMALY_OUTBOUND=4`, `ALLOWED_METHODS="GET HEAD POST OPTIONS DELETE PATCH"` par défaut — DELETE pour les bénéficiaires #43, PATCH pour les réglages de carte #47, PATCH/DELETE d'un virement programmé #48, refusés en 405 par `$method_denied` sur tout autre chemin du serveur public) |
+| Utilisateur | **non-root** (`nginx`, image *unprivileged*) → écoute **8080 / 8443 / 9443** ; Compose publie `80:8080`, `443:8443` et `127.0.0.1:9443:9443` (listener hôte, loopback) ; seul avec mosquitto (MQTT hotspot, profil `iot`) à avoir des `ports:` |
+| Limites de corps ModSecurity | **Global (serveur public 80/443)** : défaut de l'image CRS, `MODSEC_REQ_BODY_NOFILES_LIMIT=131072` (128 Kio hors fichiers, explicite dans le Compose) ; au-delà, ModSecurity rejette en **400** (règle 200002, « Request body excluding files is bigger than the maximum expected ») avant tout upstream. **Listener hôte 9443 seulement** : `modsecurity_rules 'SecRequestBodyLimit 4194304'` et `'SecRequestBodyNoFilesLimit 4194304'` dans son bloc `server`, alignés sur `client_max_body_size 4m` (captures faciales base64). Vérifié en recette (`nginx -t` + POST ~300 Kio : 400 du WAF sur `https://localhost/api/v1/login`, 422 d'`auth` sur `https://localhost:9443/api/v1/auth/face`) |
+| Méthodes HTTP (CRS 911100) | Le Compose surcharge `ALLOWED_METHODS` = `GET HEAD POST OPTIONS PUT PATCH DELETE` : sans `PUT`, le CRS bloquerait en 403 l'API d'administration du back-office (`PATCH` rôle, `PUT`/`DELETE` visage) sur 9443. Le serveur public refuse toujours `PUT` partout (405 via `$method_denied`, map non appliquée au listener 9443) et ne proxifie que ses routes nommées. Tests : `test_crs_allowed_methods_cover_every_backoffice_api_method` (scanne `services/backoffice/src/api`), `test_delete_and_patch_are_denied_everywhere_except_their_one_route` |
+| Listener hôte 9443 | back-office (`backoffice:8080`) + `/api/v1/auth/` et `/api/v1/admin/` → `auth`, `client_max_body_size 4m`, HSTS ; ces deux préfixes répondent **404** sur le serveur public 80/443, sauf `= /api/v1/auth/step-up` (ré-authentification du front avant un gros virement, #51) ; `/api/v1/login` et `/register` restent publics |
 | TLS | certificat **auto-signé généré au build** (`openssl req -x509`, ECDSA P-256, SAN `localhost`/`waf`/`192.168.137.1`) dans `/etc/nginx/conf/` — jamais commité ; les clients de labo utilisent `-k` / contexte non vérifié |
 | Config | `nginx.conf` du projet copié tel quel (les templates `nginx.conf`/`conf.d` de l'image sont retirés) ; les templates `modsecurity.d` de l'image restent et rendent `/etc/modsecurity.d/setup.conf` au démarrage |
-| Upstreams | `front:8080` (le conteneur front est lui aussi non-root sur 8080), `payment-api:8001`, `auth:8002` |
+| Upstreams | `front:8080` (le conteneur front est lui aussi non-root sur 8080), `payment-api:8001`, `auth:8002`, `backoffice:8080` (listener 9443) |
 | Sonde | `GET /healthz` servi par le WAF (sans upstream) ; healthcheck image + Compose `curl -fsk https://127.0.0.1:8443/healthz` |
 | Logs | access log JSON `json_waf` sur **stdout** → Promtail/Loki ; audit ModSecurity (JSON Serial, blocages 4xx/5xx) dans `/var/log/modsec/audit.json` (volume `waf-logs`) → `waf-exporter` |
 

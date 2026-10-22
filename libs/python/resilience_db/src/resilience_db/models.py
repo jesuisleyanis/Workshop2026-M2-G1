@@ -106,8 +106,10 @@ class Account(Base):
 class FaceEnrollment(Base):
     """Enrôlement biométrique d'un utilisateur (consigne additionnelle 1).
 
-    RGPD : on ne stocke QUE l'embedding (vecteur), jamais l'image capturée. La
-    reconnaissance est 1:1 (identifiant ↔ visage). Table sur le réseau `data` interne.
+    RGPD : jamais l'image en clair. `embedding` contient un blob scellé (AES-GCM) des gabarits
+    par pose ; `photos` (nullable) un blob scellé des photos d'enrôlement ; `poses` la liste des
+    poses enrôlées (« face,gauche,droite »). La reconnaissance est 1:1 (identifiant ↔ visage).
+    Table sur le réseau `data` interne.
     """
 
     __tablename__ = "face_enrollments"
@@ -117,6 +119,10 @@ class FaceEnrollment(Base):
         ForeignKey("users.id"), nullable=False, unique=True, index=True
     )
     embedding: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    photos: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    poses: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="face", server_default="face"
+    )
     model_version: Mapped[str] = mapped_column(String(64), nullable=False)
     enrolled_by: Mapped[str] = mapped_column(String(64), nullable=False)
     enrolled_at: Mapped[datetime] = mapped_column(

@@ -37,15 +37,138 @@ def test_api_upstreams_target_service_ports():
     assert re.search(r"upstream\s+auth_api\s*\{\s*server\s+auth:8002;", conf)
 
 
+def _servers(text: str) -> list[str]:
+    """Découpe les blocs `server { ... }` (accolades équilibrées) du nginx.conf, commentaires retirés."""
+    conf = _directives(text)
+    blocks, i = [], 0
+    while (i := conf.find("server {", i)) != -1:
+        depth, j = 0, conf.index("{", i)
+        start = j
+        while True:
+            depth += conf[j] == "{"
+            depth -= conf[j] == "}"
+            j += 1
+            if depth == 0:
+                break
+        blocks.append(conf[start:j])
+        i = j
+    return blocks
+
+
+def _locations(block: str) -> list[str]:
+    return re.findall(r"location\s+((?:\^~\s+|=\s+|~\s+)?\S+)\s*\{", block)
+
+
+PUBLIC_SERVER = next(b for b in _servers(NGINX) if "listen 8443" in b)
+HOST_SERVER = next((b for b in _servers(NGINX) if "listen 9443" in b), "")
+
+
 def test_only_public_routes_are_proxied():
-    locations = re.findall(r"location\s+(?:[=~]\s*)?(\S+)\s*\{", _directives(NGINX))
-    assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
-                              "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/stats/spending",
-                              "^/api/v1/transactions/[0-9]+$", "/api/v1/limits", "/api/v1/cards", "/api/v1/scheduled-transfers",
-                              "/api/v1/notifications", "/api/v1/statements",
-                              "/api/v1/login", "/api/v1/register", "/api/v1/auth/"}
+    assert set(_locations(PUBLIC_SERVER)) == {
+        "= /healthz", "/", "/api/v1/accounts", "/api/v1/transactions", "~ ^/api/v1/transactions/[0-9]+$",
+        "= /api/v1/status", "/api/v1/beneficiaries", "= /api/v1/stats/spending", "= /api/v1/limits",
+        "/api/v1/cards", "/api/v1/scheduled-transfers", "/api/v1/notifications", "= /api/v1/statements",
+        "/api/v1/login", "/api/v1/register", "= /api/v1/auth/step-up",
+        "^~ /api/v1/auth/", "^~ /api/v1/admin/",
+    }
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
+
+
+def test_public_server_returns_404_on_host_only_prefixes():
+    for prefix in ("/api/v1/auth/", "/api/v1/admin/"):
+        assert re.search(rf"location \^~ {re.escape(prefix)}\s*\{{\s*return 404;\s*\}}", PUBLIC_SERVER), prefix
+        assert "auth_api" not in re.search(rf"location \^~ {re.escape(prefix)}\s*\{{[^}}]*\}}", PUBLIC_SERVER).group(0)
+    # Seule route /api/v1/auth/ publique : la ré-authentification du front (#51), en correspondance exacte.
+    step_up = re.search(r"location = /api/v1/auth/step-up\s*\{[^}]*\}", PUBLIC_SERVER)
+    assert step_up and "proxy_pass http://auth_api;" in step_up.group(0)
+    assert not re.search(r"location /api/v1/(auth|admin)/", PUBLIC_SERVER), "aucun préfixe auth/admin proxifié en public"
+    # login / register restent publics.
+    assert re.search(r"location /api/v1/login\s*\{[^}]*proxy_pass http://auth_api", PUBLIC_SERVER)
+    assert re.search(r"location /api/v1/register\s*\{[^}]*proxy_pass http://auth_api", PUBLIC_SERVER)
+
+
+def test_backoffice_upstream_targets_backoffice_container():
+    assert re.search(r"upstream\s+backoffice_app\s*\{\s*server\s+backoffice:8080;", _directives(NGINX))
+
+
+def test_modsecurity_body_limits_match_host_client_max_body_size():
+    """Plafond ModSecurity relevé à 4 Mo UNIQUEMENT sur le listener hôte 9443 (captures faciales).
+
+    Le serveur public 80/443 garde le défaut de l'image CRS (128 Kio hors fichiers) : un corps JSON
+    plus gros y est rejeté par ModSecurity (règle 200002, 400) avant d'atteindre auth/payment-api.
+    Recette live : POST ~300 Kio sur https://localhost/api/v1/login -> 400 (WAF) ; même taille sur
+    https://localhost:9443/api/v1/auth/face -> réponse d'auth (422 de validation), pas du WAF.
+    """
+    yaml = pytest.importorskip("yaml")
+    env = yaml.safe_load(COMPOSE)["services"]["waf"]["environment"]
+    size = re.search(r"client_max_body_size\s+(\d+)m;", HOST_SERVER)
+    assert size, "le listener hôte doit déclarer client_max_body_size en Mo"
+    expected = int(size.group(1)) * 1024 * 1024
+    assert expected == 4194304
+    # Listener hôte : plafonds ModSecurity alignés sur client_max_body_size (directives du bloc server).
+    raised = dict(re.findall(r"modsecurity_rules\s+'(SecRequestBody(?:NoFiles)?Limit)\s+(\d+)';", HOST_SERVER))
+    assert {k: int(v) for k, v in raised.items()} == {
+        "SecRequestBodyLimit": expected, "SecRequestBodyNoFilesLimit": expected,
+    }
+    # Serveur public : aucun relèvement, défaut CRS 128 Kio explicite dans le Compose (global).
+    assert "modsecurity_rules" not in PUBLIC_SERVER
+    assert "client_max_body_size" not in PUBLIC_SERVER
+    assert int(env["MODSEC_REQ_BODY_NOFILES_LIMIT"]) == 131072
+    assert "MODSEC_REQ_BODY_LIMIT" not in env, "défaut de l'image (12,5 Mo avec fichiers) conservé"
+    assert "modsecurity_rules " not in _directives(NGINX).replace(HOST_SERVER, "")
+    # Aucun autre endroit ne surcharge ces limites (Dockerfile / entrypoint).
+    assert "MODSEC_REQ_BODY" not in DOCKERFILE
+    for script in (WAF / "docker-entrypoint.d").glob("*"):
+        assert "MODSEC_REQ_BODY" not in script.read_text(encoding="utf-8")
+
+
+def test_crs_allowed_methods_cover_every_backoffice_api_method():
+    """CRS 911100 bloque toute méthode hors `ALLOWED_METHODS` (défaut image : GET HEAD POST OPTIONS).
+
+    Le back-office appelle l'API d'administration en PATCH (rôle), PUT et DELETE (visage) : chaque
+    méthode utilisée par services/backoffice/src/api doit être admise, sinon 403 sur 9443.
+    """
+    yaml = pytest.importorskip("yaml")
+    env = yaml.safe_load(COMPOSE)["services"]["waf"]["environment"]
+    allowed = set(env["ALLOWED_METHODS"].split())
+    api_dir = ROOT / "services" / "backoffice" / "src" / "api"
+    used = {"GET"}  # défaut de http.ts (init.method ?? 'GET')
+    for src in api_dir.glob("*.ts"):
+        if src.name.endswith(".test.ts"):
+            continue
+        used |= set(re.findall(r"method:\s*'([A-Z]+)'", src.read_text(encoding="utf-8")))
+    assert {"POST", "PATCH", "PUT", "DELETE"} <= used, "le scan des clients API a échoué"
+    assert used <= allowed, f"méthodes bloquées par le CRS : {sorted(used - allowed)}"
+    assert {"HEAD", "OPTIONS"} <= allowed  # défaut CRS conservé (sondes, pré-vols)
+    # Le Compose surcharge le défaut de l'image (DELETE/PATCH du front) en y ajoutant ce que le
+    # back-office utilise ; PUT reste refusé sur le serveur public par $method_denied (405).
+    image = set(re.search(r'ALLOWED_METHODS="([^"]+)"', DOCKERFILE).group(1).split())
+    assert image <= allowed
+    assert re.search(r"if \(\$method_denied\)\s*\{\s*return 405;\s*\}", PUBLIC_SERVER)
+    assert "$method_denied" not in HOST_SERVER, "l'API d'administration (PATCH/PUT/DELETE) passe sur 9443"
+
+
+def test_host_listener_9443_routes_auth_admin_and_backoffice():
+    assert re.search(r"listen\s+9443\s+ssl;", HOST_SERVER)
+    assert "http2 on;" in HOST_SERVER
+    assert re.search(r"ssl_certificate\s+/etc/nginx/conf/server\.crt;", HOST_SERVER)
+    assert re.search(r"ssl_certificate_key\s+/etc/nginx/conf/server\.key;", HOST_SERVER)
+    assert "ssl_protocols       TLSv1.2 TLSv1.3;" in HOST_SERVER
+    assert "if ($blocked_source) { return 403; }" in HOST_SERVER
+    assert "client_max_body_size 4m;" in HOST_SERVER
+    for header in ("X-Content-Type-Options nosniff", "X-Frame-Options DENY", "Referrer-Policy no-referrer",
+                   'Strict-Transport-Security "max-age=31536000"'):
+        assert f"add_header {header} always;" in HOST_SERVER
+    # Le back-office pose lui-même sa CSP / Permissions-Policy ; le WAF ne doit pas la contredire.
+    for m in re.findall(r"add_header\s+Permissions-Policy\s+(.*?);", HOST_SERVER):
+        assert "camera=(self)" in m
+    assert set(_locations(HOST_SERVER)) == {"= /healthz", "/", "/api/v1/auth/", "/api/v1/admin/"}
+    assert re.search(r"location / \{[^}]*proxy_pass http://backoffice_app;", HOST_SERVER)
+    for prefix in ("/api/v1/auth/", "/api/v1/admin/"):
+        loc = re.search(rf"location {re.escape(prefix)}\s*\{{[^}}]*\}}", HOST_SERVER).group(0)
+        assert "proxy_pass http://auth_api;" in loc
+        assert "proxy_set_header X-Forwarded-For $remote_addr;" in loc
 
 
 def test_crs_allows_delete_and_patch_but_not_put():
@@ -75,6 +198,9 @@ def test_delete_and_patch_are_denied_everywhere_except_their_one_route():
                   "PATCH:/api/v1/beneficiaries/12"):
         assert denied(probe), probe
     assert not denied("GET:/api/v1/accounts") and not denied("POST:/api/v1/cards/3/freeze")
+    # PUT (admis par le CRS pour le listener hôte 9443) est refusé partout sur le serveur public.
+    for probe in ("PUT:/api/v1/accounts", "PUT:/api/v1/cards/3", "PUT:/api/v1/admin/users/1/face", "PUT:/"):
+        assert denied(probe), probe
 
 
 def test_scheduled_transfers_route_is_rate_limited_per_ip():
@@ -172,7 +298,7 @@ def test_nginx_runs_unprivileged():
     assert "pid /tmp/nginx.pid;" in conf
     assert "client_body_temp_path /tmp/" in conf and "proxy_temp_path" in conf
     ports = {int(p) for p in re.findall(r"listen\s+(\d+)", conf)}
-    assert ports == {8080, 8443} and all(p >= 1024 for p in ports), "ports non privilégiés uniquement"
+    assert ports == {8080, 8443, 9443} and all(p >= 1024 for p in ports), "ports non privilégiés uniquement"
     assert not re.search(r"^\s*user\s+", conf, re.M)
 
 
@@ -196,14 +322,14 @@ def test_compose_publishes_80_443_to_unprivileged_ports_with_valid_healthcheck()
     yaml = pytest.importorskip("yaml")
     services = yaml.safe_load(COMPOSE)["services"]
     waf = services["waf"]
-    assert waf["ports"] == ["80:8080", "443:8443"]
+    assert waf["ports"] == ["80:8080", "443:8443", "127.0.0.1:9443:9443"]
     # Deny-list : volume nommé partagé avec le moteur (jamais un bind-mount de fichier : rename impossible).
     assert "waf-deny:/etc/nginx/deny:rw" in waf["volumes"]
     assert "waf-deny:/etc/resilience/waf-deny:rw" in services["remediation"]["volumes"]
     assert waf["build"] == {"context": "../../security/waf"}
     test = waf["healthcheck"]["test"]
     assert test[0] == "CMD-SHELL" and "8443/healthz" in test[1], "healthcheck exec-form malformé (ticket #10)"
-    assert all("ports" not in svc for name, svc in services.items() if name not in {"waf", "mosquitto"}), "seuls WAF et MQTT publient des ports"
+    assert {n for n, svc in services.items() if "ports" in svc} == {"waf", "mosquitto"}, "seuls le WAF (HTTP) et mosquitto (MQTT hotspot) publient des ports"
     assert services["mosquitto"]["ports"] == ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]
 
 

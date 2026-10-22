@@ -26,6 +26,11 @@ scrape_configs:
     static_configs:
       - targets: ["auth:8002"]
 
+  - job_name: face-id
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["face-id:8006"]
+
   - job_name: detector
     metrics_path: /metrics
     static_configs:

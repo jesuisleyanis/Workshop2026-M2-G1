@@ -96,6 +96,7 @@ Après >= 10 rejeux par scénario : `RTO_retenu = arrondi_sup(1,5 x p95(D + MTTR
 
 | Sinistre | Pourquoi | Palliatif |
 |---|---|---|
+| **Facteur biométrique indisponible** (panne `face-id`, perte de `FACE_DATA_KEY`, caméra HS) | l'accès privilégié au back-office exige le visage **par conception** ; le paiement et la boucle ZTR n'en dépendent pas | procédure break-glass et réenrôlement : §5.7 |
 | **Panne simple d'un conteneur** (non attaque) | pas de type d'incident dédié : classé `unknown` donc rapport + escalade, pas d'action | healthcheck + politique de redémarrage Compose [R] (`infra/compose/docker-compose.yml`) ; à éprouver au **chaos engineering J4** |
 | **Perte de l'hôte / des volumes** | un seul hôte, dumps sur le même hôte | PRA §3.3 (reconstruction manuelle) |
 | **Panne du moteur de remédiation ou du proxy Docker** | SPOF de l'autonomie | runbook manuel §5.5 |
@@ -162,6 +163,20 @@ Déclencheurs : escalade `remediation_failed`, moteur ou proxy en panne, type `u
 `ALLOWED_PLAYBOOKS` ne contient **que** ces deux noms : tout autre playbook est refusé par le moteur.
 **Rechargement de Nginx (tranché à l'écriture, [R])** : deny-list en volume partagé `waf-deny`, puis signal `SIGHUP` au seul conteneur WAF via `docker-socket-proxy` (liste fermée de couples méthode/chemin, voir `infra/compose/docker-compose.yml`). **Ne pas élargir le proxy à `exec`** (cela ouvrirait une exécution arbitraire dans les conteneurs).
 
+### 5.7 Perte du facteur biométrique : break-glass et réenrôlement (consigne additionnelle 1)
+
+**Périmètre :** seul l'accès **privilégié** du back-office est concerné. `payment-api`, le front, la boucle Zero-Touch Recovery (`verify_tx`, détection, remédiation) et le Clip Chrono **ne dépendent pas** de `face-id`, de la caméra, du broker ni de l'ESP (D4) : aucun RTO de la §3 n'est affecté. Toute intervention ci-dessous est **manuelle**, sur le PC Hôte, et **interdite pendant la démo notée** (même règle que §5.5).
+
+| Déclencheur | Effet | Procédure (non éprouvée : [M]) |
+|---|---|---|
+| `face-id` en panne ou base illisible | `POST /auth/face` répond `503 face_service_unavailable` ; back-office inaccessible | 1. `docker compose ps face-id`, relancer le service ; si impossible, **break-glass** : ajouter `BACKOFFICE_FACE_REQUIRED=false` à l'environnement `auth` de `infra/compose` (variable non câblée par défaut) puis `docker compose up -d auth` ; l'étape visage est sautée mais **mot de passe + rôle restent obligatoires**. 2. Réparer, **retirer** la variable, redéployer `auth`. 3. Consigner dans le post-mortem. |
+| **Perte ou changement de `FACE_DATA_KEY`** | gabarits et photos **illisibles** (`face_verify_error`, motif `templates_unreadable`) ; le service refuse de démarrer sans clé valide | 1. Si la clé est dans SOPS/age : la restaurer (`scripts/decrypt-secrets.sh`, §5.4) — aucune perte. 2. Sinon **la perte est définitive** : générer une nouvelle clé (SOPS), redéployer `face-id`, puis **réenrôler tous les agents** : break-glass ci-dessus pour ouvrir une session `admin` par mot de passe, puis `PUT /api/v1/admin/users/{u}/face` pour chacun. Alternative : supprimer les lignes `face_enrollments` (SQL, ou `DELETE /api/v1/enroll/{u}` avec `FACE_INTERNAL_TOKEN`) pour que le **bootstrap** (`BACKOFFICE_BOOTSTRAP_TOKEN`) soit à nouveau requis. |
+| Enrôlements d'un **autre modèle** (`model_version` différent) ou issus de la v1 | vérification `face_verify_error` (`model_version_mismatch`) ; ces lignes sont `usable:false` chez face-id, donc **ne comptent pas** comme enrôlées pour `auth` (badge « Réenrôlement requis » dans Habilitations) | réenrôlement des agents concernés (aucune conversion possible). Si **aucun** admin n'a plus d'enrôlement utilisable, le **bootstrap** redevient requis (`GET /api/v1/auth/bootstrap` → `required:true`) : le détenteur de `BACKOFFICE_BOOTSTRAP_TOKEN` réenrôle un admin (compte existant `admin`/`operator` repris) sans break-glass. |
+| Dernier admin enrôlé injoignable (visage non reconnu, caméra HS) | plus personne ne franchit l'étape visage ; `last_admin` interdit de le désenrôler | break-glass (ligne 1), session `admin` par mot de passe, enrôler un second admin avant de retirer le premier. |
+| Caméra USB HS | étape visage impossible | remplacer la caméra (UVC standard) ; en attendant, break-glass. |
+
+**Objectifs (cibles, non mesurées [M])** : RTO d'accès au back-office après panne `face-id` ≈ temps d'un redéploiement `auth` (minutes) ; RTO complet après perte de clé ≈ temps de réenrôlement (quelques minutes par agent). **RPO biométrie = dernier enrôlement** : une sauvegarde Postgres ne contient que des **blobs chiffrés**, inutilisables sans `FACE_DATA_KEY` ; la clé doit donc être sauvegardée **séparément et hors hôte** (SOPS + clé age, §5.4), jamais avec les dumps. Une restauration `data_corruption` rétablit `face_enrollments` à l'état du dump (cohérent avec la clé tant que celle-ci n'a pas changé).
+
 ## 6. Responsabilités
 
 Principe directeur : **l'humain décide avant, l'automate exécute pendant, l'humain analyse après.** La décision est portée par `decision_table.yml` (versionnée, revue par PR) ; l'exécution par le moteur (privilèges bornés) ; le retour d'expérience par l'équipe.
@@ -206,5 +221,6 @@ R = réalise, A = rend compte, C = consulté, I = informé. Les noms sont à ren
 | **R10** | **Journal d'incidents local** | SQLite `incidents.db` | perte du journal si le volume n'est pas persistant | volume dédié ; export vers Loki (`remediation_*`) |
 | **R11** | **Sessions JWT non révocables** | JWT stateless 15 min, secret partagé | un jeton volé reste valide jusqu'à expiration | rotation de `JWT_SECRET` en cas de compromission ; JWT asymétrique en réel |
 | **R12** | **Restauration pendant écritures actives** | pas de quiescence des écrivains (le moteur ne peut redémarrer que 3 services et ne coupe pas le trafic) | écritures concurrentes perdues ou bloquées par les verrous | `--single-transaction` ; blocage préalable de la source (déjà dans le flux `service_flood`) ; étudier une mise en maintenance du WAF |
+| **R13** | **Accès privilégié dépendant du facteur biométrique** | back-office inaccessible si `face-id`/caméra/`FACE_DATA_KEY` indisponibles ; break-glass et réenrôlement **manuels et non éprouvés** (§5.7) | pas d'accès aux habilitations ; le paiement et la ZTR ne sont pas touchés | tester la procédure en recette ; sauvegarder la clé hors hôte ; garder deux admins enrôlés |
 
 **Synthèse pour la direction** : la reprise automatique tient la **disponibilité** (RTO de l'ordre de la minute, RPO nul) pour trois scénarios sur quatre ; pour l'**intégrité** elle restaure, mais **au prix d'une perte bornée au RPO**, que la direction doit accepter explicitement. Deux conditions manquent pour que ces chiffres soient exacts : le **job de dump planifié** (sans lui le RPO n'est pas tenu) et la **mesure** des MTTR (sans elle le RTO reste une cible).

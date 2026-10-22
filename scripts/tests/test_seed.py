@@ -54,6 +54,31 @@ def test_without_db_config_delegates_to_compose(monkeypatch):
     assert "payment-api" in cmd and env["SEED_PASSWORD"] == "fake-seed-pass"
 
 
+@pytest.mark.parametrize("present", [True, False])
+def test_compose_path_passes_the_root_env_file_when_present(monkeypatch, tmp_path, present):
+    # Sans --env-file, Compose ne lit pas le .env de la racine et échoue sur les ${VAR:?}.
+    for var in ("DATABASE_URL", "POSTGRES_PASSWORD", "POSTGRES_PASSWORD_FILE"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("SEED_PASSWORD", "fake-seed-pass")
+    env_file = tmp_path / ".env"
+    if present:
+        env_file.write_text("SEED_PASSWORD=x\n", encoding="utf-8")
+    monkeypatch.setattr(seed, "ENV_FILE", env_file)
+    calls = []
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(seed.subprocess, "run", lambda cmd, env=None: calls.append(cmd) or _Done())
+    assert seed.main() == 0
+    cmd = calls[0]
+    if present:
+        i = cmd.index("--env-file")
+        assert cmd[i + 1] == str(env_file) and i < cmd.index("exec")
+    else:
+        assert "--env-file" not in cmd
+
+
 def test_compose_path_requires_seed_password(monkeypatch, capsys):
     for var in ("DATABASE_URL", "POSTGRES_PASSWORD", "POSTGRES_PASSWORD_FILE", "SEED_PASSWORD"):
         monkeypatch.delenv(var, raising=False)

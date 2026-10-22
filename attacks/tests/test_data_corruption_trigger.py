@@ -83,3 +83,12 @@ def test_reset_reverts_corruption_with_inventory_and_without_swallowing_errors()
     # L'échec doit être visible et propagé : ni redirection vers /dev/null, ni `|| echo`.
     assert ">/dev/null" not in call and "|| echo" not in call and "|| true" not in call
     assert "set -euo pipefail" in text
+
+
+def test_reset_passes_the_root_env_file_to_compose() -> None:
+    # Sans --env-file, Compose ne lit pas le .env de la racine (make decrypt) : ${VAR:?} en échec.
+    text = RESET.read_text(encoding="utf-8")
+    assert 'COMPOSE=(docker compose -f "${ROOT}/infra/compose/docker-compose.yml")' in text
+    assert 'if [[ -f "${ROOT}/.env" ]]; then COMPOSE+=(--env-file "${ROOT}/.env"); fi' in text
+    # Toute commande compose du script passe par le tableau COMPOSE.
+    assert text.count("docker compose") == 1
