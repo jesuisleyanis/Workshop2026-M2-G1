@@ -31,12 +31,14 @@ interface dans `include/` et son implémentation dans `src/` :
 | Module | Responsabilité |
 |---|---|
 | `led_device` | Broches D1/D2 et rendu de la machine à états |
-| `wifi_connection` | Connexion au point d'accès et tentatives de reconnexion espacées de 5 s |
+| `wifi_connection` | Connexion au point d'accès, reconnexion automatique et reprise après échec |
 | `http_api` | Trois commandes HTTP et authentification Basic |
 | `mqtt_bridge` | Abonnement aux états, statut/LWT et heartbeat |
 
 La connexion Wi-Fi ne contient pas de boucle d'attente : la LED continue de s'actualiser
 pendant une perte de réseau. L'adresse IP est affichée sur le moniteur série après connexion.
+Une tentative en cours dispose de 30 s avant d'être relancée ; les échecs explicites
+peuvent être retentés après 5 s.
 
 ## Flasher la carte
 
