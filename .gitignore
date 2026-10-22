@@ -60,3 +60,6 @@ ml/training/data/*.tmp
 # Journal et PID du lanceur de scénarios (exécution locale)
 attacks/.runlog
 attacks/.run.pid
+
+# Artefacts de recette live (logs, captures d anomalies)
+.testrun/
