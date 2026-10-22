@@ -132,3 +132,45 @@ def test_http_api_features_ready_health_metrics():
         assert body["feature_names"] == list(FEATURE_NAMES)
         assert body["vector"] == [1.0] * len(FEATURE_NAMES) and body["ts"].endswith("Z")
         assert client.get("/metrics").status_code == 200
+
+
+def test_each_collection_gets_an_increasing_sequence_number():
+    c = make_collector({n: 1.0 for n in FEATURE_NAMES})
+    first, second = asyncio.run(c.tick()), asyncio.run(c.tick())
+    assert (first.seq, second.seq) == (1, 2) and second.to_json()["seq"] == 2
+
+
+def test_long_poll_returns_as_soon_as_a_newer_collection_exists():
+    c = make_collector({n: 1.0 for n in FEATURE_NAMES})
+
+    async def scenario():
+        await c.tick()  # seq 1
+        waiter = asyncio.create_task(c.wait_newer(after=1, timeout=5.0))
+        await asyncio.sleep(0.05)
+        assert not waiter.done()  # rien de neuf : il attend
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await c.tick()  # seq 2 -> réveil immédiat
+        snap = await waiter
+        return snap, loop.time() - t0
+
+    snap, waited = asyncio.run(scenario())
+    assert snap.seq == 2 and waited < 0.5
+
+
+def test_long_poll_times_out_with_the_current_snapshot():
+    c = make_collector({n: 1.0 for n in FEATURE_NAMES})
+
+    async def scenario():
+        await c.tick()
+        return await c.wait_newer(after=1, timeout=0.05)
+
+    assert asyncio.run(scenario()).seq == 1
+
+
+def test_http_long_poll_parameters_are_validated():
+    c = make_collector({n: 1.0 for n in FEATURE_NAMES})
+    with TestClient(create_app(c, start_loop=False)) as client:
+        asyncio.run(c.tick())
+        assert client.get("/api/v1/features", params={"after": 0, "wait": 1}).json()["seq"] == 1
+        assert client.get("/api/v1/features", params={"wait": 60}).status_code == 422  # plafond 10 s

@@ -38,7 +38,8 @@ def test_every_python_test_directory_is_covered() -> None:
     # Tout répertoire `tests/` du dépôt (hors dépendances) doit être sous un chemin couvert.
     for tests_dir in ROOT.rglob("tests"):
         rel = tests_dir.relative_to(ROOT).as_posix()
-        if not tests_dir.is_dir() or any(p in rel for p in ("node_modules", ".venv", "venv/", "site-packages")):
+        # .claude/ : worktrees locaux des sessions d'agent (copies du dépôt, jamais versionnées).
+        if not tests_dir.is_dir() or any(p in rel for p in ("node_modules", ".venv", "venv/", "site-packages", ".claude/")):
             continue
         if not any(tests_dir.glob("test_*.py")):
             continue
@@ -75,7 +76,7 @@ def test_every_vitest_app_is_covered_by_test_front() -> None:
     assert m, "boucle `for app in ...` absente de test-front"
     looped = m.group(1).replace("$(FRONT_APPS)", " ".join(_var("FRONT_APPS")))
     for top, dirs, files in os.walk(ROOT):
-        dirs[:] = [d for d in dirs if d not in {"node_modules", ".git", "dist"}]
+        dirs[:] = [d for d in dirs if d not in {"node_modules", ".git", "dist", ".claude"}]
         if "package.json" not in files or Path(top) == ROOT:
             continue
         scripts = json.loads((Path(top) / "package.json").read_text(encoding="utf-8")).get("scripts", {})
@@ -88,26 +89,31 @@ def test_every_vitest_app_is_covered_by_test_front() -> None:
 # --------------------------------------------------------------------------- Compose et .env
 def test_compose_is_defined_once_with_the_root_env_file() -> None:
     """Toute commande compose passe par $(COMPOSE), qui porte `--env-file .env` une seule fois."""
-    m = re.search(r"^COMPOSE\s*:=\s*(.*)$", MAKEFILE, re.M)
-    assert m and m.group(1).strip() == "docker compose --env-file .env -f infra/compose/docker-compose.yml"
+    # `=` (récursif) : `$(wildcard .env)` est évalué à l'exécution, donc APRÈS `make decrypt` ;
+    # REAL_IP=1 ajoute la surcouche « IP réelle » (Caddy).
+    m = re.search(r"^COMPOSE\s*:?=\s*(.*)$", MAKEFILE, re.M)
+    assert m and m.group(1).startswith("docker compose -f infra/compose/docker-compose.yml ")
+    assert "$(if $(wildcard .env),--env-file .env)" in m.group(1)
     lines = [line for line in MAKEFILE.splitlines() if not line.lstrip().startswith("#")]
     assert sum("docker compose" in line for line in lines) == 1, "docker compose hors de $(COMPOSE)"
     assert sum("--env-file" in line for line in lines) == 1, "--env-file redondant dans une cible"
     for target in ("up", "up-full", "up-iot", "ps", "down"):
         assert "$(COMPOSE) " in _recipe(target), f"{target} doit utiliser $(COMPOSE)"
     detector_off = re.search(r"^DETECTOR_OFF\s*=(.*)$", MAKEFILE, re.M).group(1)
-    assert "$(COMPOSE) stop detector" in detector_off and "$(COMPOSE) start detector" in detector_off
+    assert re.search(r"\$\(COMPOSE\)( \$\(PROFILES_\w+\))? stop detector", detector_off)
+    assert re.search(r"\$\(COMPOSE\)( \$\(PROFILES_\w+\))? start detector", detector_off)
     for target in ("capture-baseline", "capture-attack"):
         assert "$(COMPOSE) exec -T collector" in _recipe(target)
 
 
 def test_up_full_also_starts_the_iot_broker() -> None:
     # Décision d'équipe : `make up-full` lève aussi mosquitto (hors hotspot : MQTT_BIND_ADDR, runbook).
-    assert "--profile demo --profile full --profile iot up -d --build" in _recipe("up-full")
+    assert "$(COMPOSE) $(PROFILES_FULL) --profile iot up -d --build" in _recipe("up-full")
+    assert {"--profile demo", "--profile full"} <= set(re.findall(r"--profile \w+", " ".join(_var("PROFILES_FULL")) + " " + " ".join(_var("PROFILES_DEMO"))))
 
 
 # --------------------------------------------------------------------------- bit exécutable
-_INTERPRETERS = {"bash", "sh", ".", "source", "python", "python3", "$(PYTHON)"}
+_INTERPRETERS = {"bash", "sh", ".", "source", "python", "python3", "$(PYTHON)", "$(PY_HOST)"}
 _SCRIPT_PATH = r"((?:scripts|attacks|security)/[\w.-]+(?:/[\w.-]+)*)"
 
 
@@ -122,7 +128,8 @@ def _directly_invoked_scripts() -> set[str]:
     seen: set[str] = set()
     while todo:
         rel = todo.pop()
-        if rel in seen or not (ROOT / rel).is_file():
+        # .md / .env : chemins cités dans un message ou lus par grep, jamais exécutés.
+        if rel in seen or not (ROOT / rel).is_file() or rel.endswith((".md", ".env")):
             continue
         seen.add(rel)
         for line in (ROOT / rel).read_text(encoding="utf-8").splitlines():

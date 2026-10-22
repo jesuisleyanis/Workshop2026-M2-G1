@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Moteur de remédiation — image durcie.
 # Contexte de build = RACINE du dépôt (la lib partagée y est copiée) :
 #   docker build -f remediation/Dockerfile -t resilience/remediation .
@@ -12,12 +13,12 @@
 #   - pg_restore / psql (client 16)   restauration des dumps (réseau `data`, PG_BACKUP_DIR en lecture seule).
 
 FROM python:3.12-slim AS builder
-ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 COPY remediation/requirements.txt /tmp/requirements.txt
 COPY libs/python/resilience_common /tmp/resilience_common
-RUN pip install -r /tmp/requirements.txt /tmp/resilience_common
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/requirements.txt /tmp/resilience_common
 
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
@@ -30,6 +31,7 @@ ENV PYTHONUNBUFFERED=1 \
     ANSIBLE_PRIVATE_DATA_DIR=/tmp/ansible-runner \
     ANSIBLE_HOME=/tmp/.ansible \
     ANSIBLE_LOCAL_TEMP=/tmp/.ansible/tmp \
+    ANSIBLE_REMOTE_TMP=/tmp/.ansible/tmp \
     PG_BACKUP_DIR=/opt/backups \
     WAF_DENY_FILE=/etc/resilience/waf-deny/blocked_ips.conf \
     DOCKER_PROXY_URL=http://docker-socket-proxy:2375

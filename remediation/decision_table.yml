@@ -11,6 +11,7 @@ defaults:
 rules:
   # Restauration de DISPONIBILITÉ (surcharge) : on coupe la source et on redémarre.
   - incident_type: service_flood
+    verify_first: true          # flood déjà écrêté par la limitation de débit du WAF -> pas de restart
     actions:
       - { type: waf_block_ip,     params: { source: "from_event" } }
       - { type: restart_service,  params: { service: "payment-api" } }
@@ -25,6 +26,7 @@ rules:
     escalation: notify_operator
 
   - incident_type: web_attack
+    verify_first: true          # requêtes déjà rejetées par ModSecurity -> attaque contenue
     actions:
       - { type: confirm_waf_block, params: {} }
       - { type: waf_blacklist_ip,  params: { source: "from_event" } }

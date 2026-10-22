@@ -38,6 +38,39 @@ server {
     add_header Cache-Control "no-cache" always;
   }
 
+  # Carte « IP bloquées » : liste noire du WAF en LECTURE SEULE (GET), jeton injecté côté serveur.
+  # Aucune autre route du moteur n'est exposée (pas de déblocage depuis le navigateur).
+  location = /remediation/waf/blocked-ips {
+    include /etc/nginx/security-headers.conf;
+    limit_except GET { deny all; }
+    set $remediation_upstream "http://${REMEDIATION_UPSTREAM}";
+    rewrite ^/remediation(/.*)$ $1 break;
+    proxy_pass $remediation_upstream;
+    proxy_http_version 1.1;
+    proxy_set_header Authorization "${REMEDIATION_AUTH_HEADER}";
+    proxy_set_header Host $host;
+    proxy_read_timeout 10s;
+    add_header Cache-Control "no-store" always;
+  }
+
+  # Bouton « Débloquer » de la carte : SEULE action d'écriture du dashboard. DELETE uniquement + en-tête
+  # X-Resilience-Dashboard obligatoire : une page tierce ouverte dans le même navigateur ne peut envoyer
+  # ni l'un ni l'autre sans pré-vol CORS, auquel nginx ne répond jamais (anti-CSRF ; le dashboard est sur
+  # 127.0.0.1 sans authentification). IP littérale validée dans le chemin.
+  location ~ "^/remediation/waf/blocked-ips/([0-9A-Fa-f:.]{2,45})$" {
+    include /etc/nginx/security-headers.conf;
+    limit_except DELETE { deny all; }
+    if ($http_x_resilience_dashboard != "1") { return 403; }
+    set $remediation_upstream "http://${REMEDIATION_UPSTREAM}";
+    rewrite ^/remediation(/.*)$ $1 break;
+    proxy_pass $remediation_upstream;
+    proxy_http_version 1.1;
+    proxy_set_header Authorization "${REMEDIATION_AUTH_HEADER}";
+    proxy_set_header Host $host;
+    proxy_read_timeout 10s;
+    add_header Cache-Control "no-store" always;
+  }
+
   location /remediation/ {
     return 404;
   }

@@ -82,6 +82,8 @@ class FakeNetwork:
         self.restart_status = 204
         self.auth_status = 200
         self.loki_values: list[list[str]] = [["1", "waf_blocked"]]
+        self.replicas: dict[str, int] = {}  # service -> nombre de répliques (défaut 1)
+        self.health = "healthy"  # état renvoyé par GET /containers/{id}/json
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -91,7 +93,11 @@ class FakeNetwork:
                 return httpx.Response(200, text="OK")
             if path == "/containers/json":
                 svc = json.loads(request.url.params["filters"])["label"][0].split("=")[1]
-                return httpx.Response(200, json=[{"Id": f"cid-{svc}"}])
+                n = self.replicas.get(svc, 1)
+                ids = [f"cid-{svc}"] if n == 1 else [f"cid-{svc}-{i}" for i in range(1, n + 1)]
+                return httpx.Response(200, json=[{"Id": i} for i in ids])
+            if path.endswith("/json") and request.method == "GET":
+                return httpx.Response(200, json={"State": {"Running": True, "Health": {"Status": self.health}}})
             if path.endswith("/restart"):
                 return httpx.Response(self.restart_status)
             if path.endswith("/kill"):  # SIGHUP = reload WAF ; le proxy refuse tout autre signal
@@ -142,8 +148,13 @@ class Env:
     """Banc d'essai complet autour d'un moteur réel et de dépendances factices."""
 
     def __init__(self, *, table: DecisionTable | None = None, verify: list[bool] | None = None,
-                 settings: Settings | None = None, runner_ok: bool = True, verify_cost_s: float = 0.0) -> None:
+                 settings: Settings | None = None, runner_ok: bool = True, verify_cost_s: float = 0.0,
+                 precheck_ok: bool = False) -> None:
         import asyncio
+
+        # Règles `verify_first` : résultat du pré-contrôle (avant toute action). Par défaut le service
+        # est DÉGRADÉ (False) : les tests de séquence d'actions démarrent d'un incident réel.
+        self.precheck_ok = precheck_ok
 
         self.clock = FakeClock()
         self.net = FakeNetwork()
@@ -173,6 +184,9 @@ class Env:
     async def run(self, event: IncomingEvent):
         sub = await self.engine.handle_event(event)
         if sub.decision == "started":
+            rule = self.engine.table.rule_for(event.incident_type)
+            if rule.verify_first and not self.engine.dry_run:
+                self.verifier.results.insert(self.verifier.calls, self.precheck_ok)
             await self.engine.wait(sub.incident_id)
         return sub
 

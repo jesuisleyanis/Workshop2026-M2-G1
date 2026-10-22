@@ -50,6 +50,12 @@ class Settings:
     backoffice_failure_window: int = 900
     backoffice_rate_limit: str = "30/minute"
     backoffice_face_required: bool = True
+    # IP EXACTES exemptées du rate-limit de /login : la vérification automatique (verify_tx de la
+    # remédiation, IP interne fixe). Sans elle, tighten_rate_limit faisait échouer la preuve de reprise
+    # (constaté le 21/10). Jamais de plage : les clients externes arrivent par une passerelle Docker.
+    rate_limit_exempt_ips: tuple[str, ...] = ()
+    # Retour automatique à la limite de base après un durcissement (s) ; 0 = jamais.
+    rate_limit_restore_seconds: int = 300
     backoffice_reject_cooldown: int = 30  # refroidissement après visage refusé (s)
     backoffice_fail_cooldown: int = 3  # refroidissement après mot de passe refusé (s)
     # LED MQTT (contrat §5.3) : MQTT_HOST vide => LogLedNotifier (aucun broker requis)
@@ -98,6 +104,10 @@ class Settings:
             backoffice_failure_window=int(os.environ.get("BACKOFFICE_FAILURE_WINDOW", "900")),
             backoffice_rate_limit=os.environ.get("BACKOFFICE_RATE_LIMIT", "30/minute"),
             backoffice_face_required=_bool("BACKOFFICE_FACE_REQUIRED", True),
+            rate_limit_exempt_ips=tuple(
+                ip.strip() for ip in os.environ.get("RATE_LIMIT_EXEMPT_IPS", "").split(",") if ip.strip()
+            ),
+            rate_limit_restore_seconds=int(os.environ.get("RATE_LIMIT_RESTORE_SECONDS", "300")),
             backoffice_reject_cooldown=int(os.environ.get("BACKOFFICE_REJECT_COOLDOWN", "30")),
             backoffice_fail_cooldown=int(os.environ.get("BACKOFFICE_FAIL_COOLDOWN", "3")),
             mqtt_host=os.environ.get("MQTT_HOST", ""),

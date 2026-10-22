@@ -2,9 +2,11 @@
 
 Hiérarchie de décision (exigence R8 — la décision vient du MODÈLE) :
 
-  1. DÉCIDEUR : `anomaly_score` (IsolationForest) >= `threshold`  -> anomalie
-     (trigger="model"). C'est le chemin nominal et celui qui détecte les attaques
-     multi-signaux ou subtiles.
+  1. DÉCIDEUR : `anomaly_score` (IsolationForest) >= `threshold` sur `confirm_windows`
+     fenêtres CONSÉCUTIVES, ou >= `threshold_high` sur une seule -> anomalie (trigger="model").
+     Les deux seuils et le nombre de fenêtres viennent de la calibration (ml.training.calibrate) :
+     confirmer sur des fenêtres courtes (1 s) coupe le bruit sans ajouter plus d'un pas de
+     latence, et une attaque franche passe tout de suite par le seuil haut.
   2. GARDE-FOU statistique (filet de sécurité, PAS le décideur) : si le score ML est
      sous le seuil mais qu'une feature s'écarte de la baseline de >= `guardrail_z`
      écarts-types (plancher 15, calibré sur les z maximaux de la baseline), on escalade quand
@@ -31,6 +33,7 @@ from resilience_common import anomaly_score as anomaly_score_gauge
 
 from ml.detector.events import build_event
 from ml.detector.model import LoadedModel
+from ml.detector.source_ip import LokiSourceResolver
 from ml.shared.features import classify_incident, zscores
 
 SERVICE = "detector"
@@ -91,9 +94,16 @@ class Detector:
     def __init__(self, model: LoadedModel, remediation: RemediationClient, *,
                  service: str = "payment-api", threshold: float | None = None,
                  cooldown: float = 60.0,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic,
+                 source_resolver: LokiSourceResolver | None = None,
+                 confirm_windows: int | None = None,
+                 threshold_high: float | None = None) -> None:
         self.model, self.remediation, self.service = model, remediation, service
+        self.source_resolver = source_resolver  # IP dominante (Loki) -> cible des actions de blocage
         self.threshold = threshold if threshold is not None else model.threshold
+        self.confirm_windows = max(1, confirm_windows or model.confirm_windows)
+        self.threshold_high = threshold_high if threshold_high is not None else model.threshold_high
+        self._above = 0  # fenêtres consécutives au-dessus du seuil
         self.cooldown, self._clock = cooldown, clock
         self._last_emit: float | None = None
         self.last_decision: Decision | None = None
@@ -106,8 +116,11 @@ class Detector:
         z = zscores(vector, stats["mean"], stats["std"])
         max_z = max(z.values())  # seuls les écarts vers le HAUT caractérisent une attaque
 
+        self._above = self._above + 1 if score >= self.threshold else 0
+        confirmed = self._above >= self.confirm_windows or (
+            self.threshold_high is not None and score >= self.threshold_high)
         trigger: str | None = None
-        if score >= self.threshold:
+        if confirmed:
             trigger = "model"
         elif max_z >= self.model.guardrail_z:
             trigger = "guardrail"
@@ -121,14 +134,16 @@ class Detector:
         if self._in_cooldown():
             return decision  # anomalie persistante déjà signalée
 
+        incident_type = classify_incident(z)
+        source_ip = await self.source_resolver.resolve(incident_type) if self.source_resolver else None
         event = build_event(
             service=self.service, score=score, threshold=self.threshold,
-            incident_type=classify_incident(z), vector=vector, z=z,
+            incident_type=incident_type, vector=vector, z=z, source_ip=source_ip,
         )
         decision.event = event
         log.warning(
             f"Anomalie {event.incident_type.value} (score {score:.3f} >= {self.threshold:.3f}, "
-            f"déclencheur={trigger})",
+            f"déclencheur={trigger}, ip_source={source_ip or 'non résolue'})",
             extra={"event": "anomaly_detected", "anomaly_score": round(score, 4)},
         )
         decision.posted = await self.remediation.post_event(event)

@@ -16,6 +16,7 @@ import pytest
 
 RUN_SH = Path(__file__).resolve().parents[1] / "run.sh"
 ACCOUNTS = {"demo01": 11, "demo02": 22}
+SEED = "seed-pass-test"  # mot de passe FACTICE du jeu de test (SEED_PASSWORD)
 
 
 def _bash() -> str | None:
@@ -47,7 +48,7 @@ def server():
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
             if self.path == "/api/v1/login":
-                ok = body["username"] in ACCOUNTS and body["password"].startswith("demo-pass")
+                ok = body["username"] in ACCOUNTS and body["password"] == SEED
                 return self._send(200 if ok else 401, {"access_token": f"tok-{body['username']}",
                                                        "token_type": "bearer", "expires_in": 900}
                                   if ok else {"error": "invalid_credentials"})
@@ -73,7 +74,7 @@ def server():
 
 
 def _run(target, tmp_path, **env):
-    env = {**os.environ, "RUNLOG": (tmp_path / "runlog").as_posix(),
+    env = {**os.environ, "SEED_PASSWORD": SEED, "RUNLOG": (tmp_path / "runlog").as_posix(),
            "PIDFILE": (tmp_path / "pid").as_posix(), **env}
     return subprocess.run([BASH, RUN_SH.as_posix(), "service_flood", "--target", target,
                            "--duration", "2", "--rate", "10"],
@@ -102,3 +103,11 @@ def test_flood_aborts_without_valid_session(server, tmp_path):
     assert res.returncode == 1
     assert "make seed" in res.stdout
     assert not seen  # jamais de flood non authentifié (401) ni d'ids manquants (422)
+
+
+def test_flood_refuses_to_run_without_seed_password(server, tmp_path):
+    # Jamais de mot de passe en dur : sans SEED_PASSWORD, le flood s'arrête net (pas de rafale de 401).
+    url, seen = server
+    res = _run(url, tmp_path, SEED_PASSWORD="")
+    assert res.returncode == 1 and "SEED_PASSWORD absent" in res.stdout
+    assert not seen

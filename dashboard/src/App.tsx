@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { BlockedIpsCard } from './components/BlockedIpsCard'
 import { ActionsPanel, EvidencePanel, PlaybooksPanel, SignalsPanel } from './components/IncidentDetails'
 import { IncidentTimeline } from './components/IncidentTimeline'
 import { MetricsCards, ScoreCard, VerificationCard } from './components/MetricsCards'
@@ -6,7 +7,8 @@ import { PhaseBanner } from './components/PhaseBanner'
 import { ScoreChart } from './components/ScoreChart'
 import { ServicesGrid } from './components/ServicesGrid'
 import { Sidebar } from './components/Sidebar'
-import { GRAFANA_BASE, LIVE_TRIGGERS, METRICS_POLL_MS, PROMETHEUS_BASE, STREAM_SOURCE, STREAM_URL, TRIGGER_URL, type StreamSource } from './config'
+import { BLOCKED_IPS_URL, GRAFANA_BASE, LIVE_TRIGGERS, METRICS_POLL_MS, PROMETHEUS_BASE, STREAM_SOURCE, STREAM_URL, TRIGGER_URL, type StreamSource } from './config'
+import { useBlockedIps } from './hooks/useBlockedIps'
 import { useDashboard } from './hooks/useDashboard'
 import { useNow } from './hooks/useNow'
 import { defaultFactory, type EventSourceFactory } from './hooks/useRemediationStream'
@@ -22,10 +24,12 @@ interface Props {
   grafanaBase?: string
   /** Base du proxy Prometheus (score + santé) ; null = pas de polling (tests). */
   metricsBase?: string | null
+  /** Liste noire du WAF (carte « IP bloquées ») ; null = pas de relève (tests). */
+  blockedIpsUrl?: string | null
 }
 
 /** Choisit la source (flux réel / simulation) ; la console est remontée à chaque bascule. */
-export function App({ streamUrl = STREAM_URL, eventSourceFactory, source = STREAM_SOURCE, liveTriggers = LIVE_TRIGGERS, grafanaBase = GRAFANA_BASE, metricsBase = PROMETHEUS_BASE }: Props) {
+export function App({ streamUrl = STREAM_URL, eventSourceFactory, source = STREAM_SOURCE, liveTriggers = LIVE_TRIGGERS, grafanaBase = GRAFANA_BASE, metricsBase = PROMETHEUS_BASE, blockedIpsUrl = BLOCKED_IPS_URL }: Props) {
   const [simulated, setSimulated] = useState(source === 'simulation')
   const [fallback, setFallback] = useState(false)
 
@@ -47,6 +51,7 @@ export function App({ streamUrl = STREAM_URL, eventSourceFactory, source = STREA
       liveTriggers={liveTriggers}
       grafanaBase={grafanaBase}
       metricsBase={metricsBase}
+      blockedIpsUrl={blockedIpsUrl}
     />
   )
 }
@@ -61,9 +66,12 @@ interface ConsoleProps {
   liveTriggers: boolean
   grafanaBase: string
   metricsBase: string | null
+  blockedIpsUrl: string | null
 }
 
-function Console({ streamUrl, eventSourceFactory, simulated, fallback, onNeverOpened, onToggleSource, liveTriggers, grafanaBase, metricsBase }: ConsoleProps) {
+function Console({ streamUrl, eventSourceFactory, simulated, fallback, onNeverOpened, onToggleSource, liveTriggers, grafanaBase, metricsBase, blockedIpsUrl }: ConsoleProps) {
+  // Simulation locale : pas de moteur réel derrière, donc pas de liste noire à relever.
+  const blocked = useBlockedIps(simulated ? null : blockedIpsUrl)
   const simRef = useRef<SimulatedEventSource | null>(null)
   const factory = useMemo<EventSourceFactory>(
     () => (simulated ? () => (simRef.current = new SimulatedEventSource()) : (eventSourceFactory ?? defaultFactory)),
@@ -180,6 +188,7 @@ function Console({ streamUrl, eventSourceFactory, simulated, fallback, onNeverOp
           </div>
           <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-[18px]">
             <ServicesGrid services={state.services} />
+            <BlockedIpsCard items={blocked.items} error={blocked.error} onUnblock={blocked.unblock} />
             <SignalsPanel incident={incident} />
             <PlaybooksPanel incident={incident} />
             <EvidencePanel incident={incident} grafanaBase={grafanaBase} />

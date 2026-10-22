@@ -118,16 +118,22 @@ def seed_demo_data(
     users: int = DEFAULT_USERS,
     balance_cents: int = DEFAULT_BALANCE_CENTS,
     monthly_limit_cents: int = DEFAULT_MONTHLY_LIMIT_CENTS,
+    reset_passwords: bool = False,
 ) -> list[str]:
     """Crée demo01..demoNN avec un compte chacun. Idempotent : ignore les existants.
 
-    Renvoie la liste des usernames créés lors de cet appel.
+    `reset_passwords` : réaligne aussi le mot de passe des comptes EXISTANTS sur `password`
+    (après rotation de SEED_PASSWORD ; soldes et historique intacts). Renvoie la liste des
+    usernames créés lors de cet appel.
     """
     created: list[str] = []
     password_hash = hash_password(password)
     for n in range(1, users + 1):
         username = demo_username(n)
-        if session.scalar(select(User.id).where(User.username == username)) is not None:
+        existing = session.scalar(select(User).where(User.username == username))
+        if existing is not None:
+            if reset_passwords:
+                existing.password_hash = password_hash
             continue
         user = User(username=username, password_hash=password_hash)
         user.accounts.append(
@@ -263,11 +269,16 @@ def seed_beneficiaries(session: Session, *, users: int = DEFAULT_USERS) -> int:
 def main() -> int:
     password = read_secret("SEED_PASSWORD")
     users = int(os.environ.get("SEED_USERS", DEFAULT_USERS))
+    reset = os.environ.get("SEED_RESET_PASSWORDS") == "1"
     limit = int(os.environ.get("SEED_MONTHLY_LIMIT_CENTS", DEFAULT_MONTHLY_LIMIT_CENTS))
     engine = make_engine()
     with make_session_factory(engine)() as session:
-        created = seed_demo_data(session, password, users=users, monthly_limit_cents=limit)
-    sys.stdout.write(f"seed: {len(created)} utilisateur(s) créé(s): {', '.join(created) or '-'}\n")
+        created = seed_demo_data(session, password, users=users, monthly_limit_cents=limit,
+                                 reset_passwords=reset)
+    note = " ; mots de passe des comptes existants réalignés sur SEED_PASSWORD" if reset else ""
+    sys.stdout.write(
+        f"seed: {len(created)} utilisateur(s) créé(s): {', '.join(created) or '-'}{note}\n"
+    )
     return 0
 
 

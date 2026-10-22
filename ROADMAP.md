@@ -222,6 +222,47 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | P4S-06/03 | Doc : « aucun secret en image » (clé TLS figée) et audit WAF | Exception de labo documentée (clé TLS), nuance `read_only`, résiduel journal d'audit WAF | `hardening.md`, `docs/ebios-rm.md §5.3` |
 | P4S-01/07 | Résiduels non corrigeables hors stack : passerelle Alertmanager non authentifiée, HTTP clair/TLS | Portés comme risques résiduels + commentaire compose ; génération hex des secrets (évite de casser l'URL du pg-exporter) | `docs/ebios-rm.md §5.3`, `docker-compose.yml`, `security/sops/secrets.example.env` |
 
+### Lancement de la stack — fiabilité et vitesse (branche `perf/lancement-stack`)
+
+> Plan et constats : [`docs/plan-optimisation-lancement.md`](docs/plan-optimisation-lancement.md). Commandes : [`docs/commandes.md`](docs/commandes.md).
+
+| # | Écart | Résolution | Statut / preuve |
+|---|---|---|---|
+| L1 / C1 | `make up*` ne levait pas le profil `ml` : **aucun collector/detector, donc pas de détection** ; `down` ne l'arrêtait pas | `PROFILES_DEMO` = `demo` + `ml` ; `down`/`ps` couvrent tous les profils déclarés | ✅ `infra/tests/test_launch_contract.py` |
+| L1 / C2 | Compose ne lisait pas le `.env` racine (cherché dans `infra/compose/`) → secrets vides | `COMPOSE` passe `--env-file .env` ; `check-env` échoue clairement sans `.env` | ✅ test + `docker compose config` (sans `--env-file` : erreur `GRAFANA_PASSWORD`) |
+| L2 / C3 | Aucun `.dockerignore` racine : un `COPY` trop large pourrait embarquer `.env`/clés ou des caches locaux | `.dockerignore` racine (secrets, VCS, caches, artefacts). Mesuré : BuildKit ne transférait déjà que les chemins des `COPY` (~50 kB), donc gain de **sécurité**, pas de vitesse | ✅ test (entrées de build conservées, secrets exclus) |
+| L2 / C5 | `PIP_NO_CACHE_DIR` : tout re-télécharger à chaque changement de dépendances | `RUN --mount=type=cache,target=/root/.cache/pip` (étapes builder, image finale inchangée) | ✅ test ; build réel des 6 images racine OK (froid 4 min 08, rebuild à chaud 35 s) |
+| L3 / C4 | `up` entraînait le modèle sur l'hôte (sklearn local requis) alors que le build detector ré-entraîne | `model` retiré de `up*`, passe par l'image `ml-tools` ; cibles `build`, `start`, `start-full`, `retrain-detector` | ✅ test |
+| L4 / C6 | `depends_on` sans attente de santé | `condition: service_healthy` vers toute dépendance qui a un healthcheck | ✅ test + `docker compose config` |
+| L4 / C7 | Dashboard/Grafana publiés nulle part : visibilité du temps 5 de la démo | **Décision équipe** : `127.0.0.1:<port>` ou route WAF authentifiée | ⬜ à trancher |
+| — | `test_mosquitto_is_limited_to_iot_profile_and_hotspot` rouge (`1883:1883` au lieu de `192.168.137.1:1883:1883`) | Mosquitto publié sur l'IP du hotspot uniquement (lot 5 ci-dessous) | ✅ tests verts |
+
+### Détection rapide et corrections de la chaîne de reprise
+
+> Plan : [`docs/plan-amelioration-detection.md`](docs/plan-amelioration-detection.md). Mesure : `make bench` (`scripts/bench_detection.py`).
+> **Référence avant (21/10, 3 passages, trafic normal en fond)** — attaque → `AnomalyEvent` : flood p50 35,5 s / p95 37,6 s ;
+> auth_abuse p50 25,9 s / p95 34,1 s ; web_attack p50 33,8 s / p95 36,7 s ; 0 faux positif / 120 s. Flood mal routé 3/3
+> (`data_corruption` ×2 → **restauration de dump sur un flood**, `unknown` ×1). Objectif : **p95 ≤ 5 s**.
+
+| Lot | Écart | Résolution | Statut / preuve |
+|---|---|---|---|
+| 0 | Latence de détection non mesurée | Banc `make bench` : p50/p95/max attaque → détection → 1re action, faux positifs, décalage d'horloge VM corrigé | ✅ `scripts/tests/test_bench_detection.py` ; mesure de référence ci-dessus |
+| 1 | **IP source jamais transmise** : `waf_block_ip`/`waf_blacklist_ip` échouaient (« aucune IP source »), l'attaquant n'était jamais bloqué | `AnomalyEvent.source_ip` (additif, validé) ; le detector retient l'IP qui domine les logs WAF (Loki, ≥ 60 %, ≥ 5 lignes, filtre par type) | ✅ `ml/detector/tests/test_source_ip.py`, `test_contracts.py`, `docs/contracts.md §3` |
+| 1 | `confirm_waf_block` ne pouvait pas lire Loki (remédiation hors `obs`) et visait `{service="waf"}` au lieu de `waf-exporter` | remédiation sur `obs` (interne) ; sélecteur `{service="waf-exporter", event="waf_blocked"}` | ✅ `test_actions.py`, `infra/tests/test_detection_pipeline.py` |
+| 1 | auth : `httpx` hors runtime ; WAF : scripts 93/96 de l'image de base ; tag de base republié | dépendance runtime ; scripts retirés ; base épinglée par digest | ✅ `test_runtime_requirements.py`, `test_waf_config.py` |
+| 1 | Trafic « normal » et flood avec mots de passe en dur périmés (`demo-pass-0N`) : baseline polluée de 401 (= signal auth_abuse), flood jamais lancé | `SEED_PASSWORD` partout, refus explicite s'il manque | ✅ `test_gen_normal_traffic.py`, `test_run_flood.py` |
+| 2 | Chaîne lente (scrape 10 s, `rate[30s]`, collecte 15 s, relève 15 s non synchronisée) | scrape 1 s (services), `rate[5s]`, collecte 1 s, attente longue collector → detector (`?after=<seq>`), confirmation 2 fenêtres ou seuil haut calibré | ✅ tests collector/detector/calibrate + `test_detection_pipeline.py` ; 🟨 mesure après ré-entraînement |
+| 3 | Modèle calibré sur 1 passage/scénario, sans data_corruption, fenêtres 30 s, **sur un autre poste que le PC hôte** (seuil 0,71 aveugle aux attaques du PC attaquant) | Captures 21/10 (poste de dev) : 3 601 fenêtres normales + 3 passages × 4 scénarios. Calibration par **niveau tenu sur 4 fenêtres** (pics normaux brefs) + **garde-fou** pour les signaux nuls au normal (IsolationForest aveugle) : seuil 0,708, 0 faux positif / 3 601, 12/12 passages détectés (modèle : flood, auth ; garde-fou : web, data). `make capture-remote` pour capturer les attaques du PC attaquant | ✅ outillage + `test_calibrate.py` ; 🔴 **à refaire sur le PC hôte** (docs/commandes.md §4.2) |
+| 4 | `.env` périmé non détecté ; rotation de `SEED_PASSWORD` ; Grafana en boucle ; `python3` absent sous Windows ; `reset.sh` sans `--env-file` (deny-list jamais vidée) | `check-env` compare les clés ; `make seed RESET_PASSWORDS=1` ; `make reset-grafana` ; `PY_HOST` ; `down --remove-orphans` ; `reset.sh` corrigé | ✅ `test_db.py` (reset), vérif. manuelle `check-env` |
+| 5 | Mosquitto sur `0.0.0.0` ; tests face-id hors `make test` | bind `192.168.137.1` ; face-id dans `PY_COMPONENTS` | ✅ `test_compose_hardening.py`, `test_makefile.py` |
+| 7 | **Aucun incident n'avait jamais pu être clos** : `verify_tx` sur `https://waf` (443) au lieu de 8443 ; Ansible sans dossier temporaire (blocage IP + restauration de dump KO) ; proxy Docker sans accès au socket (aucun redémarrage) | `BASE_URL https://waf:8443` ; `ANSIBLE_REMOTE_TMP` ; `group_add: ["0"]` sur le proxy (liste blanche inchangée, `POST /containers/create` toujours 403) | ✅ tests + **boucle vérifiée sur la stack** : flood détecté en 2 s, `service_flood`, payment-api redémarré, `verify_tx` OK, incident clos |
+| 7 | IP de l'attaquant masquée par Docker Desktop (tous les clients = passerelle) ; la remédiation a bloqué **sa propre IP** (désignée via son trafic `verify_tx`) | sous-réseaux fixes edge/app ; `NEVER_BLOCK_IPS` en plages CIDR (réseaux entiers) ; `SOURCE_IP_EXCLUDE` côté detector | ✅ `test_engine.py`, `test_source_ip.py`, `test_launch_contract.py` |
+| 7 | Flood non authentifié (401) classé `unknown` → aucune correction ; pas de protection préventive | routage 4xx → `service_flood` ; `limit_req` 30 r/s + rafale 60 sur `/api` (429) ; `verify_tx` réversible si compte de contrôle épuisé | ✅ tests ; mesuré : ~100 passent / ~700 en 429 à 520 req/s |
+| 7 | Série d'attaques du 21/10 (14 h 12-14 h 31) : 18 détections justes mais 76/81 vérifications KO — `tighten_rate_limit` bloquait le login de `verify_tx` ; `web_attack` jamais clos ; 12 redémarrages de payment-api | auth : IP fixe de la remédiation exemptée, durcissement levé après 5 min ; règle `verify_first` (flood, web) : contenu par le WAF = clos sans action | ✅ tests ; **rejoué sur la stack** : flood clos en 1,0 s sans redémarrage, auth_abuse 1,3 s, web_attack 1,0 s |
+| 8 | Une seule instance de payment-api : capacité limitée, un redémarrage = coupure | 3 répliques (`PAYMENT_API_REPLICAS`) derrière le WAF (`least_conn`, `max_fails`, `resolve`, bascule sans rejeu des POST) ; Prometheus découvre chaque réplique (DNS) ; `restart_service` progressif ; connexion bornée à 2 s, 3 essais | ✅ déployé : répartition 28/24/26 ; **bascule : 188/188 requêtes OK en tuant une réplique** (une requête à 2 s le temps de basculer) |
+| 9 | IP de l'attaquant masquée par Docker Desktop : blocage d'IP impossible, limitations de débit globales | Mode « IP réelle » (`REAL_IP=1`) : proxy natif Windows **Caddy** (`infra/caddy/`) qui écrase `X-Forwarded-For` ; WAF publié en 127.0.0.1 seulement et `realip` limité aux passerelles Docker ; mode par défaut inchangé (aucune confiance) | ✅ tests + script d'entrée (valeur piégée refusée) ; **simulé sur la stack** : auth_abuse depuis 192.168.137.99 détecté en 4 s, IP bloquée, incident clos en 4,2 s, autres clients non affectés ; 🟨 Caddy à installer sur le PC hôte |
+| 6 | Chemin SOC lent (`rate[1m]`, `for: 30s`, `group_wait: 5s`) | `rate[30s]`, `for: 10s`, évaluation 5 s, `group_wait: 1s` (Grafana ⇔ Prometheus miroir) | ✅ `test_soc_rules.py`, `promtool check rules` |
+
 ## Risques projet (vivant)
 
 | Risque | Impact | Parade | Statut |

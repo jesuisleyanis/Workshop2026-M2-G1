@@ -87,7 +87,8 @@ def create_app(
             "Poser le même secret que face-id, ou BACKOFFICE_FACE_REQUIRED=false en dev."
         )
 
-    rate = DynamicRateLimit(settings.login_rate_limit)
+    rate = DynamicRateLimit(settings.login_rate_limit, settings.rate_limit_restore_seconds)
+    exempt_ips = frozenset(settings.rate_limit_exempt_ips)
     limiter = Limiter(
         key_func=lambda request: client_ip_var.get() or "unknown", storage_uri="memory://"
     )
@@ -253,8 +254,10 @@ def create_app(
 
     @app.post("/api/v1/login", response_model=TokenOut)
     # Quota PARTAGÉ avec /auth/step-up (scope commun) : deux portes, un seul budget d'essais de
-    # mot de passe par IP.
-    @limiter.shared_limit(rate.baseline_value, scope="password_attempts", cost=rate.cost)
+    # mot de passe par IP. La remédiation (verify_tx, IP fixe) en est exemptée : sa transaction
+    # de contrôle ne doit jamais être refusée par le resserrement qu'elle vient d'appliquer.
+    @limiter.shared_limit(rate.baseline_value, scope="password_attempts", cost=rate.cost,
+                          exempt_when=lambda: client_ip_var.get() in exempt_ips)
     def login(request: Request, body: LoginRequest, session=Depends(get_session)):
         user = session.scalar(select(User).where(User.username == body.username))
         # Vérification systématique (hash factice si inconnu) : temps de réponse constant.

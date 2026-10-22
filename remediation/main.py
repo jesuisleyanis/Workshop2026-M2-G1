@@ -15,9 +15,10 @@ from typing import Any
 
 import http_metrics
 import httpx
-from actions.docker_proxy import DockerProxy
+from actions.docker_proxy import DockerProxy, DockerProxyError
 from actions.runner import AnsibleRunnerAdapter
 from alertmanager import AlertmanagerPayload, to_events
+from blocklist import list_blocked_ips, remove_ip
 from config import Settings
 from decision import DecisionTable, DecisionTableError, load_decision_table
 from engine import RemediationEngine, Services
@@ -193,6 +194,34 @@ def create_app(
         if inc is None:
             return _error(404, "incident_not_found", "incident inconnu", request)
         return inc
+
+    @app.get("/waf/blocked-ips", dependencies=[auth])
+    async def blocked_ips() -> dict[str, Any]:
+        """IP actuellement en liste noire du WAF (lecture seule), enrichies par le journal."""
+        return {"blocked": list_blocked_ips(settings.waf_deny_file, journal.last_blocks())}
+
+    @app.delete("/waf/blocked-ips/{ip}", dependencies=[auth])
+    async def unblock_ip(ip: str, request: Request):
+        """Déblocage par l'opérateur (bouton du dashboard) : retire l'IP de la deny-list, recharge le WAF.
+
+        Hors boucle de reprise (aucun incident en dépend) : action d'administration, tracée dans les logs.
+        """
+        try:
+            removed = remove_ip(settings.waf_deny_file, ip)
+        except ValueError:
+            return _error(400, "invalid_ip", "adresse IP littérale attendue", request)
+        if not removed:
+            return _error(404, "ip_not_blocked", "cette IP n'est pas dans la liste noire du WAF", request)
+        log.warning(f"IP {ip} débloquée par l'opérateur (dashboard)",
+                    extra={"event": "remediation_action", "client_ip": ip})
+        try:
+            reloaded = await services.docker.find_containers(settings.waf_service)
+            for cid in reloaded:
+                await services.docker.reload(cid)  # SIGHUP = `nginx -s reload`, via le proxy
+        except DockerProxyError:
+            return _error(502, "waf_reload_failed",
+                          "IP retirée de la liste noire mais WAF non rechargé (réessayer)", request)
+        return {"unblocked": ip, "waf_reloaded": len(reloaded)}
 
     @app.get("/decision-table", dependencies=[auth])
     async def get_table() -> dict[str, Any]:

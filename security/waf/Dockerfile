@@ -6,7 +6,9 @@
 # ModSecurity + CRS préinstallés et configurés par les scripts d'entrypoint de l'image
 # (variables MODSEC_* / BLOCKING_PARANOIA / ANOMALY_*). L'image tourne non-root : elle ne peut
 # écouter que sur des ports > 1024 (8080 / 8443) ; Compose publie 80->8080 et 443->8443.
-FROM owasp/modsecurity-crs:4.25.2-nginx-alpine-lts
+# Tag + DIGEST : le tag seul a été republié en amont (nouveaux scripts d'entrypoint -> WAF en boucle).
+# Mise à jour volontaire : docker buildx imagetools inspect owasp/modsecurity-crs:<tag> puis tests WAF.
+FROM owasp/modsecurity-crs:4.25.2-nginx-alpine-lts@sha256:57fd215e2894638a02d235f88510fa2a129d64740f0edb6798ca0e4aa2f02457
 
 USER root
 
@@ -14,15 +16,13 @@ USER root
 # templates nginx.conf / conf.d de l'image pour que l'entrypoint ne les régénère pas.
 # Les templates modsecurity.d sont CONSERVÉS : ils produisent /etc/modsecurity.d/setup.conf
 # (ModSecurity + CRS), inclus par notre nginx.conf.
+# Les scripts d'entrypoint 93 (PROXY_SSL) et 96 (HTTP3) ne font qu'un `sed` sur conf.d/default.conf,
+# supprimé ici : sous `set -e`, ils font échouer le démarrage (WAF en boucle de redémarrage, vu sur
+# une republication du tag de base). Ces options ne sont pas utilisées : notre nginx.conf fait foi.
 RUN set -eux; \
     rm -f /etc/nginx/templates/nginx.conf.template; \
     rm -rf /etc/nginx/templates/conf.d /etc/nginx/conf.d/*.conf; \
-    # Les scripts d'entrypoint de l'image (93-update-proxy-ssl-config, 96-update-http3-config)
-    # font un `sed -i` sur conf.d/default.conf en `set -eu` : sans ce fichier ils sortent en
-    # erreur et font planter l'entrypoint (crash-loop). Notre nginx.conf n'inclut PAS conf.d/,
-    # donc un fichier vide satisfait ces `sed` tout en restant inerte (jamais chargé par nginx).
-    : > /etc/nginx/conf.d/default.conf; \
-    chown nginx:nginx /etc/nginx/conf.d/default.conf
+    rm -f /docker-entrypoint.d/93-update-proxy-ssl-config.sh /docker-entrypoint.d/96-update-http3-config.sh
 
 # Certificat TLS AUTO-SIGNÉ généré au build (labo fermé, jamais commité). Déposé là où le script
 # `generate-certificate` de l'image le cherche : il détecte la clé et ne régénère rien au démarrage.
@@ -41,6 +41,10 @@ COPY --chown=nginx:nginx nginx.conf /etc/nginx/nginx.conf
 # nginx (uid 101) le relit au SIGHUP. Le script d'entrypoint recrée le fichier s'il manque.
 COPY --chown=nginx:nginx deny/blocked_ips.conf /etc/nginx/deny/blocked_ips.conf
 COPY --chmod=0755 docker-entrypoint.d/05-ensure-deny-list.sh /docker-entrypoint.d/05-ensure-deny-list.sh
+# Mode « IP réelle » : confiance X-Forwarded-For générée au démarrage (vide par défaut = aucune confiance).
+COPY --chmod=0755 docker-entrypoint.d/06-trust-forwarded.sh /docker-entrypoint.d/06-trust-forwarded.sh
+RUN echo '# aucune source de confiance (défaut)' > /etc/nginx/conf/realip.conf \
+ && chown nginx:nginx /etc/nginx/conf/realip.conf
 RUN chown -R nginx:nginx /etc/nginx/deny && chmod 2775 /etc/nginx/deny && chmod 0644 /etc/nginx/deny/blocked_ips.conf
 
 # Journal d'audit ModSecurity (JSON Serial, blocages) : répertoire partagé avec waf-exporter via le volume

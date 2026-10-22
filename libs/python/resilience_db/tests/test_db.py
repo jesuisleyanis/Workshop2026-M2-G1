@@ -109,6 +109,24 @@ def test_beneficiary_is_unique_per_owner_and_account():
             s.commit()
 
 
+def test_seed_reset_passwords_realigns_existing_accounts_after_rotation():
+    # Rotation de SEED_PASSWORD : sans reset, les comptes existants gardent l'ancien mot de passe
+    # (verify_tx et la remédiation échouent au login) ; avec reset, ils sont réalignés, soldes intacts.
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        seed_demo_data(s, "ancien", users=2)
+        s.query(Account).filter_by(id=1).one().balance_cents = 4242
+        s.commit()
+        assert seed_demo_data(s, "nouveau", users=2) == []
+        assert verify_password("ancien", s.query(User).filter_by(username="demo01").one().password_hash)
+        assert seed_demo_data(s, "nouveau", users=3, reset_passwords=True) == ["demo03"]
+        # comptes de démo seulement : les tiers fictifs (#44) ont un mot de passe aléatoire, jamais réaligné
+        for user in s.query(User).filter(User.username.like("demo%")).all():
+            assert verify_password("nouveau", user.password_hash)
+        assert s.query(Account).filter_by(id=1).one().balance_cents == 4242
+
+
 def test_user_role_defaults_to_customer_and_rejects_unknown_role():
     # Habilitations (consigne add. 1) : rôle par défaut `customer`, valeurs bornées en DB.
     engine = make_engine("sqlite://")

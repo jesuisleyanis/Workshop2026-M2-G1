@@ -1,10 +1,10 @@
 # Cahier des charges — ml/collector
 
-**Pourquoi.** Le detector a besoin, toutes les 15 s, du vecteur de 9 features de `contracts.md §2`. Le collector isole la
+**Pourquoi.** Le detector a besoin, chaque seconde, du vecteur de 9 features de `contracts.md §2`. Le collector isole la
 connaissance de Prometheus (PromQL, cAdvisor) du reste de la chaîne ML.
 
 **Périmètre.**
-- Une requête PromQL instantanée par feature (cf. README), toutes les `COLLECT_INTERVAL_SECONDS` (15 s).
+- Une requête PromQL instantanée par feature (cf. README), toutes les `COLLECT_INTERVAL_SECONDS` (1 s en compose) ; attente longue `?after=<seq>` pour le detector.
 - Vecteur construit via `ml.shared.features` (ordre garanti), conservé en mémoire, exposé par `GET /api/v1/features`.
 - `GET /health`, `GET /ready`, `GET /metrics` (métriques HTTP standard + `resilience_collector_*`), logs JSON (`get_logger`).
 - Image durcie : slim, non-root (uid 10004), healthcheck.

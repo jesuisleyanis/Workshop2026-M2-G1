@@ -84,8 +84,27 @@ async def test_verify_ko_moves_to_next_action_then_stops_when_ok(make_env):
     env = make_env(verify=[False, True])
     sub = await env.run(make_event("service_flood"))
     assert env.action_types(sub.incident_id) == ["waf_block_ip", "restart_service"]
-    assert env.verifier.calls == 2
+    assert env.verifier.calls == 3  # pré-contrôle (KO) + après chaque action modifiante
     assert env.incident(sub.incident_id)["status"] == "closed"
+
+
+async def test_contained_attack_is_closed_without_any_action(make_env):
+    # Flood déjà écrêté par le WAF (service disponible) : aucun restart de payment-api.
+    # Constaté le 21/10 sans ce pré-contrôle : 12 redémarrages en 20 min pendant un flood continu.
+    for incident_type in ("service_flood", "web_attack"):
+        env = make_env(precheck_ok=True)
+        sub = await env.run(make_event(incident_type))
+        inc = env.incident(sub.incident_id)
+        assert inc["status"] == "closed", incident_type
+        assert env.action_types(sub.incident_id) == [], incident_type
+        assert env.verifier.calls == 1 and env.net.docker_calls() == []
+
+
+async def test_types_without_verify_first_always_act(make_env):
+    # auth_abuse / data_corruption : une corruption ne se « contient » pas toute seule -> toujours agir.
+    env = make_env(verify=[True], precheck_ok=True)
+    sub = await env.run(make_event("data_corruption"))
+    assert env.action_types(sub.incident_id) == ["restore_pg_dump"]
 
 
 async def test_verify_ok_after_first_action_skips_remaining_actions(make_env):
@@ -233,6 +252,18 @@ async def test_waf_never_blocks_protected_or_missing_ips(make_env):
     assert env3.runner.calls == []
 
 
+async def test_waf_never_blocks_an_ip_inside_a_protected_network(make_env):
+    # Constaté le 21/10 : le detector a désigné l'IP de la remédiation elle-même (trafic verify_tx) ;
+    # bloquée, chaque vérification suivante aurait échoué. Les réseaux Docker internes sont protégés.
+    from conftest import make_settings
+
+    env = make_env(verify=[True], settings=make_settings(never_block_ips=("127.0.0.1", "172.31.0.0/24")))
+    sub = await env.run(make_event("service_flood", source_ip="172.31.0.9"))
+    first = env.incident(sub.incident_id)["actions"][0]
+    assert first["result"] == "failure" and "protégée" in first["detail"]
+    assert env.runner.calls == []
+
+
 async def test_restart_refuses_service_outside_allow_list(make_env):
     from conftest import make_settings
 
@@ -275,3 +306,11 @@ async def test_timeline_covers_detection_decision_action_verification_closure(ma
     assert q.qsize() == len(phases)  # tout ce qui est journalisé est diffusé en direct
     ids = [r["id"] for r in env.journal.timeline_since(0)]
     assert ids == sorted(ids)
+
+
+async def test_journal_remembers_successful_blocks_for_the_blocked_ips_card(make_env):
+    env = make_env(verify=[True])
+    sub = await env.run(make_event("auth_abuse", source_ip="203.0.113.9"))
+    (block,) = env.journal.last_blocks()
+    assert block["incident_id"] == sub.incident_id and block["incident_type"] == "auth_abuse"
+    assert block["action_type"] == "waf_block_ip" and block["detail"].startswith("203.0.113.9 ")

@@ -20,6 +20,24 @@ describe('lecture Prometheus (score ML + santé)', () => {
     ])
   })
 
+  it('front relevé par Prometheus ; répliques agrégées : up seulement si toutes répondent', () => {
+    const up = (job: string, instance: string, v: string) => ({ metric: { __name__: 'up', job, instance }, value: [1761037200, v] })
+    const raw = {
+      status: 'success',
+      data: { resultType: 'vector', result: [
+        up('front', 'front:8080', '1'),
+        up('payment-api', '172.31.0.8:8001', '1'),
+        up('payment-api', '172.31.0.9:8001', '0'),
+        up('payment-api', '172.31.0.12:8001', '1'),
+      ] },
+    }
+    const h = healthMessage(raw)
+    expect(h?.kind === 'health' && h.services).toEqual([
+      { name: 'front', status: 'up', detail: undefined },
+      { name: 'payment-api', status: 'down', detail: '1/3 répliques injoignables' },
+    ])
+  })
+
   it('réponses invalides ou vides -> rien (jamais d’exception)', () => {
     for (const raw of [null, 'x', {}, { status: 'error' }, { status: 'success', data: { result: [{ metric: {}, value: ['t', 'nan'] }] } }]) {
       expect(vectorSamples(raw)).toEqual([])

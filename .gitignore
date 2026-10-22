@@ -62,5 +62,9 @@ ml/training/data/*.tmp
 attacks/.runlog
 attacks/.run.pid
 
+# Graphe de connaissance local (graphify) — régénérable
+graphify-out/
+# Résultats du banc de latence de détection (make bench)
+bench-detection*.json
 # Artefacts de recette live (logs, captures d anomalies)
 .testrun/

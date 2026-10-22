@@ -1,4 +1,9 @@
+# Scripts exécutés sous Linux (WSL, conteneurs) : toujours LF, même avec core.autocrlf=true
+*.sh          text eol=lf
+*.py          text eol=lf
+scripts/verify_tx text eol=lf
+Makefile      text eol=lf
+# Fichiers chiffrés SOPS : octets exacts (MAC + date sops_lastmodified), jamais de CRLF
+security/sops/*.enc.env text eol=lf
 # Script monté tel quel dans un conteneur Linux (bind mount) : LF obligatoire même sous autocrlf Windows.
 infra/mosquitto/entrypoint.sh text eol=lf
-# Scripts shell exécutés par bash (Git Bash / WSL / conteneurs) : LF obligatoire.
-*.sh text eol=lf

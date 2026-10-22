@@ -2,12 +2,12 @@
 # Build depuis la RACINE du dépôt :
 #   docker build -f ml/collector/Dockerfile -t resilience/collector .
 FROM python:3.12-slim AS builder
-ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 COPY libs/python/resilience_common /tmp/resilience_common
 COPY ml/collector/requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt "/tmp/resilience_common[fastapi]"
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/requirements.txt "/tmp/resilience_common[fastapi]"
 
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \

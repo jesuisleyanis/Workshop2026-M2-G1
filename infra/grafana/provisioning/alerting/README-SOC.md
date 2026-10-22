@@ -8,10 +8,15 @@ d'équipe (ADR, ROADMAP) : SOC = règles Grafana/Loki, pas de Wazuh par défaut.
 
 | uid | incident_type | Signal (PromQL) | Seuil |
 |---|---|---|---|
-| `soc-auth-abuse` | `auth_abuse` | `rate(resilience_auth_logins_total{result="failed"}[1m])` | > 5/s |
-| `soc-service-flood` | `service_flood` | `rate(resilience_http_requests_total{service="payment-api",status=~"5.."}[1m])` | > 2/s |
-| `soc-waf-blocks` | `web_attack` | `rate(resilience_waf_blocked_total[1m])` | > 1/s |
-| `soc-data-corruption` | `data_corruption` | `rate(resilience_db_errors_total[1m])` | > 0 |
+| `soc-auth-abuse` | `auth_abuse` | `rate(resilience_auth_logins_total{result="failed"}[30s])` | > 5/s |
+| `soc-service-flood` | `service_flood` | `rate(resilience_http_requests_total{service="payment-api",status=~"5.."}[30s])` | > 2/s |
+| `soc-waf-blocks` | `web_attack` | `rate(resilience_waf_blocked_total[30s])` | > 1/s |
+| `soc-data-corruption` | `data_corruption` | `rate(resilience_db_errors_total[30s])` | > 0 |
+
+Toutes les règles : `for: 10s`, évaluées toutes les 10 s (Grafana) / 5 s (Prometheus) ; Alertmanager
+`group_wait: 1s`. Chemin de **secours** : le chemin principal (detector ML) détecte en quelques secondes
+(docs/plan-amelioration-detection.md). Remise à zéro de l'état Grafana en cas de boucle de démarrage
+(`UNIQUE constraint failed: alert_rule_version`) : `make reset-grafana` (tout est reprovisionné).
 
 Couverture : **les 4 `incident_type`** de `remediation/decision_table.yml` ont une règle SOC
 correspondante (vérifié par `infra/tests/test_soc_rules.py`). Chaque règle porte le label

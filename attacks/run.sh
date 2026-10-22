@@ -201,9 +201,16 @@ case "${SCENARIO}" in
     # Le flood doit atteindre la DB : jeton valide et ids de compte ENTIERS (contrat
     # payment-api, StrictInt). Sans eux il ne produit que des 401/422 rejetés avant
     # Postgres, une signature fausse pour le ML. 1 centime : le solde tient tout le flood.
-    TOKEN="$(login_token "${FLOOD_USER:-demo01}" "${FLOOD_PASSWORD:-demo-pass-01}")"
+    # Comptes du jeu fictif (resilience_db.seed) : mot de passe commun SEED_PASSWORD (.env) —
+    # jamais en dur (les anciens `demo-pass-0N` n'existent plus : flood sans jeton = 401).
+    FLOOD_PASSWORD="${FLOOD_PASSWORD:-${SEED_PASSWORD:-}}"
+    if [[ -z "${FLOOD_PASSWORD}" ]]; then
+      echo "service_flood : SEED_PASSWORD absent (lancer via make attack, ou exporter SEED_PASSWORD / FLOOD_PASSWORD)" | tee -a "${RUNLOG}"
+      rm -f "${PIDFILE}"; exit 1
+    fi
+    TOKEN="$(login_token "${FLOOD_USER:-demo01}" "${FLOOD_PASSWORD}")"
     SRC_ID="$( [[ -n "${TOKEN}" ]] && first_account_id "${TOKEN}" || true)"
-    DST_ID="${FLOOD_DST_ID:-$(first_account_id "$(login_token "${FLOOD_DST_USER:-demo02}" "${FLOOD_DST_PASSWORD:-demo-pass-02}")")}"
+    DST_ID="${FLOOD_DST_ID:-$(first_account_id "$(login_token "${FLOOD_DST_USER:-demo02}" "${FLOOD_DST_PASSWORD:-${FLOOD_PASSWORD}}")")}"
     if [[ -z "${SRC_ID}" || -z "${DST_ID}" ]]; then
       echo "service_flood : login ou lecture des comptes impossible sur ${TARGET} (make seed ?)" | tee -a "${RUNLOG}"
       rm -f "${PIDFILE}"; exit 1

@@ -103,6 +103,41 @@ def test_register_is_rate_limited_after_threshold(client):
     assert r.json()["error"]["code"] == "rate_limited"
 
 
+def test_verification_ip_is_exempt_but_attackers_are_not(engine, registered):
+    # verify_tx de la remédiation (IP interne fixe) : jamais bloqué, même après durcissement.
+    # Constaté le 21/10 : tighten_rate_limit x5 -> la preuve de reprise échouait au login (escalades).
+    from fastapi.testclient import TestClient
+
+    from auth_service.config import Settings
+    from auth_service.main import create_app
+    from authkit import JWT_SECRET
+
+    settings = Settings(jwt_secret=JWT_SECRET, internal_token=INTERNAL_TOKEN, login_rate_limit="3/minute",
+                        run_migrations=False, rate_limit_exempt_ips=("172.31.0.20",))
+    client = TestClient(create_app(settings, engine))
+    client.post("/internal/tighten-rate-limit", json={"factor": 0.1}, headers=HDR)
+    assert 429 not in _hammer(client, 6, headers={"X-Forwarded-For": "172.31.0.20"})
+    # l'attaquant (passerelle Docker, ou spoof de l'IP exemptée à gauche de X-Forwarded-For) reste limité
+    assert _hammer(client, 3, headers={"X-Forwarded-For": "172.31.0.1"})[-1] == 429
+    assert _hammer(client, 3, headers={"X-Forwarded-For": "172.31.0.20, 172.31.0.1"})[-1] == 429
+
+
+def test_tightened_limit_restores_itself_after_the_attack():
+    from auth_service.ratelimit import DynamicRateLimit
+
+    now = [0.0]
+    rate = DynamicRateLimit("10/minute", restore_after_s=300, clock=lambda: now[0])
+    rate.tighten(0.5)
+    rate.tighten(0.5)
+    assert rate.value == "2/minute"
+    now[0] = 299
+    assert rate.value == "2/minute"
+    now[0] = 300  # plus de durcissement depuis 5 min : retour à la limite de base, sans humain
+    assert rate.value == "10/minute"
+    assert rate.cost() == DynamicRateLimit("10/minute").cost(), "coût slowapi restauré aussi"
+    assert DynamicRateLimit("10/minute", restore_after_s=0).tighten(0.5)[1] == "5/minute"  # 0 = jamais
+
+
 def test_tightening_keeps_attempts_already_spent(client, registered):
     """Le resserrement ne remet pas le compteur à zéro (la clé slowapi inclut la limite)."""
     assert _hammer(client, 2) == [401, 401]  # 2 essais sur 3

@@ -149,9 +149,13 @@ Chaque service Python expose `/metrics` via `prometheus-fastapi-instrumentator`.
 
 Infrastructure complémentaire scrappée par Prometheus : **cAdvisor** (CPU/RAM par conteneur) et **postgres-exporter** (santé DB).
 
-### Vecteur de features consommé par le ML (fenêtre de 15 s)
+### Vecteur de features consommé par le ML (fenêtre de 5 s, un vecteur par seconde)
 
-Le `collector` interroge l'API Prometheus et construit ce vecteur ordonné (voir `ml/shared/features.py` comme source de vérité) :
+Le `collector` interroge l'API Prometheus chaque seconde (`COLLECT_INTERVAL_SECONDS=1`, `rate(...[5s])`,
+`PROM_RATE_WINDOW=5s` ; les services sont scrapés à 1 s) et construit ce vecteur ordonné. Le detector le reçoit dès
+sa collecte (attente longue `GET /api/v1/features?after=<seq>&wait=5`) et confirme une anomalie sur 2 vecteurs
+consécutifs au-dessus du seuil calibré, ou 1 seul au-dessus du seuil haut. Changer ces fenêtres impose de recapturer
+et recalibrer le modèle. Ordre (voir `ml/shared/features.py` comme source de vérité) :
 
 ```
 [ req_per_s, p95_latency_ms, ratio_4xx, ratio_5xx,
@@ -190,9 +194,17 @@ Le `detector` émet cet objet JSON vers le moteur de remédiation (HTTP `POST /e
   "evidence": {
     "prometheus_query": "rate(resilience_http_requests_total[1m])",
     "loki_query": "{service=\"payment-api\"} |= \"http_status\""
-  }
+  },
+  "source_ip": "192.168.137.42"
 }
 ```
+
+**`source_ip` (champ additif, optionnel)** : IP qui domine les logs d'accès du WAF (Loki, `client_ip`) sur les
+30 dernières secondes, filtrés selon le type (flood : toutes les requêtes ; `auth_abuse` : logins en 401/429 ;
+`web_attack` : 403). Renseignée par le detector seulement si elle pèse ≥ 60 % des lignes (et ≥ 5 lignes) ; absente
+(`null`) sinon, et toujours pour `data_corruption` / `unknown`. Une seule IP littérale validée (jamais de nom ni de
+réseau). Elle est la cible des actions `source: "from_event"` (`waf_block_ip`, `waf_blacklist_ip`) ; sans elle, ces
+actions échouent proprement et l'action suivante de la règle s'exécute. Rétro-compatible : `schema_version` inchangée.
 
 ### `incident_type` (énumération figée)
 
@@ -256,6 +268,12 @@ rules:
     verify: verify_tx
     escalation: notify_operator
 ```
+
+**`verify_first` (booléen optionnel, défaut `false`)** : `verify_tx` est joué AVANT toute action ; s'il passe,
+l'attaque est contenue par les protections préventives (limitation de débit et ModSecurity du WAF) et
+l'incident est clos sans action modifiante. Activé pour `service_flood` et `web_attack` (sinon : redémarrages
+en boucle pendant un flood déjà écrêté — 12 en 20 min le 21/10 — et `web_attack` jamais clos). Jamais pour
+`data_corruption` : une corruption ne se « contient » pas.
 
 ### Catalogue d'actions (implémentées dans `remediation/actions/`)
 

@@ -33,7 +33,7 @@ def test_front_upstream_matches_front_container_port():
 
 def test_api_upstreams_target_service_ports():
     conf = _directives(NGINX)
-    assert re.search(r"upstream\s+payment_api\s*\{\s*server\s+payment-api:8001;", conf)
+    assert re.search(r"upstream\s+payment_api\s*\{[^}]*server\s+payment-api:8001\b", conf)
     assert re.search(r"upstream\s+auth_api\s*\{\s*server\s+auth:8002;", conf)
 
 
@@ -69,10 +69,12 @@ def test_only_public_routes_are_proxied():
         "= /api/v1/status", "/api/v1/beneficiaries", "= /api/v1/stats/spending", "= /api/v1/limits",
         "/api/v1/cards", "/api/v1/scheduled-transfers", "/api/v1/notifications", "= /api/v1/statements",
         "/api/v1/login", "/api/v1/register", "= /api/v1/auth/step-up",
-        "^~ /api/v1/auth/", "^~ /api/v1/admin/",
+        "^~ /api/v1/auth/", "^~ /api/v1/admin/", "= /metrics",
     }
+    # /metrics n'apparaît que comme REFUS explicite (404), jamais comme route vers un service.
+    routed = PUBLIC_SERVER.replace("location = /metrics { return 404; }", "")
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
-        assert forbidden not in _directives(NGINX), f"{forbidden} ne doit jamais être routé par le WAF"
+        assert forbidden not in routed, f"{forbidden} ne doit jamais être routé par le WAF"
 
 
 def test_public_server_returns_404_on_host_only_prefixes():
@@ -247,7 +249,9 @@ def test_transaction_detail_is_rate_limited_but_transfers_are_not():
     assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
     assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=tx_detail_per_ip:\d+m\s+rate=\d+r/m;", conf)
     prefix = re.search(r"location /api/v1/transactions\s+\{([^}]*)\}", conf)
-    assert prefix and "limit_req" not in prefix.group(1), "ne pas étouffer service_flood au WAF"
+    # Le virement (POST, cible légitime de service_flood) ne subit PAS la limite par IP du détail :
+    # seule la zone globale `api` (écrêtage préventif large, 30 r/s) s'y applique.
+    assert prefix and "tx_detail_per_ip" not in prefix.group(1), "ne pas étouffer service_flood au WAF"
 
 
 def test_limits_route_is_exact_rate_limited_and_read_only():
@@ -278,9 +282,20 @@ def test_public_status_route_is_exact_rate_limited_and_read_only():
 
 # --------------------------------------------------------------------------- #6 Dockerfile / non-root / TLS
 def test_dockerfile_is_pinned_owasp_crs_nginx_and_non_root():
-    assert re.search(r"^FROM owasp/modsecurity-crs:\d+\.\d+\.\d+-nginx-alpine", DOCKERFILE, re.M), "image CRS épinglée"
+    assert re.search(r"^FROM owasp/modsecurity-crs:\d+\.\d+\.\d+-nginx-alpine\S*@sha256:[0-9a-f]{64}$", DOCKERFILE, re.M), (
+        "image CRS épinglée par tag ET digest (un tag peut être republié, R5)"
+    )
     assert re.search(r"^USER nginx\s*$", DOCKERFILE, re.M), "le WAF tourne en utilisateur non-root"
     assert "ENTRYPOINT" not in DOCKERFILE and "CMD [" not in DOCKERFILE, "l'entrypoint de l'image (ModSec/CRS) doit rester actif"
+
+
+def test_entrypoint_scripts_patching_the_removed_default_conf_are_dropped():
+    # conf.d/default.conf est supprimé (nginx.conf du projet fait foi) : les scripts de l'image qui le
+    # modifient sous `set -e` (93 PROXY_SSL, 96 HTTP3) feraient échouer le démarrage du WAF.
+    assert "/etc/nginx/conf.d/*.conf" in DOCKERFILE
+    for script in ("93-update-proxy-ssl-config.sh", "96-update-http3-config.sh"):
+        removed = [line for line in DOCKERFILE.splitlines() if "rm -f" in line and f"/docker-entrypoint.d/{script}" in line]
+        assert removed, f"{script} doit être retiré de l'image"
 
 
 def test_tls_certificate_generated_at_build_and_used_by_nginx():
@@ -368,6 +383,46 @@ def test_waf_exporter_image_is_non_root_and_bundles_shared_lib():
     assert 'CMD ["python", "/app/waf_exporter.py"]' in EXPORTER_DOCKERFILE
 
 
+def test_api_routes_are_rate_limited_by_the_waf():
+    # Protection préventive de la disponibilité, indépendante de l'IP (masquée sous Docker Desktop).
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone \$binary_remote_addr zone=api:\d+m rate=\d+r/s;", conf)
+    assert "limit_req_status 429;" in conf
+    # Routes PUBLIQUES (serveur 8443) ; le listener hôte 9443 du back-office (loopback) n'est pas concerné.
+    for route in ("/api/v1/accounts", "/api/v1/transactions", "/api/v1/login", "/api/v1/register", "= /api/v1/auth/step-up"):
+        line = next(ln for ln in PUBLIC_SERVER.splitlines() if f"location {route}" in ln)
+        assert "limit_req zone=api" in line, route
+    # /healthz (sonde du WAF) n'est jamais limitée
+    assert "limit_req" not in next(ln for ln in NGINX.splitlines() if "location = /healthz" in ln)
+
+
+def test_payment_api_replicas_are_load_balanced_with_failover_but_no_post_replay():
+    conf = _directives(NGINX)
+    block = re.search(r"upstream\s+payment_api\s*\{([^}]*)\}", conf).group(1)
+    assert "least_conn;" in block and "zone payment_api" in block
+    # `resolve` : nouvelles IP des répliques (restart, scale) suivies sans recharger nginx
+    assert re.search(r"server payment-api:8001 resolve max_fails=\d+ fail_timeout=\d+s;", block)
+    assert re.search(r"resolver 127\.0\.0\.11 ", conf)
+    for route in ("/api/v1/accounts", "/api/v1/transactions"):
+        line = next(ln for ln in NGINX.splitlines() if f"location {route}" in ln)
+        assert "proxy_next_upstream error timeout http_502 http_503;" in line, route
+        assert "non_idempotent" not in line, "un virement (POST) ne doit jamais être rejoué en double"
+        assert "proxy_connect_timeout 2s;" in line, "réplique morte abandonnée avant le timeout client"
+
+
+def test_real_ip_trust_is_generated_empty_by_default_and_applied_before_blocking():
+    # include realip AVANT le geo de blocage : en mode IP réelle, le blocage vise le vrai client.
+    conf = _directives(NGINX)
+    assert conf.index("include /etc/nginx/conf/realip.conf;") < conf.index("geo $blocked_source")
+    script = (WAF / "docker-entrypoint.d" / "06-trust-forwarded.sh").read_text(encoding="utf-8")
+    assert "WAF_TRUST_FORWARDED_FROM" in script and "real_ip_header X-Forwarded-For;" in script
+    assert "grep -Eq '^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'" in script  # IP/CIDR littérale : aucune injection
+    assert "06-trust-forwarded.sh /docker-entrypoint.d/06-trust-forwarded.sh" in DOCKERFILE
+
+
+def test_metrics_is_never_reachable_through_the_waf():
+    # `location /` transmet tout au front, qui sert un /metrics interne (sonde Prometheus) : refus explicite.
+    assert "location = /metrics { return 404; }" in _directives(NGINX)
 
 def test_plain_http_only_redirects_to_https_and_hsts_is_sent():
     conf = _directives(NGINX)

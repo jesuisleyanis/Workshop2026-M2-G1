@@ -14,6 +14,7 @@
 | Limites ressources | `mem_limit` par service ; `cpus` sur les services Python (ancre `x-pylimits`) — 16 Go partagés | compose |
 | Healthcheck | `/health` sur chaque service ; `HEALTHCHECK` dans le Dockerfile | Dockerfile |
 | Réseau | services internes sur `app`/`data`/`obs` ; `data` en `internal: true` ; **seuls le WAF (80/443, 9443 en loopback) et mosquitto (1883 sur l'IP hotspot)** publient des ports | `audit.sh` |
+| Contexte de build | `.dockerignore` racine : `.env`, clés age, `.git`, `.venv`, caches exclus du contexte des 8 images construites depuis la racine — un `COPY` trop large ne peut pas embarquer de secret déchiffré | `infra/tests/test_launch_contract.py` |
 | Secrets | via SOPS uniquement, injectés en env au runtime ; aucun secret applicatif en image. **Exception de labo** : le certificat TLS auto-signé du WAF est généré au build et figé dans une couche (clé privée partagée entre instances) — acceptable pour une démo, à régénérer au démarrage en production | gitleaks + `audit.sh` |
 
 ## Cas particulier : Postgres sous `cap_drop: ALL` (ticket #11)
@@ -37,7 +38,8 @@ doit être recréé (`docker compose down -v` puis `make up`) ; les playbooks (`
 ## Moteur de remédiation — modèle de privilèges (critique)
 
 - **Jamais** de montage direct de `/var/run/docker.sock` dans le conteneur de remédiation : ce serait un accès root-équivalent sur l'hôte.
-- Accès Docker **médié par `docker-socket-proxy`** (HAProxy, `remediation/proxy/haproxy.cfg`, ADR 0002) : liste blanche stricte de 5 couples méthode/chemin (`GET _ping`, `GET containers/json`, `GET containers/{id}/json`, `POST containers/{id}/restart`, `POST containers/{id}/kill?signal=HUP`), tout le reste → 403. Le socket est monté en lecture seule **uniquement** dans le proxy.
+- Accès Docker **médié par `docker-socket-proxy`** (HAProxy, `remediation/proxy/haproxy.cfg`, ADR 0002) : liste blanche stricte de 5 couples méthode/chemin (`GET _ping`, `GET containers/json`, `GET containers/{id}/json`, `POST containers/{id}/restart`, `POST containers/{id}/kill?signal=HUP`), tout le reste → 403. Le socket est monté en lecture seule **uniquement** dans le proxy. HAProxy tourne en utilisateur `haproxy` (non-root) avec le seul **groupe** propriétaire du socket (`group_add: ["0"]`, pas d'uid 0) : sans lui, chaque appel échouait en 503 et aucun `restart_service` ne pouvait réussir (corrigé le 21/10). Vérifié : `POST /containers/create` reste refusé (403).
+- **Blocage d'IP sous Docker Desktop** : le WAF voit tous les clients externes avec l'IP d'une passerelle Docker. Les réseaux du WAF ont des sous-réseaux fixes, entièrement protégés par `NEVER_BLOCK_IPS` (plages CIDR) et exclus de la désignation d'IP source par le detector : un blocage ne peut ni couper tous les clients, ni viser un service interne (la remédiation s'était bloquée elle-même via son trafic `verify_tx`).
 - API `/events` du moteur **authentifiée** (token `REMEDIATION_TOKEN`), service **non exposé** sur `edge`.
 - Garde-fous applicatifs : `cooldown`, `max_attempts`, `dry_run` (voir `remediation/decision_table.yml`).
 - **Racine en lecture seule** (`read_only: true`, comme payment-api/auth) : les seuls points inscriptibles sont `/tmp` (tmpfs, artefacts ansible-runner) et le **volume nommé `remediation-journal`** monté sur `/var/lib/remediation`. Le journal d'incidents SQLite **survit donc au redémarrage** du conteneur, conformément à la CDC §5.4 (ticket #22).
