@@ -16,7 +16,13 @@ USER root
 # (ModSecurity + CRS), inclus par notre nginx.conf.
 RUN set -eux; \
     rm -f /etc/nginx/templates/nginx.conf.template; \
-    rm -rf /etc/nginx/templates/conf.d /etc/nginx/conf.d/*.conf
+    rm -rf /etc/nginx/templates/conf.d /etc/nginx/conf.d/*.conf; \
+    # Les scripts d'entrypoint de l'image (93-update-proxy-ssl-config, 96-update-http3-config)
+    # font un `sed -i` sur conf.d/default.conf en `set -eu` : sans ce fichier ils sortent en
+    # erreur et font planter l'entrypoint (crash-loop). Notre nginx.conf n'inclut PAS conf.d/,
+    # donc un fichier vide satisfait ces `sed` tout en restant inerte (jamais chargé par nginx).
+    : > /etc/nginx/conf.d/default.conf; \
+    chown nginx:nginx /etc/nginx/conf.d/default.conf
 
 # Certificat TLS AUTO-SIGNÉ généré au build (labo fermé, jamais commité). Déposé là où le script
 # `generate-certificate` de l'image le cherche : il détecte la clé et ne régénère rien au démarrage.
