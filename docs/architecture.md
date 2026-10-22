@@ -4,37 +4,67 @@
 
 ## Vue logique
 
-```
-                        ┌─────────────────────────── PC Hôte (192.168.137.1) ───────────────────────────┐
-  PC Attaquant          │                                                                                │
-  (banc d'essai) ──443──►  WAF (Nginx + ModSecurity + CRS)   [edge — seul HTTP exposé]                    │
-                        │        │                                                                        │
-                        │        ├──► front (React/Vite)            [app]                                 │
-                        │        ├──► payment-api (FastAPI) ──┐                                            │
-                        │        └──► auth (FastAPI) ─────────┤                                            │
-                        │                                     ▼                                            │
-                        │                         postgres [data — internal]  ◄── pg-exporter             │
-                        │                                                                                  │
-                        │  Observabilité [obs] :                                                           │
-                        │   payment-api/auth ─logs JSON─► promtail ─► loki ──┐                             │
-                        │   services ─métriques─► prometheus ◄─ cadvisor     │                             │
-                        │                           │                        ▼                             │
-                        │                           │                 grafana (dashboards + SOC rules)      │
-                        │                           │                 alertmanager ──┐                     │
-                        │                           ▼                                 │                     │
-                        │   collector ─features─► detector (ML, IsolationForest)      │                     │
-                        │                              │                              │                     │
-                        │                   AnomalyEvent (contrat §3)                 │                     │
-                        │                              ▼                              ▼                     │
-                        │                   Moteur de remédiation (FastAPI)  [app, non exposé]              │
-                        │                     │  table de décision §4                                      │
-                        │                     ├─► docker-socket-proxy ─► restart conteneur                 │
-                        │                     ├─► Ansible ─► block IP WAF / restore pg_dump                │
-                        │                     ├─► verify_tx (boucle de vérification)                       │
-                        │                     └─► SSE ─► dashboard (timeline, MTTD/MTTR)                   │
-                        │                                                                                   │
-                        │  assistant RAG (Ollama ≤8B + LangChain + Chroma)  [ai, optionnel sur PC IA]      │
-                        └───────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    ATT["🖥️ PC Attaquant<br/>(banc d'essai)"] -->|HTTPS 443| WAF
+
+    subgraph edge["réseau edge — seul HTTP exposé (80/443)"]
+        WAF["WAF<br/>Nginx + ModSecurity + CRS"]
+    end
+
+    subgraph app["réseau app — interne"]
+        FRONT["front (React/Vite)"]
+        PAY["payment-api (FastAPI)"]
+        AUTH["auth (FastAPI)"]
+        COL["collector"]
+        DET["detector<br/>ML · IsolationForest"]
+        REM["Moteur de remédiation (FastAPI)<br/>table de décision §4"]
+        PROXY["docker-socket-proxy"]
+        DASH["dashboard"]
+    end
+
+    subgraph data["réseau data — internal:true"]
+        PG[("postgres")]
+        PGEXP["pg-exporter"]
+    end
+
+    subgraph obs["réseau obs — internal:true"]
+        PROMTAIL["promtail"]
+        LOKI["loki"]
+        PROM["prometheus"]
+        CAD["cadvisor"]
+        GRAF["grafana<br/>dashboards + SOC rules"]
+        ALERT["alertmanager"]
+    end
+
+    subgraph ai["réseau ai — optionnel (PC IA)"]
+        ASSIST["assistant RAG<br/>Ollama ≤8B + LangChain + Chroma"]
+    end
+
+    WAF --> FRONT & PAY & AUTH
+    PAY --> PG
+    AUTH --> PG
+    PGEXP -.-> PG
+    PAY -. logs JSON .-> PROMTAIL
+    AUTH -. logs JSON .-> PROMTAIL
+    PROMTAIL --> LOKI
+    PAY -. métriques .-> PROM
+    AUTH -. métriques .-> PROM
+    CAD -. métriques .-> PROM
+    PROM --> GRAF
+    PROM --> COL
+    COL -->|features §2| DET
+    DET -->|AnomalyEvent §3| REM
+    PROM --> ALERT -->|webhook SOC| REM
+    REM -->|restart conteneur| PROXY
+    REM -->|block IP WAF / restore pg_dump| ANS["Ansible"]
+    REM -->|boucle de vérification| VTX["verify_tx"]
+    REM -.->|SSE : timeline, MTTD/MTTR| DASH
+
+    classDef exposed fill:#fde2e2,stroke:#c0392b,color:#000
+    classDef internal fill:#e8f0fe,stroke:#3367d6,color:#000
+    class WAF exposed
+    class PG,PROM,LOKI,GRAF,ALERT internal
 ```
 
 ## Composants et responsabilités
