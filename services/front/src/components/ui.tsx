@@ -119,6 +119,7 @@ export function AccountCard({
   const dims = { lg: 'h-[156px] w-[272px] p-5', md: 'h-[142px] w-[250px] p-[18px]', sm: 'h-[116px] w-[210px] p-4 rounded-[20px]' }[size]
   const amount = { lg: 'text-2xl', md: 'text-[22px]', sm: 'text-xl' }[size]
   const name = accountName(account.id)
+  // Sélection dessinée DANS la carte (ombre inset) : un outline extérieur était rogné par le carrousel défilant.
   return (
     <button
       type="button"
@@ -126,7 +127,9 @@ export function AccountCard({
       aria-pressed={selected === undefined ? undefined : selected}
       aria-label={`${name}, solde ${formatMoney(account.balance, account.currency)}`}
       style={{ background: accountGradient(index) }}
-      className={`relative flex flex-none snap-start flex-col justify-between overflow-hidden rounded-3xl border-0 text-left text-white shadow-[0_18px_30px_-18px_rgba(18,19,22,.65)] outline-offset-[3px] ${dims} ${selected ? 'outline-[3px] outline-ink outline-solid' : ''}`}
+      className={`relative flex flex-none snap-start flex-col justify-between overflow-hidden rounded-3xl border-0 text-left text-white outline-offset-[3px] ${dims} ${
+        selected ? 'shadow-[inset_0_0_0_3px_var(--color-violet),0_18px_30px_-18px_rgba(18,19,22,.65)]' : 'shadow-[0_18px_30px_-18px_rgba(18,19,22,.65)]'
+      }`}
     >
       <span aria-hidden className="absolute -top-[70px] -right-[50px] h-[210px] w-[210px] rounded-full border border-white/10" />
       <span aria-hidden className="absolute -top-[30px] -right-2.5 h-[130px] w-[130px] rounded-full border border-white/[.07]" />
