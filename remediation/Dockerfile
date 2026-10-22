@@ -49,8 +49,8 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 RUN groupadd --system --gid 10001 remediation \
  && useradd --system --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin remediation \
- && mkdir -p /var/lib/remediation /opt/backups /etc/resilience/waf-deny \
- && chown 10001:10001 /var/lib/remediation \
+ && mkdir -p /var/lib/remediation/export /opt/backups /etc/resilience/waf-deny \
+ && chown -R 10001:10001 /var/lib/remediation \
  # Point de montage du volume `waf-deny` partagé avec le WAF (gid 101 = groupe nginx du WAF) :
  # si ce conteneur initialise le volume, le WAF (uid 101) doit pouvoir y créer/lire le fichier.
  && chown 10001:101 /etc/resilience/waf-deny && chmod 2775 /etc/resilience/waf-deny
@@ -62,7 +62,8 @@ COPY remediation/actions /app/actions
 # Plan d'exécution : script de vérification + playbooks de remédiation (lecture seule).
 COPY --chmod=0755 scripts/verify_tx /opt/scripts/verify_tx
 COPY infra/ansible/playbooks/remediation /opt/ansible/project
-# Seul point inscriptible : le journal d'incidents (volume dédié).
+# Seul point inscriptible : le journal d'incidents (volume dédié) ; export/ = copie JSON pour
+# l'assistant (export_journal.py), volume nommé `incidents-export` en Compose.
 VOLUME ["/var/lib/remediation"]
 USER 10001:10001
 EXPOSE 8005

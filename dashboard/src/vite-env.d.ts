@@ -9,4 +9,6 @@ interface ImportMetaEnv {
   readonly VITE_STREAM_SOURCE?: string
   /** "true" : boutons de déclenchement aussi en flux réel hors dev (mock uniquement). */
   readonly VITE_LIVE_TRIGGERS?: string
+  /** URL de l'UI de l'assistant RAG (iframe), avec slash final. */
+  readonly VITE_ASSISTANT_URL?: string
 }

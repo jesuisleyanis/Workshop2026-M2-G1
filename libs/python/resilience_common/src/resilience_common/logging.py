@@ -45,6 +45,7 @@ NORMALIZED_EVENTS = frozenset(
         "remediation_action",
         "remediation_verified",
         "remediation_failed",
+        "remediation_manual_action",
     }
 )
 

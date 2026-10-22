@@ -21,7 +21,7 @@ PROFILES_DEMO := --profile demo --profile ml
 PROFILES_FULL := $(PROFILES_DEMO) --profile full
 PROFILES_ALL  := $(PROFILES_FULL) --profile iot --profile attack --profile ai
 
-.PHONY: help up up-full up-iot build start start-full ui caddy ps down reset-grafana check-env seed verify demo attack stop-attack reset \
+.PHONY: help up up-full up-iot build start start-full ui caddy ps down reset-grafana check-env seed verify demo attack stop-attack reset assistant-reindex \
         test test-py test-front audit package decrypt model retrain-detector bench \
         traffic train capture-baseline capture-attack capture-remote calibrate ml-tools test-ml
 
@@ -148,6 +148,11 @@ stop-attack: ## Kill-switch des scénarios
 
 reset: ## Remet la cible à l'état "avant"
 	attacks/reset.sh
+
+assistant-reindex: ## Exporte le journal d'incidents puis ré-indexe l'assistant (profil ai)
+	$(COMPOSE) exec remediation python export_journal.py
+	$(COMPOSE) --profile ai exec assistant python -m app.indexer
+	$(COMPOSE) --profile ai restart assistant
 
 # ---- ML : ré-entraînement sur vraies séries Prometheus (ml/training/README.md §6) ----
 traffic: ## Trafic légitime réaliste (DURATION=60m) — baseline et temps 1 de la démo

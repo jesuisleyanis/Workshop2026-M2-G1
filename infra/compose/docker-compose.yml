@@ -30,7 +30,7 @@ networks:
       config:
         - subnet: 172.30.0.0/24
           gateway: 172.30.0.1
-  app:   # non `internal` : seul réseau avec sortie (pull d'images, modèles Ollama). Aucun `ports:`.
+  app:   # non `internal` : sortie (pull d'images). Aucun `ports:`.
     ipam:
       config:
         - subnet: 172.31.0.0/24
@@ -39,6 +39,8 @@ networks:
     internal: true
   obs:
     internal: true   # observabilité : aucun besoin de sortie Internet (P4S-02)
+  ai:    # assistant + ollama (+ dashboard pour le proxy /assistant/) : isolés du moteur de remédiation.
+         # Non `internal` : Ollama tire ses modèles, OLLAMA_BASE_URL peut viser un PC IA externe.
 
 # Secret Compose alimenté depuis .env (SOPS) : monté en fichier dans Alertmanager (credentials_file),
 # jamais écrit dans alertmanager.yml (fichier versionné).
@@ -57,6 +59,7 @@ volumes:
   loki-data:
   chroma-data:
   ollama-models:
+  incidents-export:      # remediation (rw, export_journal.py) -> assistant (ro)
 
 services:
 
@@ -411,11 +414,12 @@ services:
       - waf-deny:/etc/resilience/waf-deny:rw                 # écrite par waf_deny_ip.yml
       - ../../infra/ansible/backups:/opt/backups:ro          # dumps sains (pg_backup.yml côté hôte)
       - remediation-journal:/var/lib/remediation:rw          # journal d'incidents SQLite (persistant, survit au redémarrage)
+      - incidents-export:/var/lib/remediation/export         # copie JSON du journal pour l'assistant (export_journal.py)
     group_add: ["101"]         # groupe nginx du WAF : droit d'écrire dans le volume waf-deny
     depends_on:
       docker-socket-proxy: { condition: service_started }
       postgres: { condition: service_healthy }
-    # Racine en lecture seule (CDC §5.4) : seuls points inscriptibles = volume journal, volume
+    # Racine en lecture seule (CDC §5.4) : seuls points inscriptibles = volume journal (+ export), volume
     # waf-deny partagé, et /tmp (tmpfs) pour les artefacts ansible-runner (ANSIBLE_HOME/LOCAL_TEMP/PRIVATE_DATA_DIR).
     read_only: true
     tmpfs: ["/tmp"]            # artefacts ansible-runner
@@ -434,11 +438,12 @@ services:
     # écritures (déblocage d'IP) : jeton OPÉRATEUR saisi par l'humain, relayé, jamais connu de ce conteneur.
     # /prometheus/api/v1/query -> prometheus:9090 (score ML + santé, GET lecture seule).
     # VITE_* sont des build-args Vite, pas des variables runtime : la base /remediation est le défaut du build.
-    networks: [app]
+    networks: [app, ai]   # ai : proxy /assistant/ (l'assistant n'est pas sur `app`)
     environment:
       REMEDIATION_UPSTREAM: remediation:8005
       REMEDIATION_AUTH_HEADER: "Bearer ${REMEDIATION_TOKEN}"
       PROMETHEUS_UPSTREAM: prometheus:9090
+      ASSISTANT_UPSTREAM: assistant:8006   # profil ai ; sans lui, /assistant/* répond 502
     depends_on:
       remediation: { condition: service_healthy }
       prometheus: { condition: service_started }
@@ -544,7 +549,7 @@ services:
     <<: *hardening
     image: ollama/ollama:0.3.14
     profiles: [ai]
-    networks: [app]
+    networks: [ai]
     volumes:
       - ollama-models:/root/.ollama
     mem_limit: 8g          # lourd — déporter sur le PC IA si la RAM est serrée
@@ -553,15 +558,26 @@ services:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: assistant/Dockerfile }
     profiles: [ai]
-    networks: [app]
+    # Réseau `ai` seul : aucune route vers remediation:8005 (app) ni postgres (data) ni obs.
+    networks: [ai]
     environment:
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}   # ou http://<IP-PC-IA>:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      FRAME_ANCESTORS: ${DASHBOARD_ORIGIN:-}                      # inutile via /assistant/ (same-origin)
     volumes:
-      - chroma-data:/app/chroma
-      - ../../docs:/app/docs:ro
+      - chroma-data:/data/chroma                                  # seul volume en écriture
+      - ../../docs:/data/docs:ro
+      - ../../remediation/decision_table.yml:/data/remediation/decision_table.yml:ro
+      - incidents-export:/data/incidents:ro                       # produit par `remediation: python export_journal.py`
     depends_on: [ollama]
+    mem_limit: 1g          # chromadb + onnxruntime : 512m insuffisant
+    read_only: true
     tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8006/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
   # ---------------------------------------------------------------- banc d'essai (profil attack)
   attacker:

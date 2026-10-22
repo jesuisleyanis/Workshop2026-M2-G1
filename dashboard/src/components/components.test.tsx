@@ -8,7 +8,7 @@ import { MetricsCards, ScoreCard, VerificationCard } from './MetricsCards'
 import { PhaseBanner } from './PhaseBanner'
 import { ScoreChart, WINDOW_MS, chartPoints } from './ScoreChart'
 import { ServicesGrid } from './ServicesGrid'
-import { derivePhase, initialState, latestIncident, reducer } from '../lib/state'
+import { derivePhase, incidentMttr, initialState, latestIncident, reducer } from '../lib/state'
 import { parseStreamMessage } from '../lib/parse'
 import { FULL_SEQUENCE } from '../test/fixtures'
 import type { DashboardState, Phase, ScoreSample } from '../types/events'
@@ -60,6 +60,24 @@ describe('PhaseBanner - garde AVANT / PENDANT / APRÈS', () => {
     expect(screen.queryByText('Reprise sans intervention humaine')).not.toBeInTheDocument()
     rerender(<PhaseBanner phase="after" incident={latestIncident(play(5))} />)
     expect(screen.getByText('Reprise sans intervention humaine')).toBeInTheDocument()
+  })
+
+  it('action manuelle opérateur : ni « sans intervention humaine », ni MTTR', () => {
+    const msgs: [string, unknown][] = [
+      ['remediation_started', { incident_id: 'm1', ts: '2026-10-22T10:00:00.000Z', incident_type: 'manual_action', service: '203.0.113.9', actions: ['waf_block_ip'] }],
+      ['remediation_verified', { incident_id: 'm1', ts: '2026-10-22T10:00:01.000Z', verify_tx: { ok: true, ts: '2026-10-22T10:00:01.000Z' } }],
+    ]
+    const s = msgs.reduce((st, [name, data]) => {
+      const r = parseStreamMessage(name, JSON.stringify(data))
+      if (!r.ok) throw new Error(r.error)
+      return reducer(st, { type: 'message', message: r.value })
+    }, initialState)
+    const i = latestIncident(s)
+    expect(i?.incidentType).toBe('manual_action')
+    expect(incidentMttr(i!)).toBeNull()
+    render(<PhaseBanner phase="after" incident={i} />)
+    expect(screen.getByTestId('headline')).toHaveTextContent('Action manuelle (opérateur) sur 203.0.113.9')
+    expect(screen.queryByText('Reprise sans intervention humaine')).not.toBeInTheDocument()
   })
 
   it("escalade : PENDANT affiche l'échec et sa raison", () => {

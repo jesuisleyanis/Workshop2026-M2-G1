@@ -51,6 +51,7 @@ Service FastAPI, port interne **8005**. Détail des endpoints dans le [`README.m
 | Endpoint | Auth | Rôle |
 |---|---|---|
 | `POST /events` | Bearer | Admission d'un `AnomalyEvent` → `202` `{incident_id, decision, dry_run, detail}` ; la remédiation tourne en tâche de fond. |
+| `POST /manual-actions` | Bearer | Action **confirmée par un opérateur** depuis le dashboard : liste blanche stricte `waf_block_ip` (`params.source` = IP littérale) / `restart_service` (`params.service`), `reason` optionnel ≤ 200 car. → `200` `{incident_id, action, status, detail}`. Mêmes garde-fous que le moteur (`NEVER_BLOCK_IPS`, `RESTARTABLE_SERVICES`, dry-run) ; refus → `422` sans exécution. Journalisée comme incident `incident_type = manual_action` (timeline SSE + export). **Justification** : laisser l'humain agir vite sur une IP/un service identifié sans ouvrir d'accès générique au catalogue ni contourner les garde-fous et la traçabilité. Jamais appelée par l'assistant. |
 | `POST /events/alertmanager` | Bearer | Webhook Alertmanager → adaptateur → mêmes admissions que `/events` ; `202` `{accepted[], skipped[]}`. |
 | `GET /incidents`, `GET /incidents/{id}` | Bearer | Journal des incidents (actions, vérifications, timeline). |
 | `GET /decision-table` | Bearer | Table de décision chargée. |
@@ -59,7 +60,7 @@ Service FastAPI, port interne **8005**. Détail des endpoints dans le [`README.m
 
 Erreurs : corps `{"error": {"code", "message", "request_id"}}` (contrat « Conventions d'API REST ») ; header `X-Request-ID` propagé.
 
-Logs JSON conformes au contrat §1 (événements `remediation_started`, `remediation_action`, `remediation_verified`, `remediation_failed`) et métriques conformes au contrat §2 : `resilience_remediation_actions_total{action,result}` (`result` ∈ `success|failure|dry_run`), `resilience_mttd_seconds{incident_id}`, `resilience_mttr_seconds{incident_id}`, `resilience_http_requests_total`, `resilience_http_request_duration_seconds`. Les gauges MTTD/MTTR sont bornées aux 20 derniers incidents (cardinalité).
+Logs JSON conformes au contrat §1 (événements `remediation_started`, `remediation_action`, `remediation_verified`, `remediation_failed`, `remediation_manual_action`) et métriques conformes au contrat §2 : `resilience_remediation_actions_total{action,result}` (`result` ∈ `success|failure|dry_run`), `resilience_mttd_seconds{incident_id}`, `resilience_mttr_seconds{incident_id}`, `resilience_http_requests_total`, `resilience_http_request_duration_seconds`. Les gauges MTTD/MTTR sont bornées aux 20 derniers incidents (cardinalité).
 
 ## 4. Table de décision appliquée (contrat §4)
 
@@ -95,7 +96,7 @@ Principe : le moteur est un composant **puissant par nature** (il redémarre des
 ### 5.2 API authentifiée (`REMEDIATION_TOKEN` + `REMEDIATION_OPERATOR_TOKEN`)
 
 - Les routes machine-à-machine et de lecture (`POST /events`, `POST /events/alertmanager`, `GET /incidents`, `GET /incidents/{id}`, `GET /decision-table`, `GET /stream`, `GET /waf/blocked-ips`) exigent le jeton de **service** `Authorization: Bearer <REMEDIATION_TOKEN>`.
-- Les **écritures déclenchées par un humain** (`DELETE /waf/blocked-ips/{ip}`, déblocage depuis le dashboard) exigent le jeton **opérateur** `Bearer <REMEDIATION_OPERATOR_TOKEN>`, distinct : le jeton de service y est refusé (`403 operator_token_required`), car le nginx du dashboard le détient pour ses lectures — sinon tout conteneur du réseau `app` ou processus local parlant à ce nginx écrirait sans secret. Le jeton opérateur n'ouvre aucune autre route (moindre privilège). Absent, < 16 caractères ou égal au jeton de service : routes opérateur en `503 auth_not_configured` (fail closed), le reste de l'API fonctionne.
+- Les **écritures déclenchées par un humain** (`DELETE /waf/blocked-ips/{ip}`, déblocage depuis le dashboard ; `POST /manual-actions`, commande opérateur confirmée) exigent le jeton **opérateur** `Bearer <REMEDIATION_OPERATOR_TOKEN>`, distinct : le jeton de service y est refusé (`403 operator_token_required`), car le nginx du dashboard le détient pour ses lectures — sinon tout conteneur des réseaux `app` / `ai` (assistant, ollama) ou processus local parlant à ce nginx écrirait sans secret. Le jeton opérateur n'ouvre aucune autre route (moindre privilège). Absent, < 16 caractères ou égal au jeton de service : routes opérateur en `503 auth_not_configured` (fail closed), le reste de l'API fonctionne.
 - Comparaison à **temps constant** (`hmac.compare_digest`). Token en query string **refusé** (seul le header est lu).
 - **Fail closed** : si `REMEDIATION_TOKEN` est absent ou plus court que 16 caractères, toutes les routes protégées répondent `503 auth_not_configured` ; `/ready` passe à 503 ; une erreur est loguée au démarrage. Il n'y a **aucune valeur par défaut** pour les secrets.
 - Échec d'authentification : `401 unauthorized` + `WWW-Authenticate: Bearer`, et log `warning` (request_id, IP cliente, méthode, chemin) — sans jamais journaliser le token.
@@ -105,7 +106,7 @@ Principe : le moteur est un composant **puissant par nature** (il redémarre des
 ### 5.3 Jamais exposé sur le réseau `edge`
 
 - Le service est rattaché au **seul réseau `app`** (interne) et n'a **aucun `ports:`**. Seul le WAF est exposé (80/443). Le conteneur écoute sur `0.0.0.0:8005` *à l'intérieur de son namespace réseau* (nécessaire aux autres services du réseau `app`) ; l'exposition réelle est décidée par Compose, pas par le code.
-- Le navigateur ne parle jamais directement au moteur : le dashboard le joint via un reverse-proxy nginx qui n'expose que `GET /remediation/stream` et `GET /remediation/waf/blocked-ips` (lectures : jeton de service injecté par nginx, `REMEDIATION_AUTH_HEADER`, jamais dans le bundle) et `DELETE /remediation/waf/blocked-ips/<ip>` (écriture : nginx n'injecte **rien** et relaie le jeton opérateur saisi par l'humain).
+- Le navigateur ne parle jamais directement au moteur : le dashboard le joint via un reverse-proxy nginx qui n'expose que `GET /remediation/stream` et `GET /remediation/waf/blocked-ips` (lectures : jeton de service injecté par nginx, `REMEDIATION_AUTH_HEADER`, jamais dans le bundle) et les écritures `DELETE /remediation/waf/blocked-ips/<ip>` et `POST /remediation/manual-actions` (`Content-Type: application/json` exigé, liste blanche côté moteur) : nginx n'y injecte **rien** et relaie le jeton opérateur saisi par l'humain.
 
 ### 5.4 Durcissement du conteneur
 

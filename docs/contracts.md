@@ -99,12 +99,16 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `remediation_action` | remediation | Action unitaire exécutée |
 | `remediation_verified` | remediation | `verify_tx` repassé OK après action |
 | `remediation_failed` | remediation | Échec / escalade |
+| `remediation_manual_action` | remediation | Action confirmée par un opérateur (`POST /manual-actions`, incident `manual_action`) |
 | `assistant_index_built` | assistant | Index RAG (re)construit |
-| `assistant_index_empty` | assistant | Aucune source trouvée : index RAG vide |
-| `assistant_store_error` | assistant | Vector store (Chroma) non chargé / en erreur |
+| `assistant_index_empty` | assistant | Indexation sans aucune source : index vide |
+| `assistant_store_error` | assistant | Chroma non chargé (volume absent/illisible) — `/ready` en 503 |
+| `assistant_http_request` | assistant | Requête HTTP traitée (hors sondes et `/metrics`) |
 | `assistant_question_answered` | assistant | Réponse fournie à une question opérateur |
+| `assistant_incident_summarized` | assistant | Résumé d'incident produit (`/summarize`) |
+| `assistant_postmortem_generated` | assistant | Post-mortem Markdown produit (`/postmortem`) |
+| `assistant_action_proposed` | assistant | Commande traduite en proposition (`/propose`) — jamais exécutée |
 | `assistant_llm_unavailable` | assistant | Ollama injoignable — mode dégradé (lecture seule) |
-| `assistant_http_request` | assistant | Trace d'une requête HTTP sortante de l'assistant |
 
 ### Exemple
 
@@ -218,6 +222,8 @@ Ces valeurs font le **pont entre la détection et la table de décision**. Class
 | `web_attack` | `waf_blocked_per_s` ↑ | confirmation blocage + blacklist source |
 | `data_corruption` | `db_errors_per_s` ↑ + `verify_tx` KO | restauration dernier dump Postgres |
 | `unknown` | anomalie sans signature claire | escalade + dry-run, pas d'action destructive |
+
+> **`manual_action` (hors énumération, volontairement) :** type d'incident du **journal du moteur** (trames SSE, `GET /incidents`, export pour l'assistant) pour une action confirmée par un opérateur (`POST /manual-actions`, section « Conventions d'API REST »). Il n'est **pas** ajouté à l'énumération ci-dessus : le detector ne l'émet jamais, un `AnomalyEvent` `manual_action` reste refusé (422) et la table de décision n'a pas de règle pour lui. Les consommateurs du journal (dashboard, assistant) l'acceptent tel quel, sans le ramener à `null` ni à `unknown`.
 
 > **Distinction imposée par le sujet (§2, §3.4) :** restauration de *disponibilité* (`service_flood`) ≠ correction d'une *compromission / corruption* (`data_corruption`). Ne jamais mapper l'un sur l'autre.
 
@@ -461,9 +467,16 @@ Montants en **centimes entiers**. Aucune nouvelle route n'ajoute de label de mé
     | Jeton | Routes | Porteurs |
     |---|---|---|
     | service `REMEDIATION_TOKEN` | `POST /events`, `POST /events/alertmanager`, `GET /incidents`, `GET /incidents/{id}`, `GET /decision-table`, `GET /stream`, `GET /waf/blocked-ips` | detector, Alertmanager, nginx du dashboard (lectures, injecté côté serveur) |
-    | opérateur `REMEDIATION_OPERATOR_TOKEN` | `DELETE /waf/blocked-ips/{ip}` (écritures déclenchées par un humain) | l'opérateur, qui le saisit dans le dashboard ; relayé par nginx, **jamais injecté** |
+    | opérateur `REMEDIATION_OPERATOR_TOKEN` | `DELETE /waf/blocked-ips/{ip}`, `POST /manual-actions` (écritures déclenchées par un humain) | l'opérateur, qui le saisit dans le dashboard ; relayé par nginx, **jamais injecté** |
 
-    Sur une route opérateur : pas de jeton → `401 unauthorized` ; jeton de service → `403 operator_token_required` ; jeton opérateur non configuré, < 16 caractères ou égal au jeton de service → `503 auth_not_configured`. Le jeton opérateur n'ouvre aucune route de service.
+    Sur une route opérateur : pas de jeton → `401 unauthorized` ; jeton de service → `403 operator_token_required` ; jeton opérateur non configuré, < 16 caractères ou égal au jeton de service → `503 auth_not_configured`. Le jeton opérateur n'ouvre aucune route de service. Aucun conteneur ne le détient hors du moteur : depuis le réseau `ai` (assistant, ollama) ou `app`, le nginx du dashboard ne permet donc aucune écriture.
+  - **`POST /manual-actions`** (jeton opérateur) — action confirmée par un humain depuis le dashboard (panneau « Commande opérateur », proposition de l'assistant), **hors boucle de reprise**. Corps strict (`extra` refusé) :
+
+    ```json
+    { "action": "waf_block_ip", "params": { "source": "203.0.113.9" }, "reason": "IP vue dans les logs" }
+    ```
+
+    Liste blanche : `waf_block_ip` (`params.source` = IP littérale, garde-fous `NEVER_BLOCK_IPS`, IPv6 avec zone refusée) et `restart_service` (`params.service` ∈ `RESTARTABLE_SERVICES`) ; `reason` optionnel ≤ 200 caractères. `200` `{incident_id, action, status, detail}` avec `status` ∈ `ok`, `failed`, `dry_run` ; `422 invalid_params` / `422 action_refused` sans rien exécuter ni journaliser. Exécution synchrone, mêmes garde-fous, journal et timeline qu'une remédiation, **sans** `verify_tx` ni rejeu ; log `remediation_manual_action`. Journalisée comme un incident de type **`manual_action`** (voir §3), clos `closed` / `escalated` / `dry_run`. **Aucun MTTD ni MTTR** n'est calculé (ni journal, ni jauges `resilience_mttd_seconds` / `resilience_mttr_seconds`) : il n'y a pas de détection.
 - **Health :** chaque service expose `GET /health` (liveness, 200 si process up) et `GET /ready` (readiness, 200 si dépendances OK — DB joignable, etc.).
 - **Erreurs :** corps JSON `{ "error": { "code": "string", "message": "string", "request_id": "..." } }`.
 - **Codes retour scripts :** `verify_tx` et les scripts de démo renvoient `0` (succès) / `1` (échec) — contrat réutilisé par la boucle de remédiation et la CI future.

@@ -18,6 +18,8 @@ verrou `_action_lock` qui sérialise les actions (jamais deux modifications simu
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import json
 import logging
 import time
 import uuid
@@ -26,8 +28,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
-from actions import ActionContext, ActionError, ActionResult, build_action
+from actions import ActionContext, ActionError, ActionParamError, ActionResult, build_action
 from actions.base import Action
+from actions.docker import _check_allowed
+from actions.waf import resolve_source_ip
 from config import Settings
 from decision import DecisionTable, Rule
 from journal import Journal
@@ -40,6 +44,10 @@ Clock = Callable[[], datetime]
 Sleep = Callable[[float], Awaitable[None]]
 
 MAX_GAUGE_INCIDENTS = 20  # borne la cardinalité du label incident_id des gauges MTTD/MTTR
+
+# Liste blanche STRICTE des actions manuelles (POST /manual-actions) -> seul paramètre accepté.
+MANUAL_ACTIONS: dict[str, str] = {"waf_block_ip": "source", "restart_service": "service"}
+MANUAL_INCIDENT_TYPE = "manual_action"  # incident_type journalisé (hors énumération du detector)
 
 
 @dataclass
@@ -56,8 +64,8 @@ class Submission:
 class _Incident:
     incident_id: str
     key: str
-    event: IncomingEvent
-    rule: Rule
+    event: IncomingEvent | None  # None = action manuelle opérateur
+    rule: Rule | None
     dry_run: bool
     detected_at: datetime
     first_action_at: datetime | None = None
@@ -160,6 +168,56 @@ class RemediationEngine:
         task.add_done_callback(lambda _t, i=incident_id: self._tasks.pop(i, None))
         return Submission("started", incident_id, dry_run=inc.dry_run)
 
+    # ------------------------------------------------------------------ action manuelle
+    async def run_manual(self, action_type: str, params: dict[str, Any], reason: str | None) -> dict[str, Any]:
+        """Action confirmée par un opérateur (POST /manual-actions) : mêmes garde-fous et même
+        journal/timeline qu'une remédiation automatique, sans vérification ni rejeu.
+
+        Lève ActionParamError (paramètre invalide) ou ActionError (cible protégée) AVANT
+        toute écriture : rien n'est journalisé ni exécuté dans ce cas.
+        """
+        if action_type not in MANUAL_ACTIONS:
+            raise ActionParamError(f"action manuelle non autorisée : {action_type!r}")
+        key_param = MANUAL_ACTIONS[action_type]
+        if set(params) != {key_param} or not isinstance(params[key_param], str):
+            raise ActionParamError(f"params attendus : {{{key_param!r}: <str>}}")
+        target = params[key_param].strip()
+        if action_type == "waf_block_ip":
+            try:  # IP littérale exigée ('from_event' n'a pas de sens sans événement)
+                target = str(ipaddress.ip_address(target))
+            except ValueError as exc:
+                raise ActionParamError("param 'source' : adresse IP littérale attendue") from exc
+        action = build_action(action_type, {key_param: target})
+        incident_id = str(uuid.uuid4())
+        now = self.clock()
+        inc = _Incident(incident_id, f"{MANUAL_INCIDENT_TYPE}:{target}", None, None, self.dry_run, now)
+        ctx = ActionContext(settings=self.settings, http=self.services.http, docker=self.services.docker,
+                            runner=self.services.runner, log=self.log, event=None,
+                            incident_id=incident_id, dry_run=inc.dry_run)
+        # Garde-fous des actions vérifiés en amont (sinon l'échec serait journalisé comme une action).
+        if action_type == "waf_block_ip":
+            resolve_source_ip(action.params, ctx)
+        else:
+            _check_allowed(ctx, target)
+
+        self.journal.create_incident(
+            incident_id=incident_id, key=inc.key, incident_type=MANUAL_INCIDENT_TYPE, service=target,
+            event_id=f"manual-{incident_id}",
+            event_json=json.dumps({"action": action_type, "params": action.params, "reason": reason}),
+            detected_at=now, dry_run=inc.dry_run)
+        self.log.info(f"Action manuelle opérateur : {action_type} {target} (dry_run={inc.dry_run})",
+                      extra={"event": "remediation_manual_action", "incident_id": incident_id})
+        self._emit_inc(inc, "decision", "info", f"Action manuelle confirmée par un opérateur : {action_type}"
+                       + (" (DRY-RUN : aucune action destructive)" if inc.dry_run else ""),
+                       {"action": action_type, "params": action.params, "reason": reason,
+                        "dry_run": inc.dry_run, "manual": True})
+        result = await self._execute(inc, 1, action, extra={"reason": reason})
+        status = "dry_run" if result.dry_run else ("ok" if result.ok else "failed")
+        final = {"ok": "closed", "dry_run": "dry_run", "failed": "escalated"}[status]
+        self.journal.finish(incident_id, final, self.clock(), reason=reason or "action manuelle opérateur")
+        self._emit_inc(inc, "closure", status, f"Action manuelle terminée : {result.detail}", {"result": status, "manual": True})
+        return {"incident_id": incident_id, "action": action_type, "status": status, "detail": result.detail}
+
     async def wait(self, incident_id: str) -> None:
         """Attend la fin d'un incident (tests, arrêt propre)."""
         task = self._tasks.get(incident_id)
@@ -233,14 +291,16 @@ class RemediationEngine:
                             incident_id=inc.incident_id, dry_run=inc.dry_run, extra=extra or {})
         started = self.clock()
         first = inc.first_action_at is None
+        mttd = None
         if first:  # MTTD = détection -> première action
             inc.first_action_at = started
-            mttd = max(0.0, (started - inc.detected_at).total_seconds())
-            self._set_gauge(mttd_seconds, inc.incident_id, mttd)
-        else:
-            mttd = None
+            # Action manuelle (event None) : aucune détection, donc aucun MTTD (sinon ~0 s fausserait
+            # la jauge resilience_mttd_seconds et le journal).
+            if inc.event is not None:
+                mttd = max(0.0, (started - inc.detected_at).total_seconds())
+                self._set_gauge(mttd_seconds, inc.incident_id, mttd)
         inc.last_action_at = started
-        self.journal.mark_action(inc.incident_id, started, first, mttd if first else None)
+        self.journal.mark_action(inc.incident_id, started, first, mttd)
         self._emit_inc(inc, "action", "running", f"Action {action.type} en cours",
                        {"action": action.type, "params": action.params, "attempt": attempt})
 
@@ -318,7 +378,8 @@ class RemediationEngine:
 
     # ------------------------------------------------------------------ utilitaires
     def _emit_inc(self, inc: _Incident, phase: str, status: str, message: str, data: dict[str, Any]) -> None:
-        self._emit(inc.incident_id, inc.event.incident_type.value, phase, status, message, data)
+        # la clé vaut "<incident_type>:<cible>" (incident_key / run_manual)
+        self._emit(inc.incident_id, inc.key.partition(":")[0], phase, status, message, data)
 
     def _emit(self, incident_id: str, incident_type: str, phase: str, status: str, message: str,
               data: dict[str, Any]) -> None:

@@ -1,7 +1,6 @@
 # dashboard - Supervision RESILIENCE-ALPHA (React + Vite + TypeScript + Tailwind)
 
-Console de supervision jury / opérateur (design « ZTR Supervision »), conçue pour être filmée : **AVANT / PENDANT / APRÈS**, score d'anomalie ML en direct et courbe 2 min par service, timeline détection -> décision -> action -> vérification, MTTD/MTTR, transaction de vérification, actions de remédiation, état des services, signaux dominants, playbooks, preuves Prometheus/Loki, liens Grafana. Quoi et pourquoi : [`CAHIER-DES-CHARGES.md`](CAHIER-DES-CHARGES.md). Contrats : [`docs/contracts.md`](../docs/contracts.md).
-
+Console de supervision jury / opérateur (design « ZTR Supervision »), conçue pour être filmée : **AVANT / PENDANT / APRÈS**, score d'anomalie ML en direct et courbe 2 min par service, timeline détection -> décision -> action -> vérification, MTTD/MTTR, transaction de vérification, actions de remédiation, état des services, signaux dominants, playbooks, preuves Prometheus/Loki, liens Grafana. Onglet **Assistant** : UI de l'assistant RAG (lecture seule, profil compose `ai`) embarquée en iframe same-origin via `/assistant/`. Outils opérateur (onglet Supervision) : **Rapport d'incident** (résumé DSI à la demande, post-mortem `.md` téléchargé) et **Commande opérateur** (proposition de l'assistant, exécutée par le moteur **seulement après « Confirmer »**). Quoi et pourquoi : [`CAHIER-DES-CHARGES.md`](CAHIER-DES-CHARGES.md). Contrats : [`docs/contracts.md`](../docs/contracts.md).
 ## Lancement
 
 ```bash
@@ -19,7 +18,7 @@ Déclencher un incident de démonstration : boutons **Répétition · déclenche
 
 | Commande | Effet |
 |---|---|
-| `npm run dev` | Dev server (port 5174, strict) ; `/remediation/*` proxifié vers `REMEDIATION_PROXY_TARGET` |
+| `npm run dev` | Dev server (port 5174, strict) ; `/remediation/*` proxifié vers `REMEDIATION_PROXY_TARGET`, `/assistant/*` vers `ASSISTANT_PROXY_TARGET` |
 | `npm run build` | `tsc --noEmit` puis build Vite dans `dist/` |
 | `npm run preview` | Sert `dist/` sur 5174 |
 | `npm run lint` / `typecheck` | ESLint / typage |
@@ -37,11 +36,14 @@ Déclencher un incident de démonstration : boutons **Répétition · déclenche
 | `VITE_METRICS_POLL_MS` | `2000` | build : période du polling Prometheus |
 | `VITE_STREAM_SOURCE` | `live` | build : `live` \| `auto` (bascule en simulation si flux injoignable) \| `simulation` |
 | `VITE_LIVE_TRIGGERS` | _vide_ | build : `true` = déclencheurs en flux réel hors dev (mock uniquement) |
+| `VITE_ASSISTANT_URL` | `/assistant/` | build : URL de l'UI de l'assistant (iframe, slash final requis) |
 | `REMEDIATION_PROXY_TARGET` | `http://localhost:8005` | dev : cible du proxy Vite `/remediation` |
 | `PROMETHEUS_PROXY_TARGET` | `http://localhost:9090` | dev : cible du proxy Vite `/prometheus` (mettre `http://localhost:8005` pour le mock) |
+| `ASSISTANT_PROXY_TARGET` | `http://localhost:8006` | dev : cible du proxy Vite pour `/assistant` |
 | `REMEDIATION_UPSTREAM` | `remediation:8005` | conteneur : upstream du proxy nginx |
-| `REMEDIATION_AUTH_HEADER` | _vide_ | conteneur : header `Authorization` injecté (ex. `Bearer ...`) |
+| `REMEDIATION_AUTH_HEADER` | _vide_ | conteneur : header `Authorization` injecté sur `/remediation/stream` et `POST /remediation/manual-actions` (ex. `Bearer ...`) |
 | `PROMETHEUS_UPSTREAM` | `prometheus:9090` | conteneur : upstream du proxy `/prometheus/api/v1/query` |
+| `ASSISTANT_UPSTREAM` | `assistant:8006` | conteneur : upstream nginx de l'assistant (relaie uniquement `GET /assistant/`, `GET /assistant/static/*`, `POST /assistant/api/v1/(ask|summarize|postmortem|propose)`) |
 | `DNS_RESOLVER` | `127.0.0.11` | conteneur : résolveur DNS |
 
 ## Architecture
@@ -49,7 +51,7 @@ Déclencher un incident de démonstration : boutons **Répétition · déclenche
 ```
 src/
   main.tsx, App.tsx            source (réel / simulation), service suivi, déclencheurs, mise en page
-  config.ts                    STREAM_URL, GRAFANA_BASE, STREAM_SOURCE, LIVE_TRIGGERS
+  config.ts                    STREAM_URL, ASSISTANT_API, MANUAL_ACTIONS_URL, GRAFANA_BASE, STREAM_SOURCE, LIVE_TRIGGERS
   types/events.ts              AnomalyEvent (contrat §3), StreamMessage, Incident, DashboardState
   lib/
     parse.ts                   validation AnomalyEvent + messages SSE (Result ok/error)
@@ -68,9 +70,11 @@ src/
     IncidentTimeline           4 cartes, statut textuel, décalages +N s
     IncidentDetails            ActionsPanel, SignalsPanel, PlaybooksPanel, EvidencePanel
     ServicesGrid               santé des services
+    OperatorTools              IncidentReportPanel (résumé DSI, post-mortem .md), OperatorCommandPanel (propose -> Confirmer,
+                               jeton opérateur demandé à la confirmation)
     BlockedIpsCard             IP en liste noire du WAF (GET /remediation/waf/blocked-ips, relève 3 s) + bouton
-                               « Débloquer » (DELETE /remediation/waf/blocked-ips/<ip>, confirmation) : SEULE action
-                               d'écriture du dashboard, soumise au JETON OPÉRATEUR (REMEDIATION_OPERATOR_TOKEN du .env,
+                               « Débloquer » (DELETE /remediation/waf/blocked-ips/<ip>, confirmation) : écriture
+                               soumise au JETON OPÉRATEUR (REMEDIATION_OPERATOR_TOKEN du .env,
                                saisi au 1er usage, sessionStorage, effacé sur 401/403) ; nginx n'injecte aucun jeton sur
                                cette route, exige DELETE + en-tête X-Resilience-Dashboard (anti-CSRF)
     OperatorTokenForm          saisie masquée du jeton opérateur (lib/operatorToken.ts : stockage, 401/403/503)
@@ -85,13 +89,14 @@ Flux de données : SSE -> `parseStreamMessage` (valide, sinon compte un rejet) -
 ## Tests
 
 ```bash
-npm run test
+npm run test      # Node >= 22.22 ou >= 24.15 (exigé par jsdom 30 / undici)
 ```
 
 - `lib/parse.test.ts` : AnomalyEvent conforme au contrat (exemple §3 verbatim, 5 `incident_type`, 10 cas invalides), messages du flux.
 - `lib/state.test.ts` : phases AVANT/PENDANT/APRÈS (dont vérification KO, escalade, nouvel incident, reset), timeline, MTTD/MTTR (valeurs moteur + repli), score, robustesse.
 - `components/components.test.tsx` : **garde d'affichage avant/pendant/après** (un seul `aria-current`, phrase d'état, badge zero-touch), timeline, carte de score, courbe (géométrie, onglets, marqueurs), indicateurs, vérification, services, actions, signaux, playbooks, preuves, liens Grafana.
 - `hooks/useRemediationStream.test.tsx` : statuts SSE, messages valides/rejetés, fermeture au démontage.
+- `components/OperatorTools.test.tsx` (`fetch` simulé) : résumé + badge mode dégradé, erreur assistant, post-mortem téléchargé (`postmortem-<id>.md`), propose -> Confirmer -> `/remediation/manual-actions`, Annuler sans appel, `proposal: null` sans Confirmer, 422 `action_refused` affiché, service injoignable.
 - `App.test.tsx` : rejeu complet d'un incident, rejets visibles, reset, flux interrompu ; simulation locale jusqu'à APRÈS, bascule `auto`, bascule manuelle, déclencheur dev.
 
 ## Docker (prod)
@@ -112,5 +117,6 @@ Multi-stage `node:22-alpine` -> `nginx:1.27-alpine`, utilisateur `nginx`, port *
 - Le flux réel est l'enveloppe `event: timeline` du moteur (voir CDC §3) ; score et santé sont lus dans Prometheus par polling, jamais fournis par le moteur.
 - Publier avec précaution (le dashboard donne la vue d'ensemble du SI) : `127.0.0.1:<port>:8080` ou via le WAF **avec authentification**. Ne pas l'exposer librement sur `edge`.
 - Token du moteur (si `/stream` est authentifié) : `REMEDIATION_AUTH_HEADER="Bearer <token>"` depuis SOPS, jamais en clair dans le compose.
+- **Sécurité de la route d'action** : `POST /remediation/manual-actions` part avec le jeton injecté par nginx ; elle n'est protégée que par l'exposition réseau du dashboard + la confirmation dans l'UI + la liste blanche du moteur (IP protégées, `RESTARTABLE_SERVICES`, 422 sinon). D'où l'obligation de ne pas publier le dashboard sans contrôle d'accès.
 - `VITE_GRAFANA_BASE` est ouvert par le navigateur du jury : mettre l'adresse atteignable depuis la machine de projection.
 - Durcissement : `read_only: true`, `tmpfs: [/tmp]`, `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, limites CPU/RAM.

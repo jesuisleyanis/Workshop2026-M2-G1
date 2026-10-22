@@ -2,7 +2,7 @@
 
 Assistant **documentaire en lecture seule** : il répond aux questions de l'opérateur (« que s'est-il passé ? », « quelle procédure pour `service_flood` ? ») à partir de `docs/`, de la table de décision et du journal d'incidents, avec **sources citées**.
 
-> **FRONTIÈRE DE SÉCURITÉ.** L'assistant n'est **pas** le moteur de remédiation. Il ne déclenche **aucune action**, n'a **aucun accès privilégié** (ni socket Docker, ni Ansible, ni token de remédiation, ni appel au moteur) et n'est **pas dans la boucle de reprise**. Seule `remediation/` agit. Détails et preuves (tests négatifs) : [`CAHIER-DES-CHARGES.md`](CAHIER-DES-CHARGES.md) §2.
+> **FRONTIÈRE DE SÉCURITÉ.** L'assistant n'est **pas** le moteur de remédiation. Il peut **proposer** une action (`/propose`, liste blanche) mais n'en **exécute aucune** : l'opérateur confirme dans le dashboard, qui transmet au moteur. Il ne déclenche **aucune action**, n'a **aucun accès privilégié** (ni socket Docker, ni Ansible, ni token de remédiation, ni appel au moteur) et n'est **pas dans la boucle de reprise**. Seule `remediation/` agit. Détails et preuves (tests négatifs) : [`CAHIER-DES-CHARGES.md`](CAHIER-DES-CHARGES.md) §2.
 
 ## Architecture
 
@@ -22,6 +22,7 @@ Assistant **documentaire en lecture seule** : il répond aux questions de l'opé
 | `app/store.py` / `app/indexer.py` | Chroma persistant ; indexation (rebuild complet, idempotent) + CLI |
 | `app/rag.py` | Récupération (testable sans LLM), prompt, génération |
 | `app/llm.py` | `ChatOllama` + sonde de joignabilité |
+| `app/incident_text.py` | Résumé DSI, post-mortem (chronologie déterministe), proposition d'action (liste blanche, validation, repli regex) |
 | `app/main.py` | API FastAPI, middleware logs/`request_id`, erreurs au format du contrat |
 | `app/static/` | UI (HTML + JS + CSS, sans inline) |
 
@@ -53,6 +54,21 @@ curl -s localhost:8006/api/v1/ask -H 'content-type: application/json' \
 # {"answer":"...","sources":[{"doc":"runbooks/service_flood.md","extrait":"...","section":"...","kind":"doc","score":0.45}],"degraded":false,"model":"qwen2.5:7b"}
 ```
 
+### Routes incident (sans état, données fournies par l'appelant)
+
+| Route | Requête | Réponse |
+|---|---|---|
+| `POST /api/v1/summarize` | `{"incident": {...}}` (objet SSE du dashboard, JSON <= 50 Ko) | `{"summary", "degraded", "model"}` : 4-6 phrases pour un DSI |
+| `POST /api/v1/postmortem` | `{"incident": {...}}` | `{"markdown", "degraded", "model"}` : post-mortem sans blâme ; chronologie et actions générées en Python |
+| `POST /api/v1/propose` | `{"command": "bloque l'IP 192.168.137.50"}` (3..300 car.) | `{"proposal": {"action", "params", "explanation"} \| null, "message", "degraded"}` |
+
+`/propose` n'accepte que `waf_block_ip` (`params.source` = IP valide présente dans la commande) et `restart_service` (`params.service` conforme à `^[a-z0-9][a-z0-9_-]{0,62}$`). **Rien n'est exécuté** : le dashboard affiche la proposition, l'opérateur confirme, le moteur exécute. Ollama absent -> `degraded: true` (gabarit déterministe / repli regex). Incident > 50 Ko -> `422 incident_too_large`.
+
+```bash
+curl -s localhost:8006/api/v1/propose -H 'content-type: application/json' -d '{"command":"redémarre payment-api"}'
+# {"proposal":{"action":"restart_service","params":{"service":"payment-api"},"explanation":"Redémarrer le service « payment-api » ..."},"message":"Proposition uniquement : rien n'a été exécuté. ...","degraded":false}
+```
+
 ## Docker
 
 Le **contexte de build est la racine du repo** (la lib `resilience_common` est hors de `assistant/`) :
@@ -61,40 +77,48 @@ Le **contexte de build est la racine du repo** (la lib `resilience_common` est h
 docker build -f assistant/Dockerfile -t resilience/assistant .
 ```
 
-Snippet à intégrer dans `infra/compose/` par son propriétaire (non modifié ici) :
+Le service est intégré dans `infra/compose/docker-compose.yml` (profil `ai`, avec `ollama`) :
+
+```bash
+cd infra/compose && docker compose --profile ai up -d assistant ollama
+```
+
+Extrait du compose (`*hardening` = `cap_drop: [ALL]`, `no-new-privileges`, `restart`) :
 
 ```yaml
   assistant:
-    profiles: ["ai"]
+    <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: assistant/Dockerfile }
+    profiles: [ai]
+    networks: [ai]                                  # réseau dédié (assistant, ollama, dashboard) : pas de route vers remediation, data, obs ; pas de ports publiés
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}   # ou http://<IP-PC-IA>:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
-      FRAME_ANCESTORS: ${DASHBOARD_ORIGIN:-}                      # origine du dashboard (iframe)
+      FRAME_ANCESTORS: ${DASHBOARD_ORIGIN:-}                      # inutile via /assistant/ (same-origin)
     volumes:
+      - chroma-data:/data/chroma                    # seul volume en écriture
       - ../../docs:/data/docs:ro
       - ../../remediation/decision_table.yml:/data/remediation/decision_table.yml:ro
-      - incidents-export:/data/incidents:ro        # export JSON du journal (copie), jamais l'API du moteur
-      - assistant-chroma:/data/chroma              # seul volume en écriture
-    networks: [app]                                 # pas de ports publiés, pas sur `edge`
-    read_only: true
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
+      - incidents-export:/data/incidents:ro         # produit par `remediation: python export_journal.py`
+    depends_on: [ollama]
     mem_limit: 1g
-    healthcheck: { test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8006/health',timeout=3)"], interval: 30s }
-  # + volumes: assistant-chroma, incidents-export
+    read_only: true
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8006/health').status==200 else 1)"]
 ```
+
+Le journal d'incidents arrive par le volume nommé `incidents-export` : le moteur y écrit (`/var/lib/remediation/export/incidents.json`) une **copie** JSON produite à la demande par `remediation/export_journal.py` (lecture seule de sa base SQLite, écriture atomique), l'assistant la lit en `:ro` sur `/data/incidents/incidents.json`. Jamais l'API du moteur ni sa base.
 
 Le volume `/data/chroma` est **obligatoire** quand `read_only: true` (sans lui, Chroma ne peut pas écrire : `/ready` répond 503 et `assistant_store_error` est journalisé). Image construite et testée : ~870 Mo (chromadb + onnxruntime), `python:3.12-slim`, non-root uid 10001.
 
-Au premier démarrage, si l'index est vide et que des sources existent, l'assistant **s'indexe tout seul** (`AUTO_INDEX=true`). Pour ré-indexer après de nouveaux incidents/docs :
+Au premier démarrage, si l'index est vide et que des sources existent, l'assistant **s'indexe tout seul** (`AUTO_INDEX=true`). Pour ré-indexer après de nouveaux incidents/docs (`make assistant-reindex` enchaîne les trois) :
 
 ```bash
-docker compose exec assistant python -m app.indexer        # reconstruit l'index (rebuild complet)
+docker compose exec remediation python export_journal.py   # 1. exporte le journal (200 derniers incidents, --limit N)
+docker compose exec assistant python -m app.indexer        # 2. reconstruit l'index (rebuild complet)
+docker compose restart assistant                           # 3. le client Chroma ouvert relit la collection
 ```
-
-(puis redémarrer le service pour que le client Chroma ouvert relise la collection : `docker compose restart assistant`).
 
 ## Variables d'environnement
 
@@ -126,23 +150,13 @@ Ollama n'est jamais exposé par le WAF ; seul l'assistant l'appelle.
 
 ## UI et intégration au dashboard
 
-**Choix : page servie par l'assistant** (`GET /`), embarquée dans le dashboard comme **onglet via une iframe**. Raisons : une seule source de vérité, zéro build front supplémentaire, aucun CORS (la page appelle `/api/v1/ask` en relatif), isolation (CSP, pas de HTML injecté : tout est rendu par `textContent`).
+**Choix : page servie par l'assistant** (`GET /`), embarquée dans le dashboard comme **onglet via une iframe**. Raisons : une seule source de vérité, zéro build front supplémentaire, aucun CORS (la page appelle `api/v1/ask` et charge `static/*` en **relatif**, donc fonctionne à la racine comme sous `/assistant/`), isolation (CSP, pas de HTML injecté : tout est rendu par `textContent`).
 
-Côté dashboard (à faire par son propriétaire ; `dashboard/` non modifié ici), onglet « Assistant » :
-
-```tsx
-// .env du dashboard : VITE_ASSISTANT_URL=/assistant/    (via le reverse-proxy interne) ou http://localhost:8006/ en dev
-export function AssistantTab() {
-  return <iframe title="Assistant opérateur" src={import.meta.env.VITE_ASSISTANT_URL}
-                 className="h-full w-full border-0" sandbox="allow-scripts allow-same-origin allow-forms" />;
-}
-```
-
-L'origine du dashboard doit figurer dans `FRAME_ANCESTORS` (sinon l'iframe est refusée par la CSP). L'API de l'assistant (`:8006`) n'est **pas** publiée sur `edge` : en démo, l'onglet passe par le reverse-proxy du dashboard/WAF (`/assistant/` -> `assistant:8006`). **Pas d'authentification applicative dans l'assistant** (service interne en lecture seule, réseau `app`) ; si l'on l'expose via le WAF, l'authentification doit être appliquée à ce niveau.
+Onglet « Assistant » intégré au dashboard : iframe sur `/assistant/`, proxifié par le nginx du dashboard vers `assistant:8006` (variable `ASSISTANT_UPSTREAM`, préfixe `/assistant` retiré). Seules `GET /assistant/`, `GET /assistant/static/*` et `POST /assistant/api/v1/ask` sont relayées. L'iframe est donc **same-origin** : `frame-ancestors 'self'` suffit, `FRAME_ANCESTORS` n'est nécessaire qu'en dev (dashboard Vite sur `http://localhost:5174` pointant directement vers `:8006`). L'API de l'assistant (`:8006`) n'est **pas** publiée sur `edge`. **Pas d'authentification applicative dans l'assistant** (service interne en lecture seule, réseau `ai`) ; si l'on l'expose via le WAF, l'authentification doit être appliquée à ce niveau.
 
 ## Logs, métriques, sondes
 
-- Logs JSON du contrat (`service: "assistant"`), `request_id` (reprend `X-Request-ID` ou en génère un). Événements émis : `assistant_index_built`, `assistant_index_empty`, `assistant_store_error`, `assistant_http_request`, `assistant_question_answered`, `assistant_llm_unavailable`. Ces noms sont **déclarés dans `docs/contracts.md §1`** et dans `resilience_common.RESERVED_EVENTS` ; `test_event_contract.py` échoue si l'assistant en émet un hors contrat. Ils ne sont pas utilisés par les règles d'alerte SOC.
+- Logs JSON du contrat (`service: "assistant"`), `request_id` (reprend `X-Request-ID` ou en génère un). Événements émis : `assistant_index_built`, `assistant_index_empty`, `assistant_store_error`, `assistant_http_request`, `assistant_question_answered`, `assistant_incident_summarized`, `assistant_postmortem_generated`, `assistant_action_proposed`, `assistant_llm_unavailable` (contenus libres jamais journalisés, seulement les longueurs). Ces noms sont **déclarés dans `docs/contracts.md §1`** et dans `resilience_common.RESERVED_EVENTS` ; `test_event_contract.py` échoue si l'assistant en émet un hors contrat. Ils ne sont pas utilisés par les règles d'alerte SOC.
 - `/metrics` : `resilience_http_requests_total`, `resilience_http_request_duration_seconds`.
 - `GET /health` (liveness), `GET /ready` (200 si Chroma chargé et non vide ; Ollama sondé, absence tolérée -> `mode: "degraded"`).
 - Erreurs : `{"error": {"code", "message", "request_id"}}`.
@@ -161,7 +175,9 @@ Aucun accès réseau : Ollama est mocké, `/ready` sonde un faux Ollama, corpus 
 | `tests/test_indexing.py` | chunks produits, Chroma peuplé et persistant, ré-indexation idempotente, sources optionnelles |
 | `tests/test_retrieval.py` | bons passages pour une question donnée, **sans LLM** |
 | `tests/test_api.py` | `/ask` -> `{answer, sources}` (LLM mocké), mode dégradé, `/health`, `/ready`, erreurs |
-| `tests/test_security_guard.py` | **test négatif** : aucun endpoint d'action, aucune capacité d'exécution, conteneur non-root |
+| `tests/test_incident_routes.py` | `/summarize`, `/postmortem`, `/propose` : nominal, dégradé, validation, injection, payload trop gros |
+| `tests/test_security_guard.py` | **test négatif** : aucun endpoint d'action, aucune capacité d'exécution, `/propose` sans processus ni appel sortant, conteneur non-root ; **compose vérifié** : réseau `ai` sans intersection avec `remediation`, ni secret/token, montages `:ro` (sauf Chroma), aucun `depends_on` vers l'assistant |
+| `tests/test_api.py` (sans mémoire) | deux `/ask` successifs : la 2e invocation du LLM ne contient pas la 1re question ; `AskRequest` n'a que `question` |
 
 ## Limites connues
 

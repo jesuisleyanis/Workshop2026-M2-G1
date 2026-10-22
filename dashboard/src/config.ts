@@ -9,6 +9,15 @@ export const BLOCKED_IPS_URL = `${REMEDIATION_BASE}/waf/blocked-ips`
 /** GET <base>/stream - flux SSE temps réel. */
 export const STREAM_URL = `${REMEDIATION_BASE}/stream`
 
+/** UI de l'assistant RAG (iframe). Slash final requis : l'UI utilise des chemins relatifs. */
+export const ASSISTANT_URL: string = import.meta.env.VITE_ASSISTANT_URL ?? '/assistant/'
+
+/** API de l'assistant (summarize / postmortem / propose), même proxy que l'iframe. */
+export const ASSISTANT_API = `${trim(ASSISTANT_URL)}/api/v1`
+
+/** POST - action manuelle confirmée par l'opérateur (jeton injecté par nginx). */
+export const MANUAL_ACTIONS_URL = `${REMEDIATION_BASE}/manual-actions`
+
 export const GRAFANA_BASE: string = trim(import.meta.env.VITE_GRAFANA_BASE ?? 'http://localhost:3000')
 
 /**
@@ -32,7 +41,8 @@ export const STREAM_SOURCE: StreamSource = rawSource === 'auto' || rawSource ===
 
 /**
  * Déclencheurs d'incident en flux réel : dev uniquement (`npm run mock` expose GET /trigger).
- * En prod, nginx ne publie que /remediation/stream : les attaques partent du PC Attaquant.
+ * En prod, nginx ne publie que /remediation/stream et POST /remediation/manual-actions :
+ * les attaques partent du PC Attaquant.
  */
 export const LIVE_TRIGGERS: boolean = import.meta.env.DEV || import.meta.env.VITE_LIVE_TRIGGERS === 'true'
 export const TRIGGER_URL = `${REMEDIATION_BASE}/trigger`

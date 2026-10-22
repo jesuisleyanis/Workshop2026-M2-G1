@@ -1,12 +1,14 @@
-# Variables substituées au démarrage : REMEDIATION_UPSTREAM, REMEDIATION_AUTH_HEADER, PROMETHEUS_UPSTREAM, DNS_RESOLVER.
+# Variables substituées au démarrage : REMEDIATION_UPSTREAM, REMEDIATION_AUTH_HEADER, PROMETHEUS_UPSTREAM,
+# DNS_RESOLVER, ASSISTANT_UPSTREAM.
 #
 # Deux jetons, deux régimes (remediation/main.py) :
 # - LECTURES (flux SSE, liste des IP bloquées) : nginx injecte le jeton de SERVICE (REMEDIATION_AUTH_HEADER),
 #   il n'atteint jamais le navigateur ;
-# - ÉCRITURES (déblocage d'IP) : nginx n'injecte AUCUN jeton. Il relaie l'en-tête Authorization saisi par
+# - ÉCRITURES (déblocage d'IP, actions manuelles) : nginx n'injecte AUCUN jeton. Il relaie l'en-tête Authorization saisi par
 #   l'opérateur (jeton OPÉRATEUR, REMEDIATION_OPERATOR_TOKEN, inconnu de ce conteneur). Le moteur refuse le
-#   jeton de service sur ces routes (403) : un conteneur voisin ou un processus local qui parle à ce nginx
-#   ne peut rien écrire sans le secret de l'opérateur (infra/tests/test_dashboard_proxy.py).
+#   jeton de service sur ces routes (403) : un conteneur voisin (réseaux `app` ET `ai` : assistant, ollama)
+#   ou un processus local qui parle à ce nginx ne peut rien écrire sans le secret de l'opérateur
+#   (infra/tests/test_dashboard_proxy.py).
 server {
   listen 8080;
   server_name _;
@@ -79,6 +81,26 @@ server {
     add_header Cache-Control "no-store" always;
   }
 
+  # Action manuelle confirmée par l'opérateur (panneau « Commande opérateur »). Écriture : jeton
+  # OPÉRATEUR exigé par le moteur, relayé tel quel (jamais injecté ici), + confirmation UI + liste
+  # blanche du moteur (422 sinon). Depuis le réseau `ai` (assistant, ollama), rien ne peut donc
+  # déclencher d'action sans le secret de l'opérateur.
+  location = /remediation/manual-actions {
+    include /etc/nginx/security-headers.conf;
+    limit_except POST { deny all; }
+    client_max_body_size 4k;
+    # Anti-CSRF : application/json impose un preflight CORS (OPTIONS -> 403 ci-dessus) à toute page
+    # tierce ; sans ce contrôle, un POST « simple » sans Content-Type serait lu comme JSON par FastAPI.
+    if ($content_type !~* "^application/json") { return 415; }
+    set $remediation_upstream "http://${REMEDIATION_UPSTREAM}";
+    rewrite ^/remediation/manual-actions$ /manual-actions break;
+    proxy_pass $remediation_upstream;
+    proxy_http_version 1.1;
+    proxy_set_header Authorization $http_authorization;  # jeton OPÉRATEUR du client, sinon rien -> 401
+    proxy_set_header Host $host;
+    add_header Cache-Control "no-store" always;
+  }
+
   location /remediation/ {
     return 404;
   }
@@ -98,6 +120,37 @@ server {
   }
 
   location /prometheus/ {
+    return 404;
+  }
+
+  # Assistant RAG (onglet iframe + appels du dashboard, sans action sur le système). UNIQUEMENT
+  # GET /assistant/, GET /assistant/static/* et POST /assistant/api/v1/(ask|summarize|postmortem|propose) ;
+  # tout le reste de /assistant/ -> 404. PAS de security-headers.conf
+  # ici (X-Frame-Options DENY / frame-ancestors 'none' bloqueraient l'iframe) : les add_header locaux
+  # coupent l'héritage du niveau server, et l'assistant envoie sa propre CSP (frame-ancestors 'self').
+  location ~ ^/assistant/(static/.+)?$ {
+    limit_except GET { deny all; }
+    set $assistant_upstream "http://${ASSISTANT_UPSTREAM}";
+    rewrite ^/assistant/(.*)$ /$1 break;
+    proxy_pass $assistant_upstream;
+    proxy_set_header Host $host;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+  }
+
+  location ~ ^/assistant/api/v1/(ask|summarize|postmortem|propose)$ {
+    limit_except POST { deny all; }
+    set $assistant_upstream "http://${ASSISTANT_UPSTREAM}";
+    rewrite ^/assistant/(.*)$ /$1 break;
+    proxy_pass $assistant_upstream;
+    proxy_set_header Host $host;
+    # La génération Ollama peut durer jusqu'à 120 s.
+    proxy_read_timeout 130s;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+  }
+
+  location /assistant/ {
     return 404;
   }
 

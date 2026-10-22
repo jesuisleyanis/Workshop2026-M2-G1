@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import stat
+import sys
 from pathlib import Path
 
 import httpx
@@ -210,6 +211,7 @@ def script(tmp_path, body: str):
     return str(p)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="script à shebang POSIX (/bin/sh) ; la prod tourne en conteneur Linux")
 async def test_script_verifier_follows_exit_code_contract(tmp_path):
     ok = await ScriptVerifier(script(tmp_path, "echo OK; exit 0")).run()
     assert ok.ok and ok.rc == 0 and ok.detail == "OK"

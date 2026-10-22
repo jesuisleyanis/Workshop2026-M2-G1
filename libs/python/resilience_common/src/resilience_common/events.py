@@ -77,11 +77,15 @@ RESERVED_EVENTS: frozenset[str] = frozenset(
         "remediation_action",
         "remediation_verified",
         "remediation_failed",
+        "remediation_manual_action",
         # assistant
         "assistant_index_built",
         "assistant_index_empty",
         "assistant_store_error",
         "assistant_question_answered",
+        "assistant_incident_summarized",
+        "assistant_postmortem_generated",
+        "assistant_action_proposed",
         "assistant_llm_unavailable",
         "assistant_http_request",
     }

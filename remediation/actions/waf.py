@@ -63,6 +63,8 @@ def guard_ip(raw: object, ctx: ActionContext) -> str:
     if not raw:
         raise ActionError("aucune IP source dans l'événement (champ source_ip absent)")
     ip = _canonical_ip(str(raw))
+    if getattr(ip, "scope_id", None):  # fe80::1%eth0 : invalide dans une directive nginx deny
+        raise ActionError(f"adresse IPv6 avec zone refusée : {ip}")
     if is_protected(ip, ctx.settings.never_block_ips) or ip.is_loopback or ip.is_unspecified or ip.is_multicast:
         raise ActionError(f"refus de bloquer l'adresse protégée {ip}")
     return str(ip)

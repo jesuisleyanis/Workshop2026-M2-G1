@@ -1,8 +1,9 @@
 """API FastAPI de l'assistant opérateur RAG.
 
-FRONTIÈRE DE SÉCURITÉ : ce service est en LECTURE DOCUMENTAIRE SEULE. Il ne déclenche aucune
-action, n'appelle jamais l'API du moteur de remédiation, ne monte pas de socket Docker et ne
-possède aucun identifiant privilégié. Voir assistant/CAHIER-DES-CHARGES.md.
+FRONTIÈRE DE SÉCURITÉ : ce service ne produit que du TEXTE. Il peut PROPOSER une action
+(liste blanche, /propose) mais n'exécute jamais rien : il n'appelle jamais l'API du moteur de
+remédiation, ne monte pas de socket Docker et ne possède aucun identifiant privilégié.
+Voir assistant/CAHIER-DES-CHARGES.md.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -22,6 +24,7 @@ from pydantic import BaseModel, Field
 from resilience_common import get_logger
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app import incident_text as it
 from app import rag
 from app import store as store_mod
 from app.config import SERVICE_NAME, Settings
@@ -50,6 +53,54 @@ class AskResponse(BaseModel):
     sources: list[Source]
     degraded: bool = False  # True : Ollama indisponible, seuls les passages sont renvoyés
     model: str = ""
+
+
+class IncidentRequest(BaseModel):
+    incident: dict  # objet reçu par le dashboard via SSE, structure libre ; traité comme DONNÉE
+
+
+class SummaryResponse(BaseModel):
+    summary: str
+    degraded: bool = False
+    model: str = ""
+
+
+class PostmortemResponse(BaseModel):
+    markdown: str
+    degraded: bool = False
+    model: str = ""
+
+
+class ProposeRequest(BaseModel):
+    command: str = Field(min_length=3, max_length=300)
+
+
+class Proposal(BaseModel):
+    action: Literal["waf_block_ip", "restart_service"]
+    params: dict[str, str]
+    explanation: str
+
+
+class ProposeResponse(BaseModel):
+    proposal: Proposal | None
+    message: str
+    degraded: bool = False
+
+
+_VALIDATION_HINTS = {
+    "/api/v1/ask": "'question' (texte, 3 caractères minimum) attendu.",
+    "/api/v1/summarize": "'incident' (objet JSON) attendu.",
+    "/api/v1/postmortem": "'incident' (objet JSON) attendu.",
+    "/api/v1/propose": "'command' (texte, 3 à 300 caractères) attendu.",
+}
+PROPOSAL_MESSAGE = (
+    "Proposition uniquement : rien n'a été exécuté. L'action doit être confirmée par l'opérateur ; "
+    "c'est le moteur de remédiation qui l'exécutera."
+)
+NO_PROPOSAL_MESSAGE = (
+    "Aucune action autorisée reconnue : seules waf_block_ip (blocage d'une IP) et restart_service "
+    "(redémarrage d'un service) peuvent être proposées. Rien n'a été exécuté."
+)
 
 
 def _error(request: Request, status: int, code: str, message: str) -> JSONResponse:
@@ -125,7 +176,8 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
-        return _error(request, 422, "invalid_request", "Requête invalide : 'question' (texte, 3 caractères minimum) attendu.")
+        hint = _VALIDATION_HINTS.get(request.url.path, "voir le schéma OpenAPI (/docs).")
+        return _error(request, 422, "invalid_request", f"Requête invalide : {hint}")
 
     # ------------------------------------------------------------------ sondes
     def _index_state() -> tuple[bool, str, int]:
@@ -200,6 +252,75 @@ def create_app(
             extra={"event": "assistant_question_answered", "request_id": rid},
         )
         return AskResponse(answer=answer, sources=sources, degraded=degraded, model=settings.ollama_model)
+
+    def _llm_text(request: Request, fn, *args) -> str | None:
+        """Appelle le LLM (texte seul) ; None = Ollama indisponible -> mode dégradé."""
+        try:
+            return fn(app.state.llm, *args)
+        except Exception as exc:
+            log.warning(
+                f"LLM indisponible, mode dégradé ({type(exc).__name__})",
+                extra={"event": "assistant_llm_unavailable", "request_id": request.state.request_id},
+            )
+            return None
+
+    def _too_large(request: Request, incident: dict) -> JSONResponse | None:
+        if it.incident_size(incident) > it.MAX_INCIDENT_BYTES:
+            return _error(request, 422, "incident_too_large", f"Incident limité à {it.MAX_INCIDENT_BYTES} octets (JSON sérialisé).")
+        return None
+
+    @app.post("/api/v1/summarize", response_model=SummaryResponse, tags=["assistant"])
+    def summarize(body: IncidentRequest, request: Request):
+        """Résumé d'incident pour un DSI. Sans état, sans accès au moteur. NE DÉCLENCHE AUCUNE ACTION."""
+        if err := _too_large(request, body.incident):
+            return err
+        summary = _llm_text(request, it.summarize, body.incident)
+        degraded = summary is None
+        if degraded:
+            summary = "Mode dégradé (modèle local indisponible) : " + it.fallback_summary(body.incident)
+        log.info(
+            f"Incident résumé (len={len(summary)}, degraded={degraded})",
+            extra={"event": "assistant_incident_summarized", "request_id": request.state.request_id},
+        )
+        return SummaryResponse(summary=summary, degraded=degraded, model=settings.ollama_model)
+
+    @app.post("/api/v1/postmortem", response_model=PostmortemResponse, tags=["assistant"])
+    def postmortem(body: IncidentRequest, request: Request):
+        """Post-mortem Markdown sans blâme ; chronologie et actions construites en Python (déterministe)."""
+        if err := _too_large(request, body.incident):
+            return err
+        narrative = _llm_text(request, it.postmortem_narrative, body.incident)
+        markdown = it.postmortem(body.incident, narrative)
+        log.info(
+            f"Post-mortem généré (len={len(markdown)}, degraded={narrative is None})",
+            extra={"event": "assistant_postmortem_generated", "request_id": request.state.request_id},
+        )
+        return PostmortemResponse(markdown=markdown, degraded=narrative is None, model=settings.ollama_model)
+
+    @app.post("/api/v1/propose", response_model=ProposeResponse, tags=["assistant"])
+    def propose(body: ProposeRequest, request: Request):
+        """Traduit une commande en PROPOSITION (liste blanche). N'EXÉCUTE RIEN : confirmation humaine
+        dans le dashboard puis exécution par le moteur de remédiation, hors de ce service."""
+        command = body.command.strip()
+        degraded = False
+        try:
+            proposal = it.propose(app.state.llm, command)
+        except Exception as exc:
+            degraded = True
+            log.warning(
+                f"LLM indisponible, mode dégradé ({type(exc).__name__})",
+                extra={"event": "assistant_llm_unavailable", "request_id": request.state.request_id},
+            )
+            proposal = it.fallback_proposal(command)
+        log.info(
+            f"Commande traduite (len={len(command)}, proposal={proposal['action'] if proposal else None}, degraded={degraded})",
+            extra={"event": "assistant_action_proposed", "request_id": request.state.request_id},
+        )
+        return ProposeResponse(
+            proposal=proposal,
+            message=PROPOSAL_MESSAGE if proposal else NO_PROPOSAL_MESSAGE,
+            degraded=degraded,
+        )
 
     # ------------------------------------------------------------------ UI
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
