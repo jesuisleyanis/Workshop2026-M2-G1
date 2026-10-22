@@ -18,7 +18,7 @@ zip -r "${CODE}" . \
   -x '*/node_modules/*' '*/dist/*' '*/.vite/*' '*/coverage/*' \
   -x '*/.venv/*' '*/venv/*' \
   -x '*/__pycache__/*' '*.pyc' \
-  -x '.env' 'security/sops/secrets.env' '*.decrypted.env' '*.env.dec' '.remediation_token' \
+  -x '.env' '.env.local' 'security/sops/secrets.env' '*.decrypted.env' '*.env.dec' '.remediation_token' \
   -x '**/keys.txt' '**/*.age' \
   -x '**/chroma/*' '*.joblib' \
   -x '**/incidents.db' '*.sqlite3' \
@@ -27,11 +27,12 @@ zip -r "${CODE}" . \
   -x 'attacks/.runlog' 'attacks/.run.pid' \
   -x '*.mkv' '*.mp4' '*.mov' '*.ass' 'prise_brute*' \
   -x 'Workshop2026-M2-G1-*' \
+  -x '.claude/worktrees/*' '.testrun/*' '.venv-cyber/*' 'graphify-out/*' 'bench-detection*.json' \
   >/dev/null
 
 echo "== Contrôle : aucun secret déchiffré dans l'archive =="
 # Noms de fichiers interdits (secrets déchiffrés, clés) ; les fichiers SOPS chiffrés (*.enc.*) sont attendus.
-if unzip -l "${CODE}" | awk '{print $4}' | grep -E '(^|/)\.env$|(^|/)security/sops/secrets\.env$|\.decrypted\.env$|\.env\.dec$|(^|/)\.remediation_token$|keys\.txt$|\.age$|(^|/)age\.key$'; then
+if unzip -l "${CODE}" | awk '{print $4}' | grep -E '(^|/)\.env(\.local)?$|(^|/)\.claude/worktrees/|(^|/)security/sops/secrets\.env$|\.decrypted\.env$|\.env\.dec$|(^|/)\.remediation_token$|keys\.txt$|\.age$|(^|/)age\.key$'; then
   echo "ERREUR : secret potentiel dans l'archive — abandon." >&2
   rm -f "${CODE}"
   exit 1

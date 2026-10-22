@@ -296,7 +296,7 @@ def test_caddy_listens_only_on_the_hotspot_and_loopback_by_default():
 def test_requirements_files_pin_each_package_once() -> None:
     # Un paquet listé deux fois finit tôt ou tard épinglé à deux versions différentes (pip échoue au build).
     for req in sorted(ROOT.glob("**/requirements*.txt")):
-        if "node_modules" in req.parts:
+        if "node_modules" in req.parts or ".claude" in req.parts:  # copies de travail locales des agents
             continue
         names: list[str] = []
         for line in req.read_text(encoding="utf-8").splitlines():

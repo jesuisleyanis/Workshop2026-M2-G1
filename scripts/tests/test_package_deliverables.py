@@ -33,6 +33,9 @@ def _fake_repo(tmp_path: Path) -> Path:
         "security/sops/secrets.example.env": "POSTGRES_PASSWORD=change-me\n",
         "security/sops/secrets.env": "MQTT_AUTH_PASSWORD=real\n",
         ".env": "POSTGRES_PASSWORD=real\n",
+        ".env.local": "REMEDIATION_OPERATOR_TOKEN=real\n",
+        ".claude/worktrees/agent-x/README.md": "copie de travail\n",
+        ".claude/agents/reviewer.md": "agent\n",
         "security/sops/keys.txt": "# created\nAGE-SECRET-KEY-" + "1QQQ\n",
         "dashboard/node_modules/x/index.js": "x",
         "dashboard/dist/index.html": "x",
@@ -62,8 +65,8 @@ def test_archive_has_exact_name_and_excludes_secrets_and_artifacts(tmp_path):
     archive = repo / CODE
     assert archive.is_file()
     names = set(zipfile.ZipFile(archive).namelist())
-    assert {"README.md", "services/api/main.py", "security/sops/secrets.example.env", "scripts/package_deliverables.sh"} <= names
-    for forbidden in (".env", "security/sops/secrets.env", "security/sops/keys.txt", ".git/HEAD", "dashboard/node_modules/x/index.js",
+    assert {"README.md", ".claude/agents/reviewer.md", "services/api/main.py", "security/sops/secrets.example.env", "scripts/package_deliverables.sh"} <= names
+    for forbidden in (".env", ".env.local", ".claude/worktrees/agent-x/README.md", "security/sops/secrets.env", "security/sops/keys.txt", ".git/HEAD", "dashboard/node_modules/x/index.js",
                       "dashboard/dist/index.html", "libs/python/pkg.egg-info/PKG-INFO", "remediation/incidents.db",
                       "infra/ansible/backups/dump.sql", "Workshop2026-M2-G1-Dossier.pdf"):
         assert forbidden not in names, f"{forbidden} ne doit pas être dans {CODE}"
