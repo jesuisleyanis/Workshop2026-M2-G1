@@ -23,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = ROOT / "infra" / "compose" / "docker-compose.yml"
+ENV_FILE = ROOT / ".env"
 SEED_SERVICE = "payment-api"  # conteneur qui embarque resilience_db + l'accès au réseau `data`
 
 
@@ -64,8 +65,10 @@ def seed_via_compose(env: dict[str, str]) -> int:
     if not env.get("SEED_PASSWORD"):
         print("seed: SEED_PASSWORD manquant (make decrypt -> .env) — voir scripts/README.md", file=sys.stderr)
         return 1
+    # .env de la racine (make decrypt) passé explicitement : sans lui, Compose échoue sur les ${VAR:?}.
+    env_file = ["--env-file", str(ENV_FILE)] if ENV_FILE.is_file() else []
     cmd = [
-        "docker", "compose", "-f", str(COMPOSE_FILE), "exec", "-T",
+        "docker", "compose", "-f", str(COMPOSE_FILE), *env_file, "exec", "-T",
         "-e", "SEED_PASSWORD", "-e", "SEED_USERS", "-e", "SEED_MONTHLY_LIMIT_CENTS", "-e", "SEED_RESET_PASSWORDS",
         SEED_SERVICE, "python", "-m", "resilience_db.seed",
     ]

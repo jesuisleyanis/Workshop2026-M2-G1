@@ -56,6 +56,8 @@ RUN mkdir -p /var/log/modsec && chown nginx:nginx /var/log/modsec && chmod 0755 
 # ALLOWED_METHODS : défaut CRS « GET HEAD POST OPTIONS » + DELETE (suppression d'un bénéficiaire,
 # #43) + PATCH (réglages d'une carte, #47) ; sans eux, la règle 911100 les bloque en 403. PUT reste
 # refusé, et nginx.conf ($method_denied) restreint DELETE/PATCH à leur seule route.
+# Le Compose surcharge cette valeur (+ PUT) pour l'API d'administration du listener hôte 9443 ;
+# le serveur public continue de refuser PUT (405 via $method_denied).
 ENV PORT=8080 \
     SSL_PORT=8443 \
     SSL_CERT_FILE=/etc/nginx/conf/server.crt \

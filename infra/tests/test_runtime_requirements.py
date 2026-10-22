@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SERVICES = ["services/auth", "services/payment-api", "services/face-id"]
 
 # Nom d'import -> nom de distribution, quand ils diffèrent.
-IMPORT_TO_DIST = {"jwt": "pyjwt", "sqlalchemy": "sqlalchemy", "psycopg": "psycopg"}
+IMPORT_TO_DIST = {"jwt": "pyjwt", "sqlalchemy": "sqlalchemy", "psycopg": "psycopg", "paho": "paho-mqtt", "PIL": "pillow"}
 # Fournis par le monorepo (installés depuis libs/python/) ou transitivement par une dépendance déclarée.
 PROVIDED = {
     "resilience_common",

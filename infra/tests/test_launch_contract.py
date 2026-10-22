@@ -167,12 +167,18 @@ def test_build_stages_use_the_pip_cache_mount() -> None:
 
 
 # ---------------------------------------------------------------- démarrage ordonné
+# Dépendances FACULTATIVES : la chaîne de paiement (WAF -> auth) ne doit jamais attendre le chargement
+# du modèle de reconnaissance faciale (si face-id n'est pas prêt, auth répond 503 au seul back-office),
+# ni le broker de la LED (`required: false`, LED fail-open, ADR 0006).
+OPTIONAL_DEPS = {("auth", "face-id"), ("auth", "mosquitto")}
+
+
 def test_dependencies_with_a_healthcheck_are_awaited_healthy() -> None:
     # C6 : attendre qu'une dépendance soit *healthy* (pas seulement démarrée) quand elle sait le dire.
     for name, svc in SERVICES.items():
         deps = svc.get("depends_on") or {}
         for dep in deps:
-            if "healthcheck" not in SERVICES[dep]:
+            if "healthcheck" not in SERVICES[dep] or (name, dep) in OPTIONAL_DEPS:
                 continue
             assert isinstance(deps, dict), (
                 f"{name}: depends_on en liste, condition de santé impossible"

@@ -13,7 +13,7 @@
 | Système de fichiers | `read_only: true` + `tmpfs` pour les écritures nécessaires, **quand le service le permet** (exceptions documentées : `docker-socket-proxy`, `pg-exporter`, `cadvisor`) | compose |
 | Limites ressources | `mem_limit` par service ; `cpus` sur les services Python (ancre `x-pylimits`) — 16 Go partagés | compose |
 | Healthcheck | `/health` sur chaque service ; `HEALTHCHECK` dans le Dockerfile | Dockerfile |
-| Réseau | services internes sur `app`/`data`/`obs` ; `data` en `internal: true` ; **seul le WAF** publie des ports | `audit.sh` |
+| Réseau | services internes sur `app`/`data`/`obs` ; `data` en `internal: true` ; **seuls le WAF (80/443, 9443 en loopback) et mosquitto (1883 sur l'IP hotspot)** publient des ports | `audit.sh` |
 | Contexte de build | `.dockerignore` racine : `.env`, clés age, `.git`, `.venv`, caches exclus du contexte des 8 images construites depuis la racine — un `COPY` trop large ne peut pas embarquer de secret déchiffré | `infra/tests/test_launch_contract.py` |
 | Secrets | via SOPS uniquement, injectés en env au runtime ; aucun secret applicatif en image. **Exception de labo** : le certificat TLS auto-signé du WAF est généré au build et figé dans une couche (clé privée partagée entre instances) — acceptable pour une démo, à régénérer au démarrage en production | gitleaks + `audit.sh` |
 
@@ -69,6 +69,6 @@ security/hardening/audit.sh
 2. Aucun conteneur `privileged: true`.
 3. Aucun secret en clair (hors exemples factices).
 4. Aucune clé age (`keys.txt`, `*.age`) dans le dépôt.
-5. **Exposition réseau** : seul le WAF publie des ports (R11/R19) — tout autre service `ports:` fait échouer l'audit.
+5. **Exposition réseau** : seuls le WAF et mosquitto (bind hotspot, jamais `0.0.0.0`) publient des ports (R11/R19) — tout autre service `ports:` fait échouer l'audit.
 6. **Durcissement** : ancre `no-new-privileges:true` + `cap_drop: ALL` présente dans le compose.
 7. **DB interne** : réseau `data` en `internal: true` (Postgres jamais joignable depuis l'hôte).

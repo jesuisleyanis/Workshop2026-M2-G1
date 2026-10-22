@@ -16,3 +16,4 @@ prometheus-client==0.26.0
 prometheus-fastapi-instrumentator==8.1.0
 # Client HTTP du back-office (appel face-id : auth_service/backoffice.py) — runtime, pas seulement tests
 httpx==0.28.1
+paho-mqtt==2.1.0

@@ -9,6 +9,8 @@ COPY . .
 # VITE_API_BASE est figé AU BUILD (vide = same-origin derrière le WAF).
 ARG VITE_API_BASE=""
 ENV VITE_API_BASE=${VITE_API_BASE}
+# Assets du détecteur de pose (modèle vérifié sha256 + runtime wasm), servis en same-origin.
+RUN npm run prepare:vision
 RUN npm run build
 
 # ---- Étape 2 : nginx statique, non-root --------------------------------------

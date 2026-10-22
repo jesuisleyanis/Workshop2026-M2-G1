@@ -7,15 +7,16 @@ le *plumbing* du service est couvert par le StubRecognizer. Ce module est donc h
 
 from __future__ import annotations
 
-from face_id.recognizer import NoFaceError
+from face_id.poses import pose_from_rotation, rotation_from_points
+from face_id.recognizer import FaceSample, MultipleFacesError, NoFaceError
 
 
 class InsightFaceRecognizer:  # pragma: no cover - validé en recette, deps non installées
-    """Embeddings 512-d via InsightFace, similarité cosinus. Modèle `buffalo_s` (léger)."""
+    """Embeddings 512-d via InsightFace ; distance = 1 - similarité cosinus."""
 
-    model_version = "insightface-buffalo_s-1.0"
+    model_version = "insightface-buffalo_s-2.0"
 
-    def __init__(self, threshold: float = 0.35) -> None:
+    def __init__(self, threshold: float = 0.65) -> None:
         self.threshold = threshold
         import numpy as np  # noqa: F401 - dépendance du backend réel
         from insightface.app import FaceAnalysis
@@ -23,7 +24,7 @@ class InsightFaceRecognizer:  # pragma: no cover - validé en recette, deps non 
         self._app = FaceAnalysis(name="buffalo_s", providers=["CPUExecutionProvider"])
         self._app.prepare(ctx_id=-1, det_size=(320, 320))
 
-    def embed(self, image: bytes) -> list[float]:
+    def analyze(self, image: bytes, *, precise: bool = False) -> FaceSample:
         import cv2
         import numpy as np
 
@@ -33,6 +34,20 @@ class InsightFaceRecognizer:  # pragma: no cover - validé en recette, deps non 
         faces = self._app.get(arr)
         if not faces:
             raise NoFaceError("aucun visage détecté")
-        # Plus grand visage détecté (robuste aux visages de fond).
-        face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
-        return [float(x) for x in face.normed_embedding]
+        if len(faces) > 1:
+            raise MultipleFacesError(f"{len(faces)} visages détectés")
+        face = faces[0]
+        # kps = 5 points (œil gauche, œil droit, nez, bouche g., bouche d.) : le nez est situé
+        # relativement à l'écart des yeux, mêmes seuils que le backend `team`.
+        kps = face.kps
+        rotation = rotation_from_points(float(kps[0][0]), float(kps[1][0]), [float(kps[2][0])])
+        return FaceSample([float(x) for x in face.normed_embedding], pose_from_rotation(rotation))
+
+    def distance(self, a: list[float], b: list[float]) -> float:
+        import numpy as np
+
+        va, vb = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+        denom = float(np.linalg.norm(va) * np.linalg.norm(vb))
+        if denom == 0.0:
+            return 1.0
+        return 1.0 - float(np.dot(va, vb)) / denom

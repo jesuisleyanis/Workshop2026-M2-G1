@@ -44,6 +44,10 @@ scrape_configs:
     scrape_interval: 5s
     static_configs:
       - targets: ["front:8080"]
+  - job_name: face-id
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["face-id:8006"]
 
   - job_name: detector
     metrics_path: /metrics

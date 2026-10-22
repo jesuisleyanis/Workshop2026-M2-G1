@@ -75,8 +75,8 @@ check-env: ## Vérifie que .env existe et contient toutes les clés de secrets.e
 up: decrypt check-env ## Construit et lève la stack démo (chemin critique + détection ML)
 	$(COMPOSE) $(PROFILES_DEMO) up -d --build
 
-up-full: decrypt check-env ## Construit et lève la stack complète (démo + ML + observabilité full)
-	$(COMPOSE) $(PROFILES_FULL) up -d --build
+up-full: decrypt check-env ## Construit et lève la stack complète (démo + ML + observabilité full + broker MQTT iot)
+	$(COMPOSE) $(PROFILES_FULL) --profile iot up -d --build
 
 up-iot: decrypt check-env ## Construit et lève la stack démo + broker MQTT sur le point d'accès
 	$(COMPOSE) $(PROFILES_DEMO) --profile iot up -d --build
@@ -233,10 +233,14 @@ test-py: ## Tests Python, un process pytest par composant (échec si l'un d'eux 
 	[ $$rc -eq 0 ] || { echo "== Tests Python : ÉCHEC (voir ci-dessus ; dépendances : README § Tests)"; exit 1; }; \
 	echo "== Tests Python : OK"
 
-test-front: ## Tests front (front + back-office + dashboard)
-	@echo "== Tests front =="
+# Apps Vitest. Le back-office exige Node >= 22.15 (ou 24) : jsdom embarque une version d'undici
+# qui ne se charge pas sur Node 20 — vérifier `node --version` avant `make test-front`.
+FRONT_APPS := services/front services/backoffice dashboard
+
+test-front: ## Tests front (front + back-office + dashboard ; Node >= 22.15)
+	@echo "== Tests front (node $$(node --version 2>/dev/null || echo absent)) =="
 	@rc=0; \
-	for app in services/front services/backoffice dashboard; do \
+	for app in $(FRONT_APPS); do \
 	  if [ -f $$app/package.json ]; then (cd $$app && npm run test --silent) || rc=1; fi; \
 	done; \
 	[ $$rc -eq 0 ] || { echo "== Tests front : ÉCHEC"; exit 1; }; \

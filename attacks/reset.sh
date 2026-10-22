@@ -10,9 +10,8 @@ echo "== reset du banc d'essai =="
 
 # Vide la deny-list IP du WAF (volume partagé `waf-deny`) et recharge Nginx à chaud.
 COMPOSE=(docker compose -f "${ROOT}/infra/compose/docker-compose.yml")
-# Sans --env-file, Compose cherche infra/compose/.env (absent) : l'interpolation échoue (variables
-# requises), `ps` aussi, et la deny-list n'était JAMAIS vidée.
-[[ -f "${ROOT}/.env" ]] && COMPOSE+=(--env-file "${ROOT}/.env")
+# .env de la racine (make decrypt) : sans lui, Compose échoue sur les ${VAR:?} du fichier.
+if [[ -f "${ROOT}/.env" ]]; then COMPOSE+=(--env-file "${ROOT}/.env"); fi
 if "${COMPOSE[@]}" ps --status running waf >/dev/null 2>&1; then
   # Le fichier appartient à la remédiation (volume waf-deny) : écrit depuis son conteneur, relu par le WAF.
   { "${COMPOSE[@]}" exec -T remediation sh -c \

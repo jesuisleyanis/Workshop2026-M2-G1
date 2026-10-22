@@ -29,6 +29,30 @@ def test_migration_creates_same_schema_as_models(tmp_path):
         assert {c["name"] for c in insp.get_columns(name)} == {c.name for c in table.columns}
 
 
+def test_migrations_up_to_head_add_face_photos_and_poses_columns(tmp_path):
+    # Base fraîche : toute la chaîne Alembic (0001 -> head) doit aboutir à la table v2 complète.
+    engine = make_engine(f"sqlite:///{tmp_path}/fresh.db")
+    upgrade(engine)
+    columns = {c["name"] for c in inspect(engine).get_columns("face_enrollments")}
+    assert {"embedding", "photos", "poses", "model_version", "enrolled_by", "enrolled_at"} <= columns
+
+
+def test_migration_chain_is_linear_with_unique_revisions():
+    # Deux branches qui ajoutent chacune une « 0003 » : Alembic voit deux têtes (ou en écrase une)
+    # et `upgrade head` échoue au démarrage des services. Une seule tête, ids uniques.
+    import re
+    from pathlib import Path
+
+    from alembic.script import ScriptDirectory
+    from resilience_db.migrate import _config
+
+    versions = Path(__file__).resolve().parents[1] / "src" / "resilience_db" / "migrations" / "versions"
+    ids = [re.search(r'^revision = "(\w+)"', p.read_text(encoding="utf-8"), re.M).group(1)
+           for p in versions.glob("[0-9]*.py")]
+    assert len(ids) == len(set(ids)), f"revision Alembic dupliquée : {sorted(ids)}"
+    assert len(ScriptDirectory.from_config(_config()).get_heads()) == 1
+
+
 def test_migration_is_idempotent(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path}/m.db")
     upgrade(engine)
@@ -151,6 +175,33 @@ def test_face_enrollment_stores_embedding_one_per_user():
         )
         with pytest.raises(IntegrityError):
             s.commit()
+
+
+def test_face_enrollment_has_photos_and_poses_columns():
+    # Enrôlement multi-poses : photos scellées (nullable) + liste des poses enrôlées.
+    engine = make_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with make_session_factory(engine)() as s:
+        u = User(username="op02", password_hash=hash_password("s3cret-pass"))
+        s.add(u)
+        s.commit()
+        # Défauts : photos NULL, poses "face".
+        s.add(
+            FaceEnrollment(
+                user_id=u.id, embedding=b"sealed", model_version="m", enrolled_by="admin01"
+            )
+        )
+        s.commit()
+        enr = s.query(FaceEnrollment).filter_by(user_id=u.id).one()
+        assert enr.photos is None
+        assert enr.poses == "face"
+        enr.photos = b"x"
+        enr.poses = "face,gauche,droite"
+        s.commit()
+        s.expire_all()
+        enr = s.query(FaceEnrollment).filter_by(user_id=u.id).one()
+        assert enr.photos == b"x"
+        assert enr.poses == "face,gauche,droite"
 
 
 def test_password_over_72_bytes_rejected():

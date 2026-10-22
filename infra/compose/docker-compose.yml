@@ -2,8 +2,8 @@
 # Profils : (défaut=demo) chemin critique | full=observabilité complète | iot=broker MQTT | attack=banc d'essai | ai=assistant RAG
 # Secrets injectés depuis ../../.env (produit par scripts/decrypt-secrets.sh à partir de SOPS).
 # Durcissement : non-root (Dockerfiles), cap_drop ALL, no-new-privileges, limites ressources,
-# seul le WAF publie des ports HTTP ; le profil iot publie MQTT sur le hotspot.
-# Voir ../../security/hardening/hardening.md.
+# seul le WAF publie des ports HTTP (80/443, plus le listener hôte-seulement 127.0.0.1:9443 du
+# back-office) ; le profil iot publie MQTT sur le hotspot. Voir ../../security/hardening/hardening.md.
 # Reproductibilité (R5) : toutes les images tierces sont épinglées à une version précise (aucun
 # `:latest`) — un rebuild ultérieur ne doit pas tirer un major différent (Grafana/Loki/Prometheus…).
 
@@ -65,15 +65,27 @@ services:
     <<: *hardening
     build: { context: ../../security/waf }
     networks: [edge, app]
-    # Image non-root (nginx unprivileged) : écoute 8080/8443 ; seuls 80/443 sont publiés côté hôte.
+    # Image non-root (nginx unprivileged) : écoute 8080/8443/9443 ; 80/443 publiés côté hôte.
+    # 9443 = listener HÔTE (back-office + /api/v1/auth/ + /api/v1/admin/) : loopback uniquement.
     ports:
       - "80:8080"
       - "443:8443"
+      - "127.0.0.1:9443:9443"
     environment:
       # Confiance X-Forwarded-For : VIDE par défaut (un client ne choisit jamais son IP). Renseignée par
       # la surcouche docker-compose.realip.yml (REAL_IP=1), où seul le proxy natif Caddy joint le WAF.
       WAF_TRUST_FORWARDED_FROM: ""
       # Audit ModSecurity (blocages 4xx/5xx, JSON Serial) écrit dans le volume partagé lu par waf-exporter (#12).
+      # Plafond de corps ModSecurity GLOBAL = défaut de l'image CRS (128 Kio hors fichiers, 413 au-delà) :
+      # il s'applique au serveur public 80/443. Seul le listener hôte 9443 le relève à 4 Mo
+      # (`modsecurity_rules` dans son bloc server de nginx.conf, aligné sur `client_max_body_size 4m`)
+      # pour les images de capture faciale en base64 JSON.
+      MODSEC_REQ_BODY_NOFILES_LIMIT: "131072"
+      # Méthodes HTTP admises par le CRS (règle 911100). Le défaut de l'image (GET HEAD POST OPTIONS)
+      # bloquerait l'API d'administration du back-office (PATCH rôle, PUT/DELETE visage) sur 9443.
+      # Le serveur public 80/443 ne proxifie que ses routes nommées (404 ailleurs) : élargir la liste
+      # n'y ouvre aucune route. Test : security/waf/tests (méthodes de services/backoffice/src/api).
+      ALLOWED_METHODS: "GET HEAD POST OPTIONS PUT PATCH DELETE"
       MODSEC_AUDIT_ENGINE: RelevantOnly
       MODSEC_AUDIT_LOG_FORMAT: JSON
       MODSEC_AUDIT_LOG_TYPE: Serial
@@ -88,6 +100,7 @@ services:
       front: { condition: service_started }
       payment-api: { condition: service_healthy }
       auth: { condition: service_healthy }
+      backoffice: { condition: service_healthy }
     mem_limit: 256m
     healthcheck:
       # /healthz est servi par le WAF lui-même (sans upstream) ; cert auto-signé -> -k.
@@ -128,6 +141,21 @@ services:
     read_only: true
     tmpfs: ["/tmp"]
     mem_limit: 128m
+
+  backoffice:
+    # Back-office (React/Vite, nginx non-root :8080) : joignable uniquement via le listener hôte du WAF (9443).
+    # Le build exécute `npm run prepare:vision` (modèle de pose + runtime wasm) : accès réseau requis au build.
+    <<: *hardening
+    build: { context: ../../services/backoffice }
+    networks: [app]
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
 
   payment-api:
     <<: [*hardening, *pylimits]
@@ -170,8 +198,24 @@ services:
       # la preuve de reprise. Durcissement levé automatiquement 5 min après le dernier tighten.
       RATE_LIMIT_EXEMPT_IPS: "172.31.0.20"
       RATE_LIMIT_RESTORE_SECONDS: "300"
+      # Authentification v2 : visage (face-id) + jumeau/pilotage LED (MQTT) + initialisation du premier admin.
+      FACE_ID_URL: http://face-id:8006
+      FACE_INTERNAL_TOKEN: ${FACE_INTERNAL_TOKEN:?FACE_INTERNAL_TOKEN requis (même valeur sur auth et face-id, voir security/sops/secrets.example.env)}
+      MQTT_HOST: mosquitto
+      MQTT_AUTH_PASSWORD: ${MQTT_AUTH_PASSWORD}
+      BACKOFFICE_BOOTSTRAP_TOKEN: ${BACKOFFICE_BOOTSTRAP_TOKEN}
+      # dlib (backend team) analyse 3 images 640 px par vérification : plusieurs secondes sur le CPU de
+      # l'hôte. Le défaut du code (2 s, borne du threadpool d'auth) couperait l'étape visage du back-office.
+      BACKOFFICE_FACE_TIMEOUT: "8"
+      # Durée de vie d'un challenge de poses : chargement à froid de MediaPipe + 3 maintiens de pose.
+      BACKOFFICE_CHALLENGE_TTL: "120"
+    # mosquitto NON requis : hors profil iot (make up), ou si l'IP du hotspot (MQTT_BIND_ADDR) est absente,
+    # le broker ne démarre pas ; auth (donc le WAF) doit démarrer quand même — la LED est fail-open (ADR 0006).
+    # `required: false` exige Docker Compose >= 2.20. Postgres `healthy` : auth applique les migrations au démarrage.
     depends_on:
       postgres: { condition: service_healthy }
+      face-id: { condition: service_started }
+      mosquitto: { condition: service_started, required: false }
     read_only: true
     tmpfs: ["/tmp"]
     healthcheck:
@@ -179,6 +223,34 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+
+  face-id:
+    # Reconnaissance faciale (gabarits chiffrés AES-256 en base, backend « team » = dlib). Jamais exposé :
+    # appelé par auth seul (token interne), réseau app + data (Postgres). Aucun ports:.
+    <<: *hardening
+    build: { context: ../.., dockerfile: services/face-id/Dockerfile }
+    networks: [app, data]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: resilience
+      POSTGRES_USER: resilience
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      FACE_INTERNAL_TOKEN: ${FACE_INTERNAL_TOKEN:?FACE_INTERNAL_TOKEN requis (même valeur sur auth et face-id, voir security/sops/secrets.example.env)}
+      # base64 de 32 octets (AES-256) — voir security/sops/secrets.example.env
+      FACE_DATA_KEY: ${FACE_DATA_KEY:?FACE_DATA_KEY requis (base64 de 32 octets, voir security/sops/secrets.example.env)}
+      RECOGNIZER_BACKEND: team
+    depends_on:
+      postgres: { condition: service_healthy }
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 1g
+    cpus: 1.5
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8006/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   mosquitto:
     <<: *hardening
