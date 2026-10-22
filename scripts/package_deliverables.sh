@@ -26,7 +26,7 @@ zip -r "${CODE}" . \
   -x 'infra/ansible/backups/*' \
   -x 'attacks/.runlog' 'attacks/.run.pid' \
   -x '*.mkv' '*.mp4' '*.mov' '*.ass' 'prise_brute*' \
-  -x 'Workshop2026-M2-G1-*' \
+  -x 'Workshop2026-M2-G1-*' 'Workshop2026-M2-G1/*' \
   -x '.claude/worktrees/*' '.testrun/*' '.venv-cyber/*' 'graphify-out/*' 'bench-detection*.json' \
   >/dev/null
 

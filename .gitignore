@@ -45,8 +45,8 @@ infra/ansible/backups/*
 .idea/
 .vscode/
 
-# Livrables générés (scripts/package_deliverables.sh) — produits à la demande, jamais commités
-Workshop2026-M2-G1-*
+# Livrables générés à la racine (build.sh, build.js, package_deliverables.sh) : sorties de travail, non commitées.
+/Workshop2026-M2-G1-*
 # Prises écran brutes + pistes de légendes du Clip Chrono (peuvent contenir ce qui s'affiche à l'écran)
 *.mkv
 *.mp4
@@ -68,3 +68,6 @@ graphify-out/
 bench-detection*.json
 # Artefacts de recette live (logs, captures d anomalies)
 .testrun/
+
+# Dossier de remise (sujet §7) : les rendus validés y sont copiés et commités pour toute l'équipe.
+!Workshop2026-M2-G1/*.mp4

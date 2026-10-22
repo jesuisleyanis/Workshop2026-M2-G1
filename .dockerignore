@@ -48,6 +48,7 @@ remediation/incidents.db
 ml/training/artifacts
 ml/training/data/*.tmp
 Workshop2026-M2-G1-*
+Workshop2026-M2-G1/
 **/*.mkv
 **/*.mp4
 **/*.mov

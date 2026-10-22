@@ -44,6 +44,7 @@ def _fake_repo(tmp_path: Path) -> Path:
         "infra/ansible/backups/dump.sql": "x",
         ".git/HEAD": "ref",
         "Workshop2026-M2-G1-Dossier.pdf": "x",
+        "Workshop2026-M2-G1/Workshop2026-M2-G1-Code.zip": "ancienne archive",
     }
     for rel, content in files.items():
         p = repo / rel
@@ -68,7 +69,8 @@ def test_archive_has_exact_name_and_excludes_secrets_and_artifacts(tmp_path):
     assert {"README.md", ".claude/agents/reviewer.md", "services/api/main.py", "security/sops/secrets.example.env", "scripts/package_deliverables.sh"} <= names
     for forbidden in (".env", ".env.local", ".claude/worktrees/agent-x/README.md", "security/sops/secrets.env", "security/sops/keys.txt", ".git/HEAD", "dashboard/node_modules/x/index.js",
                       "dashboard/dist/index.html", "libs/python/pkg.egg-info/PKG-INFO", "remediation/incidents.db",
-                      "infra/ansible/backups/dump.sql", "Workshop2026-M2-G1-Dossier.pdf"):
+                      "infra/ansible/backups/dump.sql", "Workshop2026-M2-G1-Dossier.pdf",
+                      "Workshop2026-M2-G1/Workshop2026-M2-G1-Code.zip"):
         assert forbidden not in names, f"{forbidden} ne doit pas être dans {CODE}"
 
 

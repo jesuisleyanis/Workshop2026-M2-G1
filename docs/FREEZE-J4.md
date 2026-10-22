@@ -44,6 +44,7 @@ git rev-parse HEAD                               # noter le commit (doit rester 
 cd docs/dossier         && ./build.sh            # -> Workshop2026-M2-G1-Dossier.pdf
 cd docs/dossier/slides  && node build.js         # -> Workshop2026-M2-G1-Pres.pptx
 scripts/package_deliverables.sh                  # -> Workshop2026-M2-G1-Code.zip (audit + re-scan secrets)
+cp Workshop2026-M2-G1-{Dossier.pdf,Pres.pptx,Code.zip} Workshop2026-M2-G1/   # + VidChrono.mp4 ; dossier de remise commité
 ```
 
 - [ ] Arbre propre **avant** régénération (`git status --porcelain` vide hors livrables ignorés).
