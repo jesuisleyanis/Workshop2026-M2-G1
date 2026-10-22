@@ -7,7 +7,7 @@
 ## 0. Pré-vol (la veille / le matin)
 
 - [ ] `ROADMAP.md` à jour : plus aucune ligne ⬜ sur le périmètre remis (ou reportée explicitement ⏭️).
-- [ ] Les `[M]` du dossier (§8 et §11) et des slides (slide 9) **remplacés** par les p95 mesurés en recette (≥ 10 rejeux).
+- [ ] Les `[M]` du dossier (§8 et §11) **remplacés** par les p95 mesurés en recette (≥ 10 rejeux).
 - [ ] Clip Chrono enregistré (`docs/dossier/clip/README.md`) → `Workshop2026-M2-G1-VidChrono.mp4`.
 
 ## 1. Tests verts (Definition of Done)
@@ -28,7 +28,7 @@ make verify                    # transaction de contrôle -> exit 0
 ```
 
 - [ ] Chaîne `avant → attaque → détection → remédiation → après` rejouée **sans intervention humaine**.
-- [ ] MTTD/MTTR relevés et reportés (dossier §8 et §11, slide 9, clip).
+- [ ] MTTD/MTTR relevés et reportés (dossier §8 et §11, clip).
 - [ ] `make down` propre.
 
 ## 3. Arbre propre, PUIS régénération des livrables (même commit)
