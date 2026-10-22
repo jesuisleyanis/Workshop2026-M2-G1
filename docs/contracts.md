@@ -10,6 +10,7 @@ Ce document définit les quatre interfaces transverses que le sujet impose de ma
 3. [Schéma d'événement d'anomalie](#3-schéma-dévénement-danomalie)
 4. [Table de décision incident → action](#4-table-de-décision-incident--action)
 5. [Consigne Additionnelle 1 — authentification renforcée du back-office](#5-consigne-additionnelle-1--authentification-renforcée-du-back-office)
+6. [API client `payment-api` (app bancaire, via le WAF)](#6-api-client-payment-api-app-bancaire-via-le-waf)
 
 Plus les conventions d'API REST et les codes de retour.
 
@@ -52,6 +53,8 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `auth_login_success` | auth | Connexion réussie |
 | `auth_login_failed` | auth | Échec de connexion (mauvais identifiants) |
 | `auth_rate_limited` | auth | Requête rejetée par le rate-limit |
+| `auth_step_up_success` | auth | Ré-authentification réussie avant un gros virement (#51) — nouveau jeton à `auth_time` frais |
+| `auth_step_up_failed` | auth | Mot de passe refusé à la ré-authentification (#51) — compté aussi dans `resilience_auth_logins_total{result="failed"}` (force brute visible) |
 | `auth_identify_started` | auth | Étape 1 du back-office : identifiant saisi, caméra activée (consigne add. 1) |
 | `auth_face_recognized` | auth | Étape 2 : visage reconnu, saisie du mot de passe débloquée |
 | `auth_face_rejected` | auth | Étape 2 : visage non reconnu (identifiant vidé, caméra éteinte) |
@@ -66,6 +69,21 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `transaction_created` | payment-api | Virement fictif accepté |
 | `transaction_rejected` | payment-api | Virement refusé (solde, validation) |
 | `db_error` | payment-api | Erreur base de données |
+| `beneficiary_added` | payment-api | Bénéficiaire enregistré (#43) — piste d'audit d'un ajout de compte mule après vol de session |
+| `beneficiary_removed` | payment-api | Bénéficiaire supprimé (#43) |
+| `card_frozen` | payment-api | Carte gelée par son titulaire (#47) — un seul événement par changement d'état |
+| `card_unfrozen` | payment-api | Carte dégelée (#47) |
+| `card_settings_changed` | payment-api | Réglages de carte modifiés (#47 : plafond, sans contact, paiement en ligne — noms des champs seulement) |
+| `card_access_denied` | payment-api | Action sur une carte inconnue ou d'un tiers (#47, `404 card_not_found`) — une rafale = balayage d'ids (IDOR) |
+| `scheduled_transfer_executed` | payment-api | Échéance d'un virement programmé exécutée par la tâche de fond (#48) |
+| `scheduled_transfer_failed` | payment-api | Échéance refusée par le ledger (#48 : solde, plafond…, ou `internal_error` si la BDD tombe après réservation) — motif dans le message |
+| `scheduled_transfer_created` | payment-api | Virement programmé créé (#48) — piste d'audit d'un virement permanent vers un compte mule |
+| `scheduled_transfer_rejected` | payment-api | Création refusée (#48) — motif seul |
+| `scheduled_transfer_changed` | payment-api | Programmation mise en pause, reprise ou annulée (#48) |
+| `step_up_required` | payment-api | Virement (ou programmation) au-delà du seuil refusé faute de ré-authentification récente (#51, `403`) |
+| `statement_exported` | payment-api | Relevé exporté (#50 : compte, période, nombre de lignes) — exfiltration de données = export massif |
+| `transaction_access_denied` | payment-api | Lecture refusée d'une opération (#45 : id inconnu ou d'un tiers, message `unknown`/`foreign`) — une rafale = balayage d'ids (IDOR) |
+| `beneficiary_rejected` | payment-api | Ajout refusé (IBAN inconnu, doublon, soi-même, quota) — une rafale = énumération d'IBAN |
 | `waf_blocked` | waf (via log Nginx/ModSec) | Requête bloquée par le CRS |
 | `anomaly_detected` | detector | Le score dépasse le seuil |
 | `model_version_drift` | detector | Version scikit-learn chargée ≠ version d'entraînement du modèle |
@@ -331,6 +349,41 @@ le contrat MQTT ; l'API HTTP est une commande directe de l'objet sur le réseau 
 
 - `users.role` : `customer` (défaut) | `operator` | `admin`. Le back-office exige `operator`/`admin`.
 - Table `face_enrollments` : `user_id` (FK `users.id`, **unique**), `embedding` (BYTEA — **vecteur uniquement, jamais l'image**), `model_version` (str), `enrolled_by` (str), `enrolled_at` (timestamptz).
+
+---
+
+## 6. API client `payment-api` (app bancaire, via le WAF)
+
+Routes consommées par le front client (`services/front`). Toutes les réponses portent `Cache-Control: no-store` ; les ids de compte (corps et chemin) sont bornés à `[1, 2^31-1]` et les champs texte refusent les caractères de contrôle (`422`) — jamais un faux `503 db_error`. Le WAF route **chemin par chemin** : toute
+nouvelle route exige sa `location` dans `security/waf/nginx.conf` (+ test). Bearer obligatoire sauf
+mention contraire ; un objet d'autrui répond **404** (jamais 403 : pas d'oracle d'existence).
+Montants en **centimes entiers**. Aucune nouvelle route n'ajoute de label de métrique : le label
+`path` de §2 prend le gabarit de route, ce qui borne la cardinalité.
+
+| Route | Auth | Contrat |
+|---|---|---|
+| `GET /api/v1/accounts` | JWT | `[{id, iban_fake, balance_cents, currency}]` |
+| `POST /api/v1/transactions` | JWT | `{src_account, dst_account, amount_cents, category?}` → `201 TransactionOut` ; refus métier tracés (`transaction_rejected`). `category` ∈ `food, shopping, transport, subscriptions, health, leisure, housing, transfer, other`, **facultatif** (défaut `transfer` : `verify_tx` inchangé), invalide → `422 validation_error` (#44) |
+| `GET /api/v1/transactions?limit=` | JWT | Historique de l'utilisateur, plus récent d'abord ; `category` et `request_id` = ceux de l'**émetteur**, `null` pour le destinataire (jamais divulgués) ; le **refus d'un tiers** vers moi n'apparaît pas (ni ici, ni par id, ni au relevé) |
+| `GET /api/v1/transactions/{id}` | JWT | Détail d'une opération (#45) si le client possède le compte **source ou destination** ; sinon (ou id inconnu) `404 transaction_not_found` — jamais 403 (anti-énumération), tracé `transaction_access_denied`. Id hors `[1, 2^31-1]` → `422`. WAF : location regex dédiée, 60 req/min par IP, GET seul (le préfixe `/api/v1/transactions` reste sans limite : cible de `service_flood`). Même masquage de `category` que la liste |
+| `GET /api/v1/cards` | JWT | Mes cartes (#47) `[{id, account_id, last4, holder, expiry_month, expiry_year, status: active\|frozen, payment_limit_cents, contactless, online_payments}]` — **jamais** de numéro complet ni de CVV (n'existent pas côté serveur) |
+| `POST /api/v1/cards/{id}/freeze` · `/unfreeze` | JWT | `200` carte à jour, **idempotent** (un seul event `card_frozen`/`card_unfrozen` par changement réel). Carte d'autrui ou inconnue → `404 card_not_found`, tracé `card_access_denied`. Lecture-écriture sous verrou de ligne (gel concurrent) |
+| `PATCH /api/v1/cards/{id}` | JWT | Corps partiel `{payment_limit_cents? ∈ [0, 1 000 000], contactless?, online_payments?}` (champ inconnu ou corps vide → `422`), carte gelée → `409 card_frozen`, event `card_settings_changed`. **Seule** route en `PATCH` : admis par `ALLOWED_METHODS` du CRS, refusé en `405` ailleurs (`$method_denied`). WAF : `/api/v1/cards` 60 req/min par IP |
+| `GET /api/v1/scheduled-transfers` | JWT | Mes virements programmés (#48) `[{id, src_account, dst_account, amount_cents, category, frequency: once\|weekly\|monthly, start_on, next_run_on, end_on, status: active\|paused\|cancelled\|completed, last_run: {run_on, status: pending\|executed\|failed, error_code}\|null}]` |
+| `POST /api/v1/scheduled-transfers` | JWT | `{src_account, dst_account, amount_cents, category?, frequency, start_on, end_on?}` → `201`. Refus : `404 account_not_found`/`destination_not_found`, `422 same_account`/`invalid_amount`/`amount_too_large`/`invalid_dates` (début ∈ [aujourd'hui UTC, +1 an], fin ≥ début), `409 schedule_limit` (20) |
+| `PATCH /api/v1/scheduled-transfers/{id}` · `DELETE` | JWT | `{status: paused\|active}` → `200`, la reprise repart de la 1re échéance à venir (fermée → `409 schedule_closed`) ; `DELETE` → `204` (annulée, reste listée). D'autrui → `404 schedule_not_found`. **Exécution** par une tâche de fond de payment-api (`SCHEDULER_INTERVAL_S`, 60 s) via `ledger.transfer` (solde, plafond) ; idempotence par `UNIQUE(scheduled_id, run_on)` réservé avant le virement : **jamais deux exécutions**, même après un redémarrage par la remédiation ou avec plusieurs répliques |
+| `GET /api/v1/notifications?unread=` | JWT | Notifications in-app (#49) `[{id, type, title, body, created_at, read_at}]`, 100 plus récentes. `type` ∈ `transfer_sent, transfer_received, transfer_rejected, limit_80, card_frozen, card_unfrozen, scheduled_executed, scheduled_failed` ; titres/corps en français (texte brut). Générées **dans la transaction** de l'événement (y compris l'avis de l'émetteur d'un virement programmé) ; virement interne, accepté ou refusé = aucune. Rétention 100/client appliquée hors chemin chaud (tâche de fond + lecture) |
+| `GET /api/v1/notifications/unread-count` | JWT | `{count}` : badge de la cloche (sondé toutes les 30 s, un `COUNT`) |
+| `POST /api/v1/notifications/{id}/read` · `/read-all` | JWT | Lecture idempotente (`200` notification) ; `read-all` → `{updated}` cloisonné à l'appelant. D'autrui → `404 notification_not_found`. WAF : 60 req/min par IP |
+| `GET /api/v1/statements?account_id=&from=&to=&format=csv\|json` | JWT | Relevé (#50), bornes incluses (jours UTC). `csv` : `text/csv`, `Content-Disposition: attachment`, BOM, `;`, colonnes `Date;Référence;Libellé;Catégorie;Débit;Crédit;Statut` (montants non signés), **injection CSV neutralisée** (cellule commençant par `= + - @` tab/CR préfixée de `'`). `json` : `{account_id, iban_fake, holder, from, to, rows[], total_debit_cents, total_credit_cents}` (page imprimable). `404 account_not_found`, `422 invalid_period` (≤ 366 jours bornes incluses, dates 2000–2100), `422 statement_too_large` (> 5 000 lignes). Un refus d'un **tiers** n'apparaît jamais sur le relevé du destinataire. WAF : 10 req/min par IP. Event `statement_exported` |
+| `POST /api/v1/auth/step-up` (service **auth**) | JWT | `{password}` → `200 {access_token, token_type, expires_in}` : même session (`sub`, `role`, **`exp` conservés** — jamais prolongée), claim `auth_time` frais (#51). `401 invalid_credentials` / `invalid_token`, `429 rate_limited` (**budget partagé** avec `/login`, même IP). Le login pose aussi `auth_time` |
+| Step-up (`POST /transactions`, `POST /scheduled-transfers`, reprise `PATCH {status: active}`) | JWT | Montant > `STEP_UP_THRESHOLD_CENTS` (500 €) — sur un compte **plafonné**, montant + virements vers des tiers des 24 h (anti-fractionnement) — et `auth_time` absent ou âgé de plus de `STEP_UP_MAX_AGE_S` (300 s) → **`403 step_up_required`** (nouveau code d'erreur), rien n'est débité. `verify_tx` (1 €), le trafic normal (≤ 5 €) et `service_flood` (1 ct) restent sous le seuil |
+| `GET /api/v1/limits` | JWT | Plafond mensuel par compte (#46) : `[{account_id, monthly_limit_cents, used_cents, remaining_cents, period_end}]`. `monthly_limit_cents: null` = **pas de plafond** (comptes de service `demo01`/`demo02` : `verify_tx`, trafic normal, `service_flood` ; comptes ouverts par `auth`). Fenêtre `[1er du mois, 1er suivant)` UTC, même filtre « dépense » que `/stats/spending`. Consommé = virements acceptés vers un autre client depuis le 1er du mois UTC ; `period_end` = date de remise à zéro. Au virement, dépassement → `409 limit_exceeded` (refus persisté, `transaction_rejected` + métrique `rejected`). WAF : 60 req/min par IP, GET seul |
+| `GET /api/v1/stats/spending?period=week\|month&offset=0` | JWT | `offset` ∈ [-24, 0] (périodes passées). `{period, offset, start, end (exclusif), total_cents, by_category:[{category, amount_cents, share}], by_day:[{date, amount_cents}]}`. Dépense = virement **accepté** vers un compte **tiers** (refus et virements internes exclus). Semaine ISO / mois civil, jours **UTC**, agrégé en SQL (`GROUP BY`). WAF : 60 req/min par IP, GET seul. `category` n'est **pas** un label de métrique (§2 figé) (#44) |
+| `GET /api/v1/beneficiaries` | JWT | Mes bénéficiaires `[{id, display_name, account_id, iban_fake, created_at}]`, triés par nom (#43) |
+| `POST /api/v1/beneficiaries` | JWT | `{display_name (1–64), iban_fake}` → `201`. IBAN résolu vers un compte (espaces/casse ignorés, recherche exacte sur l'index unique). WAF : 30 req/min par IP (rafale 10) contre l'énumération ; events `beneficiary_added` / `beneficiary_rejected`. `404 account_not_found`, `409 beneficiary_exists`, `422 own_account`, `409 beneficiary_limit` (100) |
+| `DELETE /api/v1/beneficiaries/{id}` | JWT | `204` (`beneficiary_removed`) ; bénéficiaire d'autrui ou inconnu → `404 beneficiary_not_found`. **Seule** route en `DELETE` : `ALLOWED_METHODS` du CRS l'admet, `nginx.conf` (`$method_denied`) le refuse en `405` sur tout autre chemin |
+| `GET /api/v1/status` | **aucune** | `200 {"status":"ok","checked_at":"<iso Z>"}` / `503 {"status":"degraded",…}` si la BDD est injoignable. **Aucun détail interne** (ni version, ni hôte, ni exception). Cache serveur à vol unique `STATUS_CACHE_S` (2 s, borné 0,5–30 s) + `limit_req` WAF par IP (2 r/s, rafale 5), GET seul. **Exclue des métriques HTTP §2** comme `/ready` (sonde, pas trafic métier : n'altère pas les features ML). Un `200` ne prouve que l'accès BDD : le front confirme la reprise par une route métier (#42). |
 
 ---
 

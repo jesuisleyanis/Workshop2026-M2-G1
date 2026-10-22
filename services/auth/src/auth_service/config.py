@@ -37,6 +37,8 @@ class Settings:
     run_migrations: bool = True
     enable_docs: bool = False
     register_initial_balance_cents: int = 0
+    # Plafond mensuel (#46) d'un compte ouvert par /register : un client, pas un compte de service.
+    register_monthly_limit_cents: int = 80_000
     log_level: str = "INFO"
     # Back-office à étapes (consigne additionnelle 1)
     face_id_url: str = "http://face-id:8006"
@@ -79,6 +81,9 @@ class Settings:
             enable_docs=_bool("ENABLE_DOCS", False),
             register_initial_balance_cents=int(
                 os.environ.get("REGISTER_INITIAL_BALANCE_CENTS", "0")
+            ),
+            register_monthly_limit_cents=int(
+                os.environ.get("REGISTER_MONTHLY_LIMIT_CENTS", "80000")
             ),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
             face_id_url=os.environ.get("FACE_ID_URL", "http://face-id:8006"),

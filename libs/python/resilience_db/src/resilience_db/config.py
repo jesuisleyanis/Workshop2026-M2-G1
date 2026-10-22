@@ -58,18 +58,17 @@ def make_engine(url: URL | str | None = None) -> Engine:
     if url.get_backend_name() == "sqlite":
         kwargs: dict = {"connect_args": {"check_same_thread": False}}
         if url.database in (None, "", ":memory:"):
-            kwargs["poolclass"] = (
-                StaticPool  # une seule base en mémoire pour tous les threads
-            )
-        engine = create_engine(url, **kwargs)
+            kwargs["poolclass"] = StaticPool  # une seule base en mémoire pour tous les threads
+        engine = create_engine(url, hide_parameters=True, **kwargs)
 
         @event.listens_for(engine, "connect")
         def _fk_on(dbapi_conn, _record):  # pragma: no cover - trivial
             dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
         return engine
+    # hide_parameters : une trace d'erreur (scheduler, logs) ne recopie jamais les valeurs liées.
     return create_engine(
-        url, pool_pre_ping=True, pool_size=5, max_overflow=5, pool_timeout=5
+        url, pool_pre_ping=True, pool_size=5, max_overflow=5, pool_timeout=5, hide_parameters=True
     )
 
 

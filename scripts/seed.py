@@ -33,14 +33,15 @@ def seed_direct(env: dict[str, str]) -> int:
     """Applique migrations + seed via la lib partagée (processus courant)."""
     from resilience_db.config import make_engine, make_session_factory, read_secret
     from resilience_db.migrate import upgrade
-    from resilience_db.seed import DEFAULT_USERS, seed_demo_data
+    from resilience_db.seed import DEFAULT_MONTHLY_LIMIT_CENTS, DEFAULT_USERS, seed_demo_data
 
     password = read_secret("SEED_PASSWORD")
     users = int(env.get("SEED_USERS", DEFAULT_USERS))
     engine = make_engine()
     upgrade(engine)
     with make_session_factory(engine)() as session:
-        created = seed_demo_data(session, password, users=users,
+        limit = int(env.get("SEED_MONTHLY_LIMIT_CENTS", DEFAULT_MONTHLY_LIMIT_CENTS))
+        created = seed_demo_data(session, password, users=users, monthly_limit_cents=limit,
                                  reset_passwords=env.get("SEED_RESET_PASSWORDS") == "1")
     print(f"seed: {len(created)} utilisateur(s) créé(s): {', '.join(created) or '-'} "
           f"({users} au total, idempotent)")
@@ -54,12 +55,14 @@ def seed_via_compose(env: dict[str, str]) -> int:
         return 1
     cmd = [
         "docker", "compose", "-f", str(COMPOSE_FILE), "exec", "-T",
-        "-e", "SEED_PASSWORD", "-e", "SEED_USERS", "-e", "SEED_RESET_PASSWORDS",
+        "-e", "SEED_PASSWORD", "-e", "SEED_USERS", "-e", "SEED_MONTHLY_LIMIT_CENTS", "-e", "SEED_RESET_PASSWORDS",
         SEED_SERVICE, "python", "-m", "resilience_db.seed",
     ]
     try:
-        return subprocess.run(cmd, env={**env, "SEED_USERS": env.get("SEED_USERS", "5"),
-                                        "SEED_RESET_PASSWORDS": env.get("SEED_RESET_PASSWORDS", "0")}).returncode
+        defaults = {"SEED_USERS": env.get("SEED_USERS", "5"),
+                    "SEED_MONTHLY_LIMIT_CENTS": env.get("SEED_MONTHLY_LIMIT_CENTS", "80000"),
+                    "SEED_RESET_PASSWORDS": env.get("SEED_RESET_PASSWORDS", "0")}
+        return subprocess.run(cmd, env={**env, **defaults}).returncode
     except FileNotFoundError:
         print("seed: docker introuvable et DB non configurée (DATABASE_URL / POSTGRES_PASSWORD)", file=sys.stderr)
         return 1

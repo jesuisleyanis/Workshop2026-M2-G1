@@ -53,11 +53,15 @@ RUN chown -R nginx:nginx /etc/nginx/deny && chmod 2775 /etc/nginx/deny && chmod 
 RUN mkdir -p /var/log/modsec && chown nginx:nginx /var/log/modsec && chmod 0755 /var/log/modsec
 
 # Ports non privilégiés (entrypoint `check-low-port`) et chemins TLS utilisés par nginx.conf.
+# ALLOWED_METHODS : défaut CRS « GET HEAD POST OPTIONS » + DELETE (suppression d'un bénéficiaire,
+# #43) + PATCH (réglages d'une carte, #47) ; sans eux, la règle 911100 les bloque en 403. PUT reste
+# refusé, et nginx.conf ($method_denied) restreint DELETE/PATCH à leur seule route.
 ENV PORT=8080 \
     SSL_PORT=8443 \
     SSL_CERT_FILE=/etc/nginx/conf/server.crt \
     SSL_CERT_KEY_FILE=/etc/nginx/conf/server.key \
     BLOCKING_PARANOIA=1 \
+    ALLOWED_METHODS="GET HEAD POST OPTIONS DELETE PATCH" \
     ANOMALY_INBOUND=5 \
     ANOMALY_OUTBOUND=4
 

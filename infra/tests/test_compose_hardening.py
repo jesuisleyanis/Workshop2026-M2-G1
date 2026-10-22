@@ -70,7 +70,7 @@ def test_remediation_container_matches_read_only_claim() -> None:
 def test_mosquitto_is_limited_to_iot_profile_and_hotspot() -> None:
     mqtt = SERVICES["mosquitto"]
     assert mqtt["profiles"] == ["iot"]
-    assert mqtt["ports"] == ["192.168.137.1:1883:1883"]
+    assert mqtt["ports"] == ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]
     assert mqtt["networks"] == ["app"]
     assert mqtt["user"] == "1883:1883"
     assert mqtt["read_only"] is True

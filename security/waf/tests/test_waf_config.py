@@ -38,13 +38,120 @@ def test_api_upstreams_target_service_ports():
 
 
 def test_only_public_routes_are_proxied():
-    locations = re.findall(r"location\s+(?:=\s*)?(\S+)\s*\{", _directives(NGINX))
+    locations = re.findall(r"location\s+(?:[=~]\s*)?(\S+)\s*\{", _directives(NGINX))
     assert set(locations) == {"/healthz", "/", "/api/v1/accounts", "/api/v1/transactions",
+                              "/api/v1/status", "/api/v1/beneficiaries", "/api/v1/stats/spending",
+                              "^/api/v1/transactions/[0-9]+$", "/api/v1/limits", "/api/v1/cards", "/api/v1/scheduled-transfers",
+                              "/api/v1/notifications", "/api/v1/statements",
                               "/api/v1/login", "/api/v1/register", "/api/v1/auth/", "/metrics"}
     # /metrics n'apparaît que comme REFUS explicite (404), jamais comme route vers un service.
     routed = _directives(NGINX).replace("location = /metrics { return 404; }", "")
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
         assert forbidden not in routed, f"{forbidden} ne doit jamais être routé par le WAF"
+
+
+def test_crs_allows_delete_and_patch_but_not_put():
+    # #43 : DELETE /api/v1/beneficiaries/{id}. Sans ALLOWED_METHODS, la règle CRS 911100 le bloque.
+    m = re.search(r'ALLOWED_METHODS="([^"]+)"', DOCKERFILE)
+    assert m, "ALLOWED_METHODS doit être fixé dans l'image WAF"
+    assert set(m.group(1).split()) == {"GET", "HEAD", "POST", "OPTIONS", "DELETE", "PATCH"}
+
+
+def test_delete_and_patch_are_denied_everywhere_except_their_one_route():
+    conf = _directives(NGINX)
+    m = re.search(r'map "\$request_method:\$uri" \$method_denied \{\s*default 0;((?:\s*"~[^"]+" 1;)+)\s*\}', conf)
+    assert m, "map $method_denied absente"
+    assert re.search(r"if \(\$method_denied\)\s*\{\s*return 405;\s*\}", conf)
+    rules = [re.compile(r) for r in re.findall(r'"~([^"]+)" 1;', m.group(1))]
+
+    def denied(probe: str) -> bool:
+        return any(r.search(probe) for r in rules)
+
+    assert not denied("DELETE:/api/v1/beneficiaries/12")
+    assert not denied("PATCH:/api/v1/cards/3")
+    assert not denied("PATCH:/api/v1/scheduled-transfers/7") and not denied("DELETE:/api/v1/scheduled-transfers/7")
+    assert denied("DELETE:/api/v1/scheduled-transfers") and denied("PATCH:/api/v1/scheduled-transfers/7/x")
+    for probe in ("DELETE:/api/v1/beneficiaries", "DELETE:/api/v1/beneficiaries/12/x",
+                  "DELETE:/api/v1/accounts", "DELETE:/api/v1/cards/3", "DELETE:/",
+                  "PATCH:/api/v1/cards", "PATCH:/api/v1/cards/3/freeze", "PATCH:/api/v1/accounts",
+                  "PATCH:/api/v1/beneficiaries/12"):
+        assert denied(probe), probe
+    assert not denied("GET:/api/v1/accounts") and not denied("POST:/api/v1/cards/3/freeze")
+
+
+def test_scheduled_transfers_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=schedules_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/scheduled-transfers\s+\{\s*limit_req zone=schedules_per_ip", conf)
+
+
+def test_notifications_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=notifications_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/notifications\s+\{\s*limit_req zone=notifications_per_ip", conf)
+
+
+def test_statements_route_is_exact_rate_limited_and_read_only():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=statements_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    block = re.search(r"location = /api/v1/statements\s*\{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block and "limit_req zone=statements_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
+
+
+def test_cards_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=cards_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/cards\s+\{\s*limit_req zone=cards_per_ip", conf)
+
+
+def test_spending_stats_route_is_rate_limited_and_read_only():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=stats_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    block = re.search(r"location = /api/v1/stats/spending \{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block and "limit_req zone=stats_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
+
+
+def test_transaction_detail_is_rate_limited_but_transfers_are_not():
+    # #45 : GET /api/v1/transactions/{id} (regex, prioritaire sur le préfixe) est borné par IP ;
+    # le préfixe (POST de virement, cible de service_flood) reste sans limite côté WAF.
+    conf = _directives(NGINX)
+    block = re.search(r"location ~ \^/api/v1/transactions/\[0-9\]\+\$ \{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block, "location regex du détail absente"
+    assert "limit_req zone=tx_detail_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=tx_detail_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    prefix = re.search(r"location /api/v1/transactions\s+\{([^}]*)\}", conf)
+    # Le virement (POST, cible légitime de service_flood) ne subit PAS la limite par IP du détail :
+    # seule la zone globale `api` (écrêtage préventif large, 30 r/s) s'y applique.
+    assert prefix and "tx_detail_per_ip" not in prefix.group(1), "ne pas étouffer service_flood au WAF"
+
+
+def test_limits_route_is_exact_rate_limited_and_read_only():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=limits_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    block = re.search(r"location = /api/v1/limits\s*\{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block and "limit_req zone=limits_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
+
+
+def test_beneficiaries_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=beneficiaries_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/beneficiaries \{\s*limit_req zone=beneficiaries_per_ip", conf)
+
+
+def test_public_status_route_is_exact_rate_limited_and_read_only():
+    # #42 : route sans auth -> correspondance exacte (pas de préfixe ouvert sur payment-api),
+    # limite par IP, GET seulement.
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=status_per_ip:\d+m\s+rate=\d+r/s;", conf)
+    block = re.search(r"location = /api/v1/status\s*\{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block, "location exacte /api/v1/status absente"
+    body = block.group(1)
+    assert "limit_req zone=status_per_ip" in body and "proxy_pass http://payment_api;" in body
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", body)
 
 
 # --------------------------------------------------------------------------- #6 Dockerfile / non-root / TLS
@@ -112,7 +219,7 @@ def test_compose_publishes_80_443_to_unprivileged_ports_with_valid_healthcheck()
     test = waf["healthcheck"]["test"]
     assert test[0] == "CMD-SHELL" and "8443/healthz" in test[1], "healthcheck exec-form malformé (ticket #10)"
     assert all("ports" not in svc for name, svc in services.items() if name not in {"waf", "mosquitto"}), "seuls WAF et MQTT publient des ports"
-    assert services["mosquitto"]["ports"] == ["192.168.137.1:1883:1883"]
+    assert services["mosquitto"]["ports"] == ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]
 
 
 # --------------------------------------------------------------------------- #12 waf-exporter
@@ -189,3 +296,23 @@ def test_real_ip_trust_is_generated_empty_by_default_and_applied_before_blocking
 def test_metrics_is_never_reachable_through_the_waf():
     # `location /` transmet tout au front, qui sert un /metrics interne (sonde Prometheus) : refus explicite.
     assert "location = /metrics { return 404; }" in _directives(NGINX)
+
+def test_plain_http_only_redirects_to_https_and_hsts_is_sent():
+    conf = _directives(NGINX)
+    plain = re.search(r"server \{\s*listen 8080;(.*?)\n    \}", conf, re.S)
+    assert plain, "serveur HTTP clair dédié"
+    body = plain.group(1)
+    assert "return 301 https://$host$request_uri;" in body and "proxy_pass" not in body
+    assert re.search(r"location = /healthz", body), "sonde de vie conservée sur :8080"
+    tls = conf[conf.index("listen 8443 ssl;"):]
+    assert "listen 8080;" not in tls, "l'API n'est jamais servie en clair"
+    assert 'add_header Strict-Transport-Security "max-age=31536000" always;' in conf
+
+
+def test_modsecurity_audit_log_never_contains_request_bodies():
+    import yaml
+
+    env = yaml.safe_load(COMPOSE)["services"]["waf"]["environment"]
+    parts = env["MODSEC_AUDIT_LOG_PARTS"]
+    assert not set(parts) & set("CIJ"), "pas de corps de requête (mots de passe)"
+    assert {"A", "B", "H", "Z"} <= set(parts), "ce que lit waf-exporter (uri, règles)"

@@ -3,22 +3,37 @@
 Lancement : uvicorn payment_api.main:create_app --factory --port 8001
 """
 
+import asyncio
 import logging
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, date, datetime, timedelta
+from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from resilience_common.logging import get_logger
 from resilience_common.metrics import db_errors_total, instrument, transactions_total
 from resilience_db.config import make_engine, make_session_factory
-from resilience_db.migrate import upgrade
-from resilience_db.models import Account, Transaction, User
-from sqlalchemy import Engine, or_, select, text
+from resilience_db.migrate import upgrade_with_retry
+from resilience_db.models import Account, Transaction, TransactionStatus, User
+from sqlalchemy import Engine, and_, func, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import aliased
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from payment_api import (
+    beneficiaries,
+    cards,
+    limits,
+    notifications,
+    schedules,
+    statements,
+    stats,
+)
 from payment_api.config import SERVICE_NAME, Settings
 from payment_api.ledger import Rejection, transfer
 from payment_api.observability import (
@@ -29,23 +44,55 @@ from payment_api.observability import (
     log_event,
     request_id_var,
 )
-from payment_api.schemas import AccountOut, TransactionIn, TransactionOut
-from payment_api.security import missing_token, username_from_token
+from payment_api.schemas import (
+    AccountOut,
+    BeneficiaryIn,
+    BeneficiaryOut,
+    CardOut,
+    CardPatch,
+    LimitOut,
+    NotificationOut,
+    RunOut,
+    ScheduleIn,
+    ScheduleOut,
+    ScheduleStatusIn,
+    ServiceStatusOut,
+    SpendingOut,
+    TransactionIn,
+    TransactionOut,
+)
+from payment_api.security import claims_from_token, missing_token
+from payment_api.status import StatusCache
+
+# Identifiant en chemin borné à l'INTEGER Postgres : au-delà, la BDD lèverait une DataError,
+# traduite en 503 db_unavailable + db_errors_total, soit un faux signal d'incident pour le ML.
+DbId = Annotated[int, Path(ge=1, le=2**31 - 1)]
 
 
-def _migrate_with_retry(engine: Engine, log: logging.Logger, attempts: int = 5) -> None:
-    for attempt in range(1, attempts + 1):
-        try:
-            upgrade(engine)
-            return
-        except SQLAlchemyError:
-            if attempt == attempts:
-                raise
-            log.warning("DB not ready for migrations (attempt %d/%d)", attempt, attempts)
-            time.sleep(2)
+def _as_seen_by(tx: Transaction, own_ids: set[int]) -> TransactionOut:
+    # La catégorie est celle de l'émetteur : jamais divulguée au destinataire (#44).
+    out = TransactionOut.model_validate(tx)
+    if tx.src_account in own_ids:
+        return out
+    # Catégorie et référence (ex. « sched-12-2026-10-21 » : programmation, périodicité) de
+    # l'émetteur : jamais divulguées au destinataire.
+    return out.model_copy(update={"category": None, "request_id": None})
 
 
-def create_app(settings: Settings | None = None, engine: Engine | None = None) -> FastAPI:
+def _db_reachable(session) -> bool:
+    try:
+        session.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        return False
+    return True
+
+
+def create_app(
+    settings: Settings | None = None,
+    engine: Engine | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> FastAPI:
     settings = settings or Settings.from_env()
     engine = engine or make_engine()
     session_factory = make_session_factory(engine)
@@ -53,11 +100,28 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         get_logger(SERVICE_NAME, getattr(logging, settings.log_level, logging.INFO))
     )
 
+    def _prune_notifications() -> None:
+        with session_factory() as session:
+            notifications.prune_all(session)
+
+    async def _scheduler_loop() -> None:
+        # Hors du thread de l'event loop : le ledger est synchrone (SQLAlchemy).
+        while True:
+            try:
+                await asyncio.to_thread(schedules.run_due, session_factory, log, now)
+                await asyncio.to_thread(_prune_notifications)
+            except Exception:  # BDD indisponible pendant un incident : on retente au tour suivant
+                log.warning("Scheduler pass failed", exc_info=True)
+            await asyncio.sleep(settings.scheduler_interval_s)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if settings.run_migrations:
-            _migrate_with_retry(engine, log)
+            upgrade_with_retry(engine, log)
+        task = asyncio.create_task(_scheduler_loop()) if settings.scheduler_enabled else None
         yield
+        if task is not None:
+            task.cancel()
 
     app = FastAPI(
         title="RESILIENCE-ALPHA payment-api",
@@ -79,22 +143,65 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             yield session
 
     def current_user(
+        request: Request,
         creds: HTTPAuthorizationCredentials | None = Depends(bearer),
         session=Depends(get_session),
     ) -> User:
         """Dépendance commune : toutes les routes métier exigent un JWT valide."""
         if creds is None:
             raise missing_token()
-        username = username_from_token(creds.credentials, settings.jwt_secret)
+        claims = claims_from_token(creds.credentials, settings.jwt_secret)  # décodé une fois
+        username = claims["sub"]
+        if not isinstance(username, str) or not username:
+            raise ApiError(401, "invalid_token", "Invalid token", {"WWW-Authenticate": "Bearer"})
+        request.state.auth_time = claims.get("auth_time")  # lu par require_recent_auth (#51)
         user = session.scalar(select(User).where(User.username == username))
         if user is None:  # JWT valide mais compte supprimé
             raise ApiError(401, "invalid_token", "Invalid token", {"WWW-Authenticate": "Bearer"})
         return user
 
+    def spent_last_24h(session, src: Account, user: User) -> int:
+        t = now()
+        return session.scalar(
+            select(func.coalesce(func.sum(Transaction.amount_cents), 0)).where(
+                Transaction.src_account == src.id,
+                *stats.spend_scope(user.id, t - timedelta(hours=24), t + timedelta(seconds=1)),
+            )
+        )
+
+    def auth_is_recent(request: Request) -> bool:
+        auth_time = getattr(request.state, "auth_time", None)
+        age = now().timestamp() - auth_time if isinstance(auth_time, int | float) else None
+        # Absent, trop ancien, ou dans le futur au-delà d'une dérive d'horloge raisonnable.
+        return age is not None and -60 <= age <= settings.step_up_max_age_s
+
+    def require_recent_auth(
+        amount_cents: int, request: Request, user: User, already_cents: int = 0
+    ) -> None:
+        """Step-up (#51) : `amount_cents + already_cents` au-delà du seuil -> mot de passe vérifié
+        il y a moins de N secondes. `auth_time` vient du JWT déjà vérifié par current_user."""
+        if amount_cents + already_cents <= settings.step_up_threshold_cents:
+            return
+        if not auth_is_recent(request):
+            log_event(
+                log,
+                logging.WARNING,
+                "step_up_required",
+                f"Step-up required for {amount_cents} cents",
+                http_status=403,
+                user=user.username,
+            )
+            raise ApiError(403, "step_up_required", "Recent password confirmation required")
+
     # ---------------------------------------------------------------- erreurs
     @app.exception_handler(ApiError)
     async def _api_error(_req: Request, exc: ApiError):
         return error_response(exc.status, exc.code, exc.message, exc.headers)
+
+    @app.exception_handler(Rejection)
+    async def _rejection(_req: Request, exc: Rejection):
+        # Refus métier non intercepté par la route : même corps que ApiError (contrat).
+        return error_response(exc.status, exc.code, exc.message)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(_req: Request, exc: StarletteHTTPException):
@@ -130,11 +237,22 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     @app.get("/ready")
     def ready(session=Depends(get_session)):
         # Sonde : n'incrémente PAS resilience_db_errors_total (réservé au trafic métier).
-        try:
-            session.execute(text("SELECT 1"))
-        except SQLAlchemyError:
+        if not _db_reachable(session):
             raise ApiError(503, "db_unavailable", "Database unreachable")
         return {"status": "ready"}
+
+    # État public du service (bandeau client « perturbé → rétabli », #42) : sans auth, donc
+    # aucun détail interne ; cache à vol unique (cf. status.py), limité par IP au WAF.
+    def _probe_db() -> bool:
+        with session_factory() as session:
+            return _db_reachable(session)
+
+    status_cache = StatusCache(_probe_db, settings.status_cache_s, clock)
+
+    @app.get("/api/v1/status", response_model=ServiceStatusOut)
+    def service_status():
+        body = status_cache.get()
+        return JSONResponse(body.model_dump(), status_code=200 if body.status == "ok" else 503)
 
     # ---------------------------------------------------------------- API métier
     @app.get("/api/v1/accounts", response_model=list[AccountOut])
@@ -145,8 +263,23 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
 
     @app.post("/api/v1/transactions", response_model=TransactionOut, status_code=201)
     def create_transaction(
-        body: TransactionIn, user: User = Depends(current_user), session=Depends(get_session)
+        request: Request,
+        body: TransactionIn,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
     ):
+        require_recent_auth(body.amount_cents, request, user)
+
+        def anti_splitting(src: Account, dst: Account) -> None:
+            # Appelé par le ledger SOUS le verrou de la source : des virements concurrents de 499 €
+            # se sérialisent, chacun voit les précédents. Exemptés (aucune requête) : comptes de
+            # service sans plafond (verify_tx, trafic normal), virement vers mes propres comptes
+            # (comme le plafond), session déjà ré-authentifiée.
+            external = dst.user_id != src.user_id
+            if src.monthly_limit_cents is not None and external and not auth_is_recent(request):
+                already = spent_last_24h(session, src, user)
+                require_recent_auth(body.amount_cents, request, user, already)
+
         try:
             tx = transfer(
                 session,
@@ -155,6 +288,9 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
                 body.dst_account,
                 body.amount_cents,
                 request_id_var.get(),
+                body.category,
+                now(),
+                guard=anti_splitting,
             )
         except Rejection as rej:
             transactions_total.labels(result="rejected").inc()
@@ -184,12 +320,325 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         user: User = Depends(current_user),
         session=Depends(get_session),
     ):
-        own = select(Account.id).where(Account.user_id == user.id)
-        return session.scalars(
+        own_ids = set(session.scalars(select(Account.id).where(Account.user_id == user.id)))
+        rows = session.scalars(
             select(Transaction)
-            .where(or_(Transaction.src_account.in_(own), Transaction.dst_account.in_(own)))
+            .where(
+                or_(
+                    Transaction.src_account.in_(own_ids),
+                    # Reçu : seulement s'il a abouti. Le refus d'un tiers (solde, plafond) ne
+                    # regarde que lui — même règle que le relevé (#50).
+                    and_(
+                        Transaction.dst_account.in_(own_ids),
+                        Transaction.status == TransactionStatus.CREATED.value,
+                    ),
+                )
+            )
             .order_by(Transaction.id.desc())
             .limit(limit)
         ).all()
+        return [_as_seen_by(t, own_ids) for t in rows]
+
+    @app.get("/api/v1/transactions/{transaction_id}", response_model=TransactionOut)
+    def get_transaction(
+        transaction_id: DbId,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        src, dst = aliased(Account), aliased(Account)
+        row = session.execute(
+            select(Transaction, src.user_id, dst.user_id)
+            .join(src, src.id == Transaction.src_account)
+            .join(dst, dst.id == Transaction.dst_account)
+            .where(Transaction.id == transaction_id)
+        ).first()  # une seule requête : l'opération et ses deux titulaires
+        # Refus d'un tiers vers moi : invisible pour moi, comme un id inconnu.
+        visible = row is not None and (
+            row[1] == user.id or (row[2] == user.id and row[0].status == "created")
+        )
+        if not visible:
+            # Ni émetteur ni destinataire : même 404 qu'un id inconnu (pas 403, anti-énumération),
+            # mais tracé côté SOC (balayage d'ids = tentative d'IDOR).
+            log_event(
+                log,
+                logging.WARNING,
+                "transaction_access_denied",
+                f"Transaction lookup denied ({'unknown' if row is None else 'foreign'})",
+                http_status=404,
+                user=user.username,
+            )
+            raise ApiError(404, "transaction_not_found", "Transaction not found")
+        tx, sender, _ = row
+        own = {tx.src_account} if sender == user.id else set()
+        return _as_seen_by(tx, own)
+
+    @app.get("/api/v1/limits", response_model=list[LimitOut])
+    def list_limits(user: User = Depends(current_user), session=Depends(get_session)):
+        return limits.limits_for(session, user, now())
+
+    @app.get("/api/v1/stats/spending", response_model=SpendingOut)
+    def spending_stats(
+        period: Literal["week", "month"] = Query("month"),
+        offset: int = Query(0, ge=-24, le=0),
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        return stats.spending(session, user, period, now(), offset)
+
+    # ---------------------------------------------------------------- relevés (#50)
+    @app.get("/api/v1/statements")
+    def get_statement(
+        account_id: int = Query(ge=1, le=2**31 - 1),
+        from_: date = Query(alias="from"),
+        to: date = Query(),
+        format: Literal["csv", "json"] = Query("csv"),
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        st = statements.build(session, user, account_id, from_, to)
+        log_event(
+            log,
+            logging.INFO,
+            "statement_exported",
+            f"Statement {format} account {account_id} {from_}..{to} ({len(st['rows'])} rows)",
+            http_status=200,
+            user=user.username,
+        )
+        if format == "json":
+            return st
+        name = f"releve-{account_id}-{from_}-{to}.csv"
+        return Response(
+            statements.to_csv(st),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
+
+    # ---------------------------------------------------------------- notifications (#49)
+    @app.get("/api/v1/notifications", response_model=list[NotificationOut])
+    def list_notifications(
+        unread: bool = Query(False),
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        return notifications.list_for(session, user.id, unread)
+
+    @app.get("/api/v1/notifications/unread-count")
+    def notifications_unread_count(
+        user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        # Badge de la cloche : un COUNT, pas 100 lignes à chaque sondage de 30 s.
+        return {"count": notifications.unread_count(session, user.id)}
+
+    @app.post("/api/v1/notifications/read-all")
+    def read_all_notifications(user: User = Depends(current_user), session=Depends(get_session)):
+        return {"updated": notifications.mark_all_read(session, user.id)}
+
+    @app.post("/api/v1/notifications/{notification_id}/read", response_model=NotificationOut)
+    def read_notification(
+        notification_id: DbId, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        n = notifications.mark_read(session, user.id, notification_id)
+        if n is None:  # d'autrui ou inconnue : même 404
+            raise ApiError(404, "notification_not_found", "Notification not found")
+        return n
+
+    # ---------------------------------------------------------------- programmés (#48)
+    def _schedule_out(s, run=None) -> ScheduleOut:
+        out = ScheduleOut.model_validate(s)
+        return out.model_copy(update={"last_run": RunOut.model_validate(run) if run else None})
+
+    @app.get("/api/v1/scheduled-transfers", response_model=list[ScheduleOut])
+    def list_schedules(user: User = Depends(current_user), session=Depends(get_session)):
+        return [_schedule_out(s, run) for s, run in schedules.list_for(session, user)]
+
+    def _audit(event: str, message: str, status: int, user: User, level=logging.INFO):
+        log_event(log, level, event, message, http_status=status, user=user.username)
+
+    @app.post("/api/v1/scheduled-transfers", response_model=ScheduleOut, status_code=201)
+    def create_schedule(
+        request: Request,
+        body: ScheduleIn,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        # Un virement permanent au-delà du seuil est aussi sensible qu'un virement immédiat ; les
+        # programmations déjà ouvertes vers des tiers comptent (pas de fractionnement en N × 499 €).
+        # Verrou du compte source jusqu'au commit : deux créations concurrentes se sérialisent.
+        require_recent_auth(
+            body.amount_cents,
+            request,
+            user,
+            schedules.open_amount(session, user, body.src_account, lock=True),
+        )
+        try:
+            s = schedules.create(session, user, body, now().astimezone(UTC).date())
+        except Rejection as rej:
+            # Piste d'audit (vol de session -> virement permanent vers un compte mule).
+            _audit(
+                "scheduled_transfer_rejected",
+                f"Schedule rejected ({rej.code})",
+                rej.status,
+                user,
+                logging.WARNING,
+            )
+            raise
+        _audit(
+            "scheduled_transfer_created",
+            f"Schedule {s.id} created ({s.frequency}, account {s.dst_account})",
+            201,
+            user,
+        )
+        return _schedule_out(s)
+
+    @app.patch("/api/v1/scheduled-transfers/{schedule_id}", response_model=ScheduleOut)
+    def set_schedule_status(
+        request: Request,
+        schedule_id: DbId,
+        body: ScheduleStatusIn,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        # Reprendre un gros virement permanent relance des débits : même step-up qu'à la création.
+        s = schedules.set_status(
+            session,
+            user,
+            schedule_id,
+            body.status,
+            now().astimezone(UTC).date(),
+            before_resume=lambda sched: require_recent_auth(
+                sched.amount_cents,
+                request,
+                user,
+                schedules.open_amount(session, user, sched.src_account, exclude=sched.id),
+            ),
+        )
+        _audit("scheduled_transfer_changed", f"Schedule {s.id} {s.status}", 200, user)
+        return _schedule_out(s)
+
+    @app.delete("/api/v1/scheduled-transfers/{schedule_id}", status_code=204)
+    def cancel_schedule(
+        schedule_id: DbId, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        schedules.cancel(session, user, schedule_id)
+        _audit("scheduled_transfer_changed", f"Schedule {schedule_id} cancelled", 204, user)
+        return Response(status_code=204)
+
+    # ---------------------------------------------------------------- cartes (#47)
+    @app.get("/api/v1/cards", response_model=list[CardOut])
+    def list_cards(user: User = Depends(current_user), session=Depends(get_session)):
+        return cards.list_for(session, user)
+
+    def _owned_card_or_audit(action, user: User, card_id: int):
+        try:
+            return action()
+        except Rejection as rej:
+            if rej.code == "card_not_found":  # balayage d'ids de carte = tentative d'IDOR
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "card_access_denied",
+                    f"Card {card_id} access denied",
+                    http_status=404,
+                    user=user.username,
+                )
+            raise
+
+    def _card_status(card_id: int, status: str, event: str, user: User, session):
+        card, changed = _owned_card_or_audit(
+            lambda: cards.set_status(session, user, card_id, status), user, card_id
+        )
+        if changed:  # idempotent : pas de second événement pour un état inchangé
+            log_event(
+                log,
+                logging.INFO,
+                event,
+                f"Card {card.id} {status}",
+                http_status=200,
+                user=user.username,
+            )
+        return card
+
+    @app.post("/api/v1/cards/{card_id}/freeze", response_model=CardOut)
+    def freeze_card(
+        card_id: DbId, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        return _card_status(card_id, "frozen", "card_frozen", user, session)
+
+    @app.post("/api/v1/cards/{card_id}/unfreeze", response_model=CardOut)
+    def unfreeze_card(
+        card_id: DbId, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        return _card_status(card_id, "active", "card_unfrozen", user, session)
+
+    @app.patch("/api/v1/cards/{card_id}", response_model=CardOut)
+    def update_card(
+        card_id: DbId,
+        body: CardPatch,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        changes = body.model_dump(exclude_unset=True)
+        card, changed = _owned_card_or_audit(
+            lambda: cards.update(session, user, card_id, changes), user, card_id
+        )
+        if changed:
+            log_event(
+                log,
+                logging.INFO,
+                "card_settings_changed",
+                f"Card {card.id} settings changed: {', '.join(changed)}",
+                http_status=200,
+                user=user.username,
+            )
+        return card
+
+    # ---------------------------------------------------------------- bénéficiaires (#43)
+    @app.get("/api/v1/beneficiaries", response_model=list[BeneficiaryOut])
+    def list_beneficiaries(user: User = Depends(current_user), session=Depends(get_session)):
+        return beneficiaries.list_for(session, user)
+
+    @app.post("/api/v1/beneficiaries", response_model=BeneficiaryOut, status_code=201)
+    def add_beneficiary(
+        body: BeneficiaryIn, user: User = Depends(current_user), session=Depends(get_session)
+    ):
+        try:
+            created = beneficiaries.add(session, user, body.display_name, body.iban_fake)
+        except Rejection as rej:
+            # Jamais l'IBAN saisi dans le log : seulement le motif (rafale = énumération).
+            log_event(
+                log,
+                logging.WARNING,
+                "beneficiary_rejected",
+                f"Beneficiary rejected ({rej.code})",
+                http_status=rej.status,
+                user=user.username,
+            )
+            raise ApiError(rej.status, rej.code, rej.message)
+        log_event(
+            log,
+            logging.INFO,
+            "beneficiary_added",
+            f"Beneficiary {created.id} added (account {created.account_id})",
+            http_status=201,
+            user=user.username,
+        )
+        return created
+
+    @app.delete("/api/v1/beneficiaries/{beneficiary_id}", status_code=204)
+    def delete_beneficiary(
+        beneficiary_id: DbId,
+        user: User = Depends(current_user),
+        session=Depends(get_session),
+    ):
+        beneficiaries.remove(session, user, beneficiary_id)  # Rejection -> handler commun
+        log_event(
+            log,
+            logging.INFO,
+            "beneficiary_removed",
+            f"Beneficiary {beneficiary_id} removed",
+            http_status=204,
+            user=user.username,
+        )
+        return Response(status_code=204)
 
     return app

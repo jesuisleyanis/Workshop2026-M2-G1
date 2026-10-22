@@ -65,3 +65,5 @@ attacks/.run.pid
 graphify-out/
 # Résultats du banc de latence de détection (make bench)
 bench-detection*.json
+# Artefacts de recette live (logs, captures d anomalies)
+.testrun/

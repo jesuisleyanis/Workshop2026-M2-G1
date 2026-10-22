@@ -1,5 +1,6 @@
 import { ApiError } from './errors'
-import type { Account, LoginResponse, Transaction, TransactionStatus } from '../types/api'
+import type { AppNotification, NotificationType, ScheduledTransfer, Account, Card, AccountLimit, Beneficiary, Category, LoginResponse, ServiceHealth, Spending, Statement, Transaction, TransactionStatus } from '../types/api'
+import { isCategory } from '../lib/categories'
 
 type Obj = Record<string, unknown>
 
@@ -74,8 +75,23 @@ export function parseAccounts(v: unknown): Account[] {
   return list(v, 'accounts', 'comptes').map(parseAccount)
 }
 
+/** Code dédié (pas un message) : seul le statut inconnu est filtré par parseTransactions. */
+const UNKNOWN_STATUS = 'unknown_status'
+
+/** Échec fermé : un statut inconnu n'est jamais affiché « Effectué » (ni compté dans les totaux). */
 function parseStatus(v: unknown): TransactionStatus {
-  return v === 'rejected' ? 'rejected' : 'created'
+  if (v === 'created' || v === 'rejected') return v
+  throw new ApiError(0, UNKNOWN_STATUS, 'Statut d’opération inconnu.')
+}
+
+/** Absente (serveur antérieur à #44) : « Virement » ; inconnue (serveur plus récent) : « Autre ». */
+function parseCategory(v: unknown): Category {
+  if (v === undefined) return 'transfer'
+  return isCategory(v) ? v : 'other'
+}
+
+function parseTxCategory(v: unknown): Category | null {
+  return v === null ? null : parseCategory(v)
 }
 
 export function parseTransaction(v: unknown): Transaction {
@@ -90,11 +106,208 @@ export function parseTransaction(v: unknown): Transaction {
     amount,
     currency: optStr(o, 'currency') ?? 'EUR',
     status: parseStatus(o.status),
+    // Un serveur antérieur à #44 n'envoie pas de catégorie : même défaut que payment-api.
+    category: parseTxCategory(o.category),
     label: optStr(o, 'label'),
     createdAt: optStr(o, 'created_at') ?? '',
+    requestId: optStr(o, 'request_id'),
   }
 }
 
+/**
+ * Une ligne au statut inconnu est ÉCARTÉE (jamais montrée « Effectuée », jamais comptée) sans
+ * faire tomber tout l'historique ; une ligne par id (parseTransaction) reste en échec fermé.
+ */
 export function parseTransactions(v: unknown): Transaction[] {
-  return list(v, 'transactions', 'transactions').map(parseTransaction)
+  return list(v, 'transactions', 'transactions').flatMap((row) => {
+    try {
+      return [parseTransaction(row)]
+    } catch (e) {
+      if (e instanceof ApiError && e.code === UNKNOWN_STATUS) return []
+      throw e
+    }
+  })
+}
+
+export function parseServiceHealth(v: unknown): ServiceHealth {
+  const o = asObj(v, 'état du service')
+  return { status: o.status === 'ok' ? 'ok' : 'degraded', checkedAt: str(o, 'checked_at', 'état du service') }
+}
+
+export function parseBeneficiary(v: unknown): Beneficiary {
+  const o = asObj(v, 'bénéficiaire')
+  return {
+    id: str(o, 'id', 'bénéficiaire'),
+    name: str(o, 'display_name', 'bénéficiaire'),
+    accountId: str(o, 'account_id', 'bénéficiaire'),
+    iban: str(o, 'iban_fake', 'bénéficiaire'),
+    createdAt: optStr(o, 'created_at'),
+  }
+}
+
+export function parseBeneficiaries(v: unknown): Beneficiary[] {
+  return list(v, 'beneficiaries', 'bénéficiaires').map(parseBeneficiary)
+}
+
+export function parseSpending(v: unknown): Spending {
+  const o = asObj(v, 'dépenses')
+  const period = o.period === 'month' ? 'month' : 'week'
+  return {
+    period,
+    offset: typeof o.offset === 'number' ? o.offset : 0,
+    start: str(o, 'start', 'dépenses'),
+    end: str(o, 'end', 'dépenses'),
+    total: num(o, 'total_cents', 'dépenses') / 100,
+    byCategory: list(o.by_category ?? [], 'by_category', 'dépenses par catégorie').map((c) => {
+      const r = asObj(c, 'catégorie')
+      return { category: parseCategory(r.category), amount: num(r, 'amount_cents', 'catégorie') / 100, share: num(r, 'share', 'catégorie') }
+    }),
+    byDay: list(o.by_day ?? [], 'by_day', 'dépenses par jour').map((d) => {
+      const r = asObj(d, 'jour')
+      return { date: str(r, 'date', 'jour'), amount: num(r, 'amount_cents', 'jour') / 100 }
+    }),
+  }
+}
+
+function optCents(o: Obj, key: string, what: string): number | null {
+  return o[key] === null || o[key] === undefined ? null : num(o, key, what) / 100
+}
+
+export function parseLimits(v: unknown): AccountLimit[] {
+  return list(v, 'limits', 'plafonds').map((x) => {
+    const o = asObj(x, 'plafond')
+    return {
+      accountId: str(o, 'account_id', 'plafond'),
+      limit: optCents(o, 'monthly_limit_cents', 'plafond'),
+      used: num(o, 'used_cents', 'plafond') / 100,
+      remaining: optCents(o, 'remaining_cents', 'plafond'),
+      periodEnd: str(o, 'period_end', 'plafond'),
+    }
+  })
+}
+
+export function parseCard(v: unknown): Card {
+  const o = asObj(v, 'carte')
+  const last4 = str(o, 'last4', 'carte').replace(/\D/g, '').slice(-4)
+  return {
+    id: str(o, 'id', 'carte'),
+    accountId: str(o, 'account_id', 'carte'),
+    last4,
+    holder: str(o, 'holder', 'carte'),
+    expiryMonth: num(o, 'expiry_month', 'carte'),
+    expiryYear: num(o, 'expiry_year', 'carte'),
+    status: cardStatus(o.status),
+    paymentLimit: num(o, 'payment_limit_cents', 'carte') / 100,
+    contactless: bool(o, 'contactless', 'carte'),
+    onlinePayments: bool(o, 'online_payments', 'carte'),
+  }
+}
+
+/** Échec fermé : un statut inconnu n'est jamais affiché « Active » (carte peut-être inutilisable). */
+function cardStatus(v: unknown): Card['status'] {
+  if (v === 'active' || v === 'frozen') return v
+  throw new ApiError(0, 'invalid_response', 'Statut de carte inconnu.')
+}
+
+function bool(o: Obj, key: string, what: string): boolean {
+  const v = o[key]
+  if (typeof v === 'boolean') return v
+  throw new ApiError(0, 'invalid_response', `Champ « ${key} » invalide (${what}).`)
+}
+
+export function parseCards(v: unknown): Card[] {
+  return list(v, 'cards', 'cartes').map(parseCard)
+}
+
+const FREQUENCIES = ['once', 'weekly', 'monthly'] as const
+const SCHEDULE_STATUSES = ['active', 'paused', 'cancelled', 'completed'] as const
+
+function oneOf<T extends string>(v: unknown, allowed: readonly T[], what: string): T {
+  if (typeof v === 'string' && (allowed as readonly string[]).includes(v)) return v as T
+  throw new ApiError(0, 'invalid_response', `Valeur inattendue (${what}).`)
+}
+
+export function parseSchedule(v: unknown): ScheduledTransfer {
+  const o = asObj(v, 'virement programmé')
+  const w = 'virement programmé'
+  const run = o.last_run == null ? null : asObj(o.last_run, 'dernière exécution')
+  return {
+    id: str(o, 'id', w),
+    fromAccount: str(o, 'src_account', w),
+    toAccount: str(o, 'dst_account', w),
+    amount: num(o, 'amount_cents', w) / 100,
+    category: parseCategory(o.category),
+    frequency: oneOf(o.frequency, FREQUENCIES, 'fréquence'),
+    startOn: str(o, 'start_on', w),
+    nextRunOn: optStr(o, 'next_run_on'),
+    endOn: optStr(o, 'end_on'),
+    // Échec fermé : un statut inconnu n'est jamais affiché « Actif ».
+    status: oneOf(o.status, SCHEDULE_STATUSES, 'statut de programmation'),
+    lastRun: run && {
+      runOn: str(run, 'run_on', 'dernière exécution'),
+      status: oneOf(run.status, ['pending', 'executed', 'failed'] as const, 'exécution'),
+      errorCode: optStr(run, 'error_code'),
+    },
+  }
+}
+
+export function parseSchedules(v: unknown): ScheduledTransfer[] {
+  return list(v, 'scheduled_transfers', 'virements programmés').map(parseSchedule)
+}
+
+const NOTIFICATION_TYPES: readonly NotificationType[] = [
+  'transfer_sent',
+  'transfer_received',
+  'transfer_rejected',
+  'limit_80',
+  'card_frozen',
+  'card_unfrozen',
+  'scheduled_executed',
+  'scheduled_failed',
+]
+
+/** Type inconnu toléré (« other ») ; id, titre, corps et date restent exigés. */
+export function parseNotification(v: unknown): AppNotification {
+  const o = asObj(v, 'notification')
+  const type = NOTIFICATION_TYPES.find((t) => t === o.type) ?? 'other'
+  const body = o.body
+  if (typeof body !== 'string') throw new ApiError(0, 'invalid_response', 'Champ « body » manquant (notification).')
+  return {
+    id: str(o, 'id', 'notification'),
+    type,
+    title: str(o, 'title', 'notification'),
+    body,
+    createdAt: str(o, 'created_at', 'notification'),
+    readAt: optStr(o, 'read_at'),
+  }
+}
+
+export function parseNotifications(v: unknown): AppNotification[] {
+  return list(v, 'notifications', 'notifications').map(parseNotification)
+}
+
+export function parseStatement(v: unknown): Statement {
+  const o = asObj(v, 'relevé')
+  return {
+    accountId: str(o, 'account_id', 'relevé'),
+    iban: str(o, 'iban_fake', 'relevé'),
+    holder: str(o, 'holder', 'relevé'),
+    from: str(o, 'from', 'relevé'),
+    to: str(o, 'to', 'relevé'),
+    rows: list(o.rows ?? [], 'rows', 'lignes du relevé').map((r) => {
+      const x = asObj(r, 'ligne du relevé')
+      return {
+        id: str(x, 'id', 'ligne'),
+        createdAt: str(x, 'created_at', 'ligne'),
+        reference: str(x, 'reference', 'ligne'),
+        direction: oneOf(x.direction, ['debit', 'credit'] as const, 'sens'),
+        counterpartyAccount: str(x, 'counterparty_account', 'ligne'),
+        category: parseTxCategory(x.category),
+        amount: num(x, 'amount_cents', 'ligne') / 100,
+        status: oneOf(x.status, ['created', 'rejected'] as const, 'statut'),
+      }
+    }),
+    totalDebit: num(o, 'total_debit_cents', 'relevé') / 100,
+    totalCredit: num(o, 'total_credit_cents', 'relevé') / 100,
+  }
 }

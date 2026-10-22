@@ -24,3 +24,13 @@ export function stubFetch(routes: Record<string, Route>) {
   vi.stubGlobal('fetch', fn)
   return fn
 }
+
+/** Simule la largeur d'écran : true = desktop (barre latérale), false = mobile (barre d'onglets). jsdom n'a pas matchMedia. */
+export function setViewport(desktop: boolean) {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: desktop,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }))
+}

@@ -19,8 +19,15 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    # Volontairement permissif : ne révèle pas les règles de format des comptes.
-    username: str = Field(min_length=1, max_length=64)
+    # Volontairement permissif : ne révèle pas les règles de format des comptes. Seuls les caractères
+    # de contrôle (NUL…) sont refusés : psycopg les rejette en DataError (faux 503 db_error).
+    username: str = Field(min_length=1, max_length=64, pattern=r"^[^\x00-\x1f\x7f]+$")
+    password: str = Field(min_length=1, max_length=256)
+
+
+class StepUpRequest(BaseModel):
+    """Ré-authentification d'une session existante avant un gros virement (#51)."""
+
     password: str = Field(min_length=1, max_length=256)
 
 

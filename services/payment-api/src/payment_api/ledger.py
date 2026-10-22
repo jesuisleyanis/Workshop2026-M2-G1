@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import UTC, datetime
+
 from resilience_db.models import Account, Transaction, TransactionStatus, User
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from payment_api.limits import used_cents
+from payment_api.notifications import euros, notify
 
 MAX_AMOUNT_CENTS = 100_000_000  # 1 000 000,00 EUR fictifs
 
@@ -17,6 +23,37 @@ class Rejection(Exception):
         super().__init__(message)
 
 
+SenderNotice = Callable[[str], tuple[str, str, str]]  # outcome -> (type, titre, corps)
+
+
+def _default_notice(amount_cents: int, dst_id: int) -> SenderNotice:
+    def notice(outcome: str) -> tuple[str, str, str]:
+        if outcome == "sent":
+            return (
+                "transfer_sent",
+                "Virement émis",
+                f"{euros(amount_cents)} vers le compte n°{dst_id}.",
+            )
+        reason = "plafond mensuel atteint" if outcome == "limit_exceeded" else "solde insuffisant"
+        return (
+            "transfer_rejected",
+            "Virement refusé",
+            f"{euros(amount_cents)} vers le compte n°{dst_id} : {reason}.",
+        )
+
+    return notice
+
+
+def check_amount_and_accounts(src_id: int, dst_id: int, amount_cents: int) -> None:
+    """Règles statiques d'un virement, partagées avec les virements programmés (#48)."""
+    if amount_cents <= 0:
+        raise Rejection(422, "invalid_amount", "Amount must be strictly positive")
+    if amount_cents > MAX_AMOUNT_CENTS:
+        raise Rejection(422, "amount_too_large", "Amount exceeds the maximum allowed")
+    if src_id == dst_id:
+        raise Rejection(422, "same_account", "Source and destination must differ")
+
+
 def transfer(
     session: Session,
     user: User,
@@ -24,14 +61,19 @@ def transfer(
     dst_id: int,
     amount_cents: int,
     request_id: str | None,
+    category: str = "transfer",
+    now: datetime | None = None,
+    sender_notice: SenderNotice | None = None,
+    guard: Callable[[Account, Account], None] | None = None,
 ) -> Transaction:
-    """Débite `src_id` (qui doit appartenir à `user`) et crédite `dst_id`, atomiquement."""
-    if amount_cents <= 0:
-        raise Rejection(422, "invalid_amount", "Amount must be strictly positive")
-    if amount_cents > MAX_AMOUNT_CENTS:
-        raise Rejection(422, "amount_too_large", "Amount exceeds the maximum allowed")
-    if src_id == dst_id:
-        raise Rejection(422, "same_account", "Source and destination must differ")
+    """Débite `src_id` (qui doit appartenir à `user`) et crédite `dst_id`, atomiquement.
+
+    Notifications (#49) écrites dans la même transaction. `sender_notice(outcome)` remplace le
+    message de l'émetteur (`outcome` = "sent" ou le code de refus) : l'exécuteur des virements
+    programmés s'en sert, l'avis reste dans la transaction du virement.
+    """
+    notice = sender_notice or _default_notice(amount_cents, dst_id)
+    check_amount_and_accounts(src_id, dst_id, amount_cents)
 
     # Verrou de ligne dans l'ordre des id : pas de deadlock entre deux virements croisés,
     # et le contrôle de solde se fait sous verrou (pas de double dépense concurrente).
@@ -40,6 +82,9 @@ def transfer(
         .where(Account.id.in_((src_id, dst_id)))
         .order_by(Account.id)
         .with_for_update()
+        # Relire les lignes verrouillées même si un objet Account est déjà en session : sinon le
+        # contrôle de solde porterait sur une valeur lue AVANT le verrou (double dépense).
+        .execution_options(populate_existing=True)
     ).all()
     accounts = {a.id: a for a in rows}
     src, dst = accounts.get(src_id), accounts.get(dst_id)
@@ -51,8 +96,10 @@ def transfer(
         raise Rejection(404, "destination_not_found", "Destination account not found")
     if src.currency != dst.currency:
         raise Rejection(422, "currency_mismatch", "Accounts use different currencies")
+    if guard is not None:
+        guard(src, dst)  # sous verrou : contrôle de l'appelant (anti-fractionnement du step-up)
 
-    if src.balance_cents < amount_cents:
+    def reject(status: int, code: str, message: str) -> Rejection:
         # Tentative traçable : on persiste la transaction refusée (R2), sans toucher aux soldes.
         session.add(
             Transaction(
@@ -61,10 +108,27 @@ def transfer(
                 amount_cents=amount_cents,
                 status=TransactionStatus.REJECTED.value,
                 request_id=request_id,
+                category=category,
             )
         )
+        # Entre ses propres comptes : pas de « virement refusé »… sauf avis explicite de l'appelant
+        # (virement programmé : le client doit savoir que son épargne mensuelle a échoué).
+        if dst.user_id != src.user_id or sender_notice is not None:
+            notify(session, src.user_id, *notice(code))
         session.commit()
-        raise Rejection(409, "insufficient_funds", "Insufficient funds")
+        return Rejection(status, code, message)
+
+    # Plafond mensuel (#46), contrôlé sous le verrou de la source : deux virements concurrents
+    # ne peuvent pas le dépasser ensemble. Sans plafond (NULL) ou entre ses propres comptes :
+    # aucun calcul (pas de requête ajoutée sur les comptes de service à fort trafic).
+    limit = src.monthly_limit_cents
+    capped = limit is not None and dst.user_id != src.user_id
+    used = used_cents(session, src, now or datetime.now(UTC)) if capped else 0
+    if capped and used + amount_cents > limit:
+        raise reject(409, "limit_exceeded", "Monthly transfer limit exceeded")
+
+    if src.balance_cents < amount_cents:
+        raise reject(409, "insufficient_funds", "Insufficient funds")
 
     src.balance_cents -= amount_cents
     dst.balance_cents += amount_cents
@@ -74,7 +138,27 @@ def transfer(
         amount_cents=amount_cents,
         status=TransactionStatus.CREATED.value,
         request_id=request_id,
+        category=category,
     )
     session.add(tx)
+    if dst.user_id != src.user_id:  # virement interne : pas de notification
+        notify(session, src.user_id, *notice("sent"))
+        notify(
+            session,
+            dst.user_id,
+            "transfer_received",
+            "Virement reçu",
+            f"{euros(amount_cents)} du compte n°{src.id}.",
+        )
+        # Plafond franchissant 80 % : une seule alerte au passage du seuil.
+        if capped and used < 0.8 * limit <= used + amount_cents:
+            notify(
+                session,
+                src.user_id,
+                "limit_80",
+                "Plafond bientôt atteint",
+                f"80 % du plafond mensuel du compte n°{src.id} utilisés"
+                f" (reste {euros(limit - used - amount_cents)}).",
+            )
     session.commit()
     return tx

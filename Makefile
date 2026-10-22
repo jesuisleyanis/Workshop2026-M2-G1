@@ -233,10 +233,10 @@ test-py: ## Tests Python, un process pytest par composant (échec si l'un d'eux 
 	[ $$rc -eq 0 ] || { echo "== Tests Python : ÉCHEC (voir ci-dessus ; dépendances : README § Tests)"; exit 1; }; \
 	echo "== Tests Python : OK"
 
-test-front: ## Tests front (front + dashboard)
+test-front: ## Tests front (front + back-office + dashboard)
 	@echo "== Tests front =="
 	@rc=0; \
-	for app in services/front dashboard; do \
+	for app in services/front services/backoffice dashboard; do \
 	  if [ -f $$app/package.json ]; then (cd $$app && npm run test --silent) || rc=1; fi; \
 	done; \
 	[ $$rc -eq 0 ] || { echo "== Tests front : ÉCHEC"; exit 1; }; \
