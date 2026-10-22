@@ -11,7 +11,6 @@ const { animate } = require("./animate");
 const A = require("./assets");
 
 const OUT = path.resolve(__dirname, "../../../Workshop2026-M2-G1-Pres.pptx");
-const TODO = "[à compléter]";
 
 // L'équipe, dans l'ordre de passage. Chaque membre : 3 réalisations (icône Lucide, couleur, titre, détail).
 const TEAM = [
@@ -62,11 +61,11 @@ const TEAM = [
   },
   {
     name: "Léo Solana", initials: "LS", role: "DÉVELOPPEUR", tone: "amber",
-    tagline: TODO,
+    tagline: "Ce qui fait démarrer la stack, et ce qui entre dans main.",
     items: [
-      ["LuCode", "amber", TODO, TODO],
-      ["LuCode", "mint", TODO, TODO],
-      ["LuCode", "blue", TODO, TODO],
+      ["LuFileCog", "amber", "Configuration de l'environnement", "rédaction du .env : les variables dont chaque service a besoin"],
+      ["LuTerminal", "mint", "Makefile", "écriture minutieuse des commandes de lancement, de test et de démo"],
+      ["LuGitPullRequest", "blue", "Revue des branches", "relecture avant fusion dans main"],
     ],
   },
 ];

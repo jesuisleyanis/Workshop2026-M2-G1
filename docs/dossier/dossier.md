@@ -287,7 +287,7 @@ Feuille de route : **30 jours** (responsable DORA, procédure de notification, d
 
 ## 13. Contribution de chacun
 
-Le suivi individuel repose sur les commits (`type(scope): sujet`, `git shortlog -sn`) et sur `ROADMAP.md`, qui donne pour chaque tâche sa preuve (commit ou test). État au 22 octobre 2026.
+Le suivi individuel repose sur les commits (`type(scope): sujet`, `git shortlog -sn`), sur `ROADMAP.md`, qui donne pour chaque tâche sa preuve (commit ou test), et sur les déclarations de l'équipe pour le travail sans commit à son nom. État au 22 octobre 2026.
 
 | Membre | Domaine(s) | Contributions identifiables dans le dépôt |
 |---|---|---|
@@ -296,6 +296,7 @@ Le suivi individuel repose sur les commits (`type(scope): sujet`, `git shortlog 
 | Louis Nectoux | Cybersécurité | scénarios Red Team et console d'attaque, runbook PC Attaquant, durcissement et `audit.sh`, règles SOC, chaos engineering, tests e2e ; authentification faciale du back-office de bout en bout (parcours à étapes, habilitations, PR #53), secrets locaux du back-office |
 | Enzo Palermo | Infrastructure, IoT, Cybersécurité | configuration SOPS + age, firmware ESP8266 de la LED (Wi-Fi, HTTP, MQTT), broker Mosquitto durci (profil `iot`), routage WAF de l'API d'authentification |
 | Aurélien Serre | IA / Data | assistant RAG intégré : onglet du dashboard, export du journal d'incident, résumé DSI, post-mortem, proposition de commande opérateur avec confirmation, réseau `ai` isolé du moteur |
+| Léo Solana | Développement, outillage | configuration de l'environnement (`.env`), `Makefile` (commandes de lancement, de test et de démo), revue des branches avant fusion |
 
 Une partie du code et de la documentation a été produite avec l'aide d'assistants d'IA générative (sujet §5) ; chaque contribution a été relue, testée et intégrée par l'équipe, qui en assume la maîtrise devant le jury.
 

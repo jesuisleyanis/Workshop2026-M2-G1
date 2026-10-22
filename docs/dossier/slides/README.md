@@ -37,4 +37,3 @@ Le `.pptx` est écrit à la racine du dépôt (ignoré par git), puis copié dan
 - Rendu des 11 slides relu (LibreOffice 26.8 + Carlito, métriquement identique à Calibri) : aucun débordement.
   Les surtitres en Consolas paraissent espacés sous LibreOffice (police de substitution) ; normal sous PowerPoint.
 - **À vérifier dans PowerPoint** : les animations et le Morph (LibreOffice affiche l'état final des slides).
-- Slide de Léo Solana : réalisations à compléter dans `TEAM`.
