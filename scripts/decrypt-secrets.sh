@@ -25,4 +25,5 @@ chmod 600 "${OUT}"
 echo "Secrets déchiffrés vers ${OUT} (non commité)."
 
 # Complète .env avec les secrets locaux du back-office facial absents de SOPS (générés une fois).
-"${ROOT}/scripts/ensure-local-secrets.sh" "${ROOT}"
+# Appelé via bash : ne dépend pas du bit exécutable (checkout Windows, core.fileMode=false).
+bash "${ROOT}/scripts/ensure-local-secrets.sh" "${ROOT}"
