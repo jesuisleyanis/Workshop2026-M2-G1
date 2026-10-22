@@ -51,6 +51,10 @@ RUN chown -R nginx:nginx /etc/nginx/deny && chmod 2775 /etc/nginx/deny && chmod 
 # Compose `waf-logs` (MODSEC_AUDIT_LOG=/var/log/modsec/audit.json). Le volume hérite de nginx:nginx 0755
 # à sa création ; le fichier (créé par ModSecurity, 0644) est lisible par l'exporteur (groupe 101 en secours).
 RUN mkdir -p /var/log/modsec && chown nginx:nginx /var/log/modsec && chmod 0755 /var/log/modsec
+# Borne de ce journal (sinon non borné) : rotation par taille WAF_AUDIT_MAX_BYTES, une génération `.1`
+# conservée, lancée en tâche de fond par l'entrypoint (07). Voir audit-log-rotate.sh.
+COPY --chmod=0755 audit-log-rotate.sh /usr/local/bin/audit-log-rotate.sh
+COPY --chmod=0755 docker-entrypoint.d/07-audit-log-rotate.sh /docker-entrypoint.d/07-audit-log-rotate.sh
 
 # Ports non privilégiés (entrypoint `check-low-port`) et chemins TLS utilisés par nginx.conf.
 # ALLOWED_METHODS : défaut CRS « GET HEAD POST OPTIONS » + DELETE (suppression d'un bénéficiaire,

@@ -5,6 +5,8 @@ alors que le front écoute :8080). La validation live (build + CRS) se fait avec
 """
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -361,6 +363,43 @@ def test_waf_writes_modsec_audit_log_to_the_shared_volume():
     assert env["MODSEC_AUDIT_LOG"].startswith("/var/log/modsec/")
     assert "waf-logs:/var/log/modsec:rw" in waf["volumes"]
     assert re.search(r"mkdir -p /var/log/modsec && chown nginx:nginx /var/log/modsec", DOCKERFILE)
+
+
+def test_modsec_audit_log_is_bounded_by_a_background_rotation():
+    yaml = pytest.importorskip("yaml")
+    env = yaml.safe_load(COMPOSE)["services"]["waf"]["environment"]
+    assert int(env["WAF_AUDIT_MAX_BYTES"]) > 0
+    assert "audit-log-rotate.sh /usr/local/bin/audit-log-rotate.sh" in DOCKERFILE
+    assert "07-audit-log-rotate.sh /docker-entrypoint.d/07-audit-log-rotate.sh" in DOCKERFILE
+    launcher = (WAF / "docker-entrypoint.d" / "07-audit-log-rotate.sh").read_text(encoding="utf-8")
+    assert "/usr/local/bin/audit-log-rotate.sh &" in launcher  # tâche de fond : ne bloque pas nginx
+
+
+def _rotate(tmp_path, max_bytes: str) -> subprocess.CompletedProcess:
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("sh absent")
+    env = {"PATH": "/usr/bin:/bin", "MODSEC_AUDIT_LOG": str(tmp_path / "audit.json"),
+           "WAF_AUDIT_MAX_BYTES": max_bytes}
+    return subprocess.run([sh, str(WAF / "audit-log-rotate.sh"), "--once"], env=env,
+                          capture_output=True, text=True, timeout=30)
+
+
+def test_audit_log_rotation_keeps_one_generation_and_truncates_in_place(tmp_path):
+    log = tmp_path / "audit.json"
+    _rotate(tmp_path, "100")  # fichier absent : rien à faire, pas d'erreur
+    assert not log.exists()
+    log.write_text('{"transaction": 1}\n' * 3, encoding="utf-8")  # 57 octets <= 100 : intact
+    assert _rotate(tmp_path, "100").returncode == 0 and log.stat().st_size == 57
+    inode = log.stat().st_ino
+    log.write_text('{"transaction": 2}\n' * 10, encoding="utf-8")  # 190 octets > 100
+    r = _rotate(tmp_path, "100")
+    assert r.returncode == 0 and "tronqué" in r.stdout
+    assert log.stat().st_size == 0 and log.stat().st_ino == inode  # même fichier (descripteur de ModSec)
+    assert (tmp_path / "audit.json.1").read_text(encoding="utf-8").count("transaction") == 10
+    assert not (tmp_path / "audit.json.1.tmp").exists()
+    log.write_text("x" * 500, encoding="utf-8")
+    assert _rotate(tmp_path, "0").returncode == 0 and log.stat().st_size == 500  # 0 = pas de borne
 
 
 def test_waf_exporter_service_reads_the_audit_log_and_is_scraped():

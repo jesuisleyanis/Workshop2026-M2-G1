@@ -60,6 +60,12 @@ Droits : le répertoire est `nginx:nginx`, `2775` (setgid) ; le moteur (uid 1000
 - Le WAF écrit l'**audit log ModSecurity** (variables de l'image CRS : `MODSEC_AUDIT_LOG_FORMAT=JSON`,
   `MODSEC_AUDIT_LOG_TYPE=Serial`, `MODSEC_AUDIT_ENGINE=RelevantOnly`) dans `/var/log/modsec/audit.json`,
   sur le volume Compose **`waf-logs`**.
+- Ce journal est **borné** : `audit-log-rotate.sh` (lancé en tâche de fond par `docker-entrypoint.d/07-audit-log-rotate.sh`)
+  vérifie la taille toutes les 60 s ; au-delà de `WAF_AUDIT_MAX_BYTES` (Compose : 50 Mio ; `0` = sans borne), il copie
+  le fichier dans `audit.json.1` (une génération, écriture atomique temporaire + `mv`) puis le **tronque en place**
+  (ModSecurity écrit en ajout sur un descripteur ouvert : un renommage détournerait ses écritures). Disque : ~2 x la borne.
+  Limite assumée : un blocage écrit pendant la copie (fenêtre de quelques ms) ou non encore lu par l'exporteur
+  (relève 0,5 s) au moment de la troncature n'est pas compté.
 - Le service **`waf-exporter`** (`waf_exporter.py`, `Dockerfile.exporter`) monte ce volume en **lecture seule**,
   suit le fichier (`tail -F` : attente du fichier, ajouts, troncature) et, pour chaque transaction
   **403 avec une règle CRS** :
