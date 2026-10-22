@@ -17,7 +17,7 @@ struct LedOutput {
 
 struct LedTimings {
     uint32_t green_blink_half = 400;
-    uint32_t red_blink_half = 150;
+    uint32_t red_blink_half = 600;
     uint8_t red_blink_count = 10;
     uint32_t green_solid_ms = 30000;
     uint32_t red_solid_ms = 30000;
