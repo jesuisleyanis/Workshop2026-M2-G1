@@ -240,6 +240,35 @@ def test_lockout_logs_use_a_case_folded_user(client, clock, log_lines):
     assert {row["user"] for row in started} == {"op01"}
 
 
+def test_every_backoffice_step_logs_the_same_case_folded_user(client, engine, clock, log_lines):
+    # Champ `user` identique à toutes les étapes (identify, visage, mot de passe) : nom replié,
+    # quel que soit le nom canonique en base (« Louis ») ou la casse saisie.
+    with make_session_factory(engine)() as s:
+        s.add(User(username="Louis", password_hash=hash_password(PASSWORD), role="admin"))
+        s.add(User(username="Cust02", password_hash=hash_password(PASSWORD), role="customer"))
+        s.commit()
+    _face(client, _identify(client, "LOUIS"), BAD)  # auth_face_rejected
+    clock.advance(30)
+    ident = _identify(client, "lOuIs")
+    _face(client, ident)  # auth_face_recognized
+    assert _password(client, ident).status_code == 200  # auth_login_success (verrou remis à zéro)
+    ident = _identify(client, "louis")
+    _face(client, ident)
+    assert _password(client, ident, "wrong-password").status_code == 401  # auth_login_failed
+    events = ("auth_identify_started", "auth_face_rejected", "auth_face_recognized",
+              "auth_login_failed", "auth_login_success")
+    rows = [row for row in log_lines() if row["event"] in events]
+    assert {row["event"] for row in rows} == set(events)
+    assert {row["user"] for row in rows} == {"louis"}
+    assert all("Louis" not in row.get("message", "") for row in rows)
+    # Rôle non autorisé (403) : même convention.
+    clock.advance(30)
+    ident = _identify(client, "CUST02")
+    _face(client, ident)
+    assert _password(client, ident).status_code == 403
+    assert log_lines("auth_login_failed")[-1]["user"] == "cust02"
+
+
 def test_unknown_user_response_is_unchanged_whatever_the_case(client, face):
     # Anti-énumération : même forme de réponse pour un compte inconnu, et le nom saisi est
     # conservé tel quel (rien à résoudre).

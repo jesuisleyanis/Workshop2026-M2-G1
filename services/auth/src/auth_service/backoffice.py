@@ -236,6 +236,7 @@ def add_backoffice_auth(
     def face(request: Request, body: FaceRequest):
         ip = client_ip_var.get()
         challenge = _take_for_step(body.challenge_id, ChallengeStep.FACE)
+        key = lock_key(challenge.username)  # clé des journaux et du verrou (nom replié)
 
         frames = [{"pose": f.pose, "image_b64": f.image_b64} for f in body.frames]
         if [f["pose"] for f in frames] != list(challenge.poses):
@@ -254,9 +255,9 @@ def add_backoffice_auth(
             led.publish(LED_RECOGNIZED, challenge.challenge_id)
             log_event(
                 log, logging.INFO, "auth_face_recognized",
-                f"Face recognized for {challenge.username}", http_status=200, user=challenge.username,
+                f"Face recognized for {key}", http_status=200, user=key,
             )
-            left = lockouts.status(lock_key(challenge.username), ip).attempts_left
+            left = lockouts.status(key, ip).attempts_left
             return FaceResponse(
                 recognized=True, step=ChallengeStep.PASSWORD.value, attempts_left=left, cooldown=0
             )
@@ -266,7 +267,7 @@ def add_backoffice_auth(
         led.publish(LED_NOT_RECOGNIZED, None)
         log_event(
             log, logging.WARNING, "auth_face_rejected",
-            f"Face not recognized for {challenge.username}", http_status=200, user=challenge.username,
+            f"Face not recognized for {key}", http_status=200, user=key,
         )
         left = _record_and_maybe_lock(challenge.username, ip)
         cooldowns.start(ip, settings.backoffice_reject_cooldown, "not_recognized")
@@ -283,6 +284,7 @@ def add_backoffice_auth(
     def password(request: Request, body: PasswordRequest):
         ip = client_ip_var.get()
         challenge = _take_for_step(body.challenge_id, ChallengeStep.PASSWORD)
+        key = lock_key(challenge.username)  # clé des journaux et du verrou (nom replié)
 
         user = _load_user(challenge.username)
         valid = verify_password(body.password, user.password_hash if user else DUMMY_HASH)
@@ -292,7 +294,7 @@ def add_backoffice_auth(
             led.publish(LED_AUTH_FAIL, None)
             log_event(
                 log, logging.WARNING, "auth_login_failed",
-                f"Invalid password for {challenge.username}", http_status=401, user=challenge.username,
+                f"Invalid password for {key}", http_status=401, user=key,
             )
             _record_and_maybe_lock(challenge.username, ip)
             cooldowns.start(ip, settings.backoffice_fail_cooldown, "auth_fail")
@@ -307,18 +309,18 @@ def add_backoffice_auth(
             led.publish(LED_AUTH_FAIL, None)
             log_event(
                 log, logging.WARNING, "auth_login_failed",
-                f"Role '{user.role}' not authorized for back-office ({user.username})",
-                http_status=403, user=user.username,
+                f"Role '{user.role}' not authorized for back-office ({key})",
+                http_status=403, user=key,
             )
             raise ApiError(403, "role_not_authorized", "Account not authorized for the back-office")
 
         # Succès complet : jeton émis (rôle en claim), verrou réinitialisé, LED vert fixe.
-        lockouts.reset(lock_key(challenge.username), ip)
+        lockouts.reset(key, ip)
         token, expires_in = create_access_token(user.username, settings.jwt_secret, role=user.role)
         auth_logins_total.labels(result="success").inc()
         led.publish(LED_AUTH_OK, None)
         log_event(
             log, logging.INFO, "auth_login_success",
-            f"Back-office login for {user.username}", http_status=200, user=user.username,
+            f"Back-office login for {key}", http_status=200, user=key,
         )
         return SteppedTokenOut(access_token=token, expires_in=expires_in, role=user.role)
