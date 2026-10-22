@@ -21,18 +21,19 @@ contrat [`contracts.md` §5](contracts.md), ADR [0007](adr/0007-acces-hote-vivac
 ```bash
 git pull
 # Activer le point d'accès AVANT : le broker se publie sur 192.168.137.1
-make up-iot          # = make decrypt + docker compose --profile demo --profile iot up -d --build
+make up-iot          # = make decrypt + docker compose --env-file .env -f infra/compose/docker-compose.yml --profile demo --profile iot up -d --build
+# (make up-full lève aussi le profil iot, donc mosquitto : même prérequis hotspot)
 ```
 
 Sans make :
 
 ```bash
 scripts/decrypt-secrets.sh            # produit .env (+ .env.local la 1re fois, voir §4)
-docker compose -f infra/compose/docker-compose.yml --env-file .env --profile demo --profile iot up -d --build
+docker compose --env-file .env -f infra/compose/docker-compose.yml --profile demo --profile iot up -d --build
 ```
 
 Le premier build compile **dlib** pour `face-id` (≈ 5 à 10 min) et télécharge le modèle MediaPipe
-du back-office (réseau requis). Vérifier : `docker compose -f infra/compose/docker-compose.yml ps`
+du back-office (réseau requis). Vérifier : `docker compose --env-file .env -f infra/compose/docker-compose.yml ps`
 → `face-id`, `auth`, `backoffice`, `waf`, `mosquitto` en `healthy`.
 
 ## 2. Premier démarrage : créer l'administrateur
@@ -71,6 +72,13 @@ reste en identifiant + mot de passe : le visage ne concerne que le back-office.
 génère **une fois** dans `.env.local` (0600, ignoré par git). **Ne pas supprimer `.env.local`** :
 perdre `FACE_DATA_KEY` rend les enrôlements illisibles (il faudra réenrôler, voir `pca-pra.md` §5.7).
 Pour les figer en équipe : `sops security/sops/secrets.enc.env` et y recopier les trois valeurs.
+Si SOPS et `.env.local` portent une valeur **différente** pour l'une d'elles, SOPS l'emporte et
+`make decrypt` affiche un avertissement (nom de la clé seulement) : à corriger, surtout pour `FACE_DATA_KEY`.
+
+`.env` est **régénéré** à chaque `make decrypt` : une surcharge propre au poste va dans `.env.local`.
+Machine **sans le hotspot** (y compris `make up-full`, qui lève aussi le broker du profil `iot`) :
+`echo 'MQTT_BIND_ADDR=127.0.0.1' >> .env.local` (recopié dans `.env` à chaque `make decrypt`, jamais
+généré), ou ponctuellement `MQTT_BIND_ADDR=127.0.0.1 make up-full`.
 
 ## 5. Vérifier la LED
 
@@ -79,7 +87,7 @@ Pour les figer en équipe : `sops security/sops/secrets.enc.env` et y recopier l
 - Test manuel depuis l'hôte (l'ESP doit réagir) :
 
 ```bash
-docker compose -f infra/compose/docker-compose.yml exec mosquitto \
+docker compose --env-file .env -f infra/compose/docker-compose.yml exec mosquitto \
   sh -c 'mosquitto_pub -h 127.0.0.1 -u auth -P "$MQTT_AUTH_PASSWORD" -t resilience/led/cmd -q 1 \
          -m "{\"state\":\"recognized\",\"ts\":\"2026-01-01T00:00:00Z\",\"challenge_id\":null}"'
 ```
@@ -90,10 +98,12 @@ docker compose -f infra/compose/docker-compose.yml exec mosquitto \
 
 | Symptôme | Cause / action |
 |---|---|
-| `mosquitto` ne démarre pas (`cannot assign requested address`) | point d'accès non activé (pas d'IP 192.168.137.1). L'activer puis `make up-iot`. Sur un poste de dev sans hotspot : `MQTT_BIND_ADDR=127.0.0.1` dans `.env`. |
-| Pastille « Module LED hors ligne / inconnu » | ESP hors hotspot (SSID/mot de passe différents de ceux flashés) ou `MQTT_LED_PASSWORD` ≠ mot de passe du firmware (`docker compose logs mosquitto` → `not authorised`). |
-| « Service de reconnaissance indisponible » | `face-id` pas encore `healthy` (chargement dlib) : `docker compose logs face-id`. |
+| `mosquitto` ne démarre pas (`cannot assign requested address`), y compris via `make up-full` | point d'accès non activé (pas d'IP 192.168.137.1). L'activer puis `make up-iot`. Sur une machine sans le hotspot : `echo 'MQTT_BIND_ADDR=127.0.0.1' >> .env.local` (durable : `.env` est régénéré par `make decrypt`, pas `.env.local` ; voir [`security/sops/README.md`](../security/sops/README.md)), ou ponctuellement `MQTT_BIND_ADDR=127.0.0.1 make up-full`. **Ne pas** éditer `.env` (écrasé au prochain `make decrypt`). |
+| Pastille « Module LED hors ligne / inconnu » | ESP hors hotspot (SSID/mot de passe différents de ceux flashés) ou `MQTT_LED_PASSWORD` ≠ mot de passe du firmware (`docker compose --env-file .env -f infra/compose/docker-compose.yml logs mosquitto` → `not authorised`). |
+| « Service de reconnaissance indisponible » | `face-id` pas encore `healthy` (chargement dlib) : `docker compose --env-file .env -f infra/compose/docker-compose.yml logs face-id`. |
 | Profils jamais capturés | tourner davantage la tête (marges 0.07 / 0.22, à calibrer) ; bonne lumière, un seul visage. |
-| Bloqué 5 min pendant les essais | `docker compose -f infra/compose/docker-compose.yml restart auth` (verrous en mémoire). |
+| Bloqué 5 min pendant les essais | `docker compose --env-file .env -f infra/compose/docker-compose.yml restart auth` (verrous en mémoire). |
 | Docker Desktop ne démarre pas (`userAnalyticsOtlpHttp.sock`) | quitter Docker Desktop, renommer `%LOCALAPPDATA%\Docker\run` puis relancer. |
 | Repartir de zéro (base + enrôlements) | `make down` puis `docker volume rm resilience-g1_pgdata` (perte de toutes les données). |
+| `auth`/`payment-api` en échec au démarrage sur une migration (table faciale déjà présente, table `beneficiaries` absente…) après avoir lancé une version antérieure de la branche | le volume `pgdata` a été migré avec l'ancienne migration faciale `0003` de la branche (renumérotée **`0009`**, `0009_face_templates_encrypted` ; `0003` est désormais `0003_beneficiaries` de `main`) : `alembic_version` pointe sur une révision au contenu différent. Base de démo jetable : `make down`, `docker volume rm resilience-g1_pgdata`, puis `make up-iot` et `make seed` (enrôlements à refaire). |
+| Scripts en échec sous Git Bash/WSL (`$'\r': command not found`, `bad interpreter`) | scripts shell extraits en CRLF avant l'ajout de `.gitattributes` (`*.sh text eol=lf`) : `git add --renormalize .` (si `git status` les montre modifiés), puis ré-extraire les scripts en LF : `git ls-files -z '*.sh' \| xargs -0 rm -f && git ls-files -z '*.sh' \| xargs -0 git checkout --` (ne touche que les `.sh`). Vérifier : `git ls-files --eol '*.sh'` → `w/lf`. |

@@ -2,7 +2,9 @@
 # Flow du projet : on code, on teste, on documente, on met à jour la roadmap.
 
 SHELL := /bin/bash   # pipefail dans les recettes de tests
-COMPOSE := docker compose -f infra/compose/docker-compose.yml
+# Toute commande compose passe par $(COMPOSE) : `--env-file .env` (racine, produit par `make decrypt`)
+# est explicite : sinon Compose ne lit pas ce .env de la racine (fichier dans infra/compose/) et les ${VAR:?} échouent.
+COMPOSE := docker compose --env-file .env -f infra/compose/docker-compose.yml
 ROOT    := $(shell pwd)
 # Charge .env (produit par `make decrypt`) dans l'environnement d'une cible : SEED_PASSWORD, tokens...
 LOADENV := set -a; [ -f .env ] && . ./.env; set +a;
@@ -48,13 +50,13 @@ up: decrypt model ## Lève la stack (profil démo minimal)
 	$(COMPOSE) --profile demo up -d --build
 
 up-full: decrypt model ## Lève la stack complète (observabilité + full + broker MQTT iot)
-	$(COMPOSE) --env-file .env --profile demo --profile full --profile iot up -d --build
+	$(COMPOSE) --profile demo --profile full --profile iot up -d --build
 
 up-iot: decrypt ## Lève la stack avec le broker MQTT sur le point d'accès
-	$(COMPOSE) --env-file .env --profile demo --profile iot up -d --build
+	$(COMPOSE) --profile demo --profile iot up -d --build
 
 ps:
-	$(COMPOSE) --env-file .env ps
+	$(COMPOSE) ps
 
 down: ## Arrête et nettoie la stack
 	$(COMPOSE) --profile demo --profile full --profile iot --profile attack --profile ai down
