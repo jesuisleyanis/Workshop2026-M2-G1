@@ -31,6 +31,7 @@ from slowapi import Limiter
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from auth_service.backoffice import find_user_ci
 from auth_service.config import Settings
 from auth_service.face_client import EnrollmentRejectedError, FaceIdClient, FaceUnavailable
 from auth_service.observability import ApiError, log_event
@@ -84,6 +85,13 @@ def add_admin_api(
         enrolled = _usable(_face(face_client.enrollments))
         admins = set(session.scalars(select(User.username).where(User.role == "admin")))
         return admins & enrolled
+
+    def _canonical(username: str) -> str:
+        """Nom canonique (casse stockée en base) d'un `{username}` de chemin ; le nom saisi tel
+        quel s'il n'existe pas (les routes répondent alors 404 comme avant)."""
+        with session_factory() as session:
+            user = find_user_ci(session, username)
+        return user.username if user is not None else username
 
     def _enroll(username: str, poses: dict[str, str], enrolled_by: str) -> dict:
         try:
@@ -148,7 +156,9 @@ def add_admin_api(
     def create_user(request: Request, body: AdminUserCreate, actor: str = Depends(require_admin)):
         password_hash = hash_password(body.password)
         with session_factory() as session:
-            if session.scalar(select(User.id).where(User.username == body.username)) is not None:
+            # Insensible à la casse : « louis » est pris si « Louis » existe (l'identifiant du
+            # back-office est résolu sans tenir compte de la casse, cf. backoffice.py).
+            if find_user_ci(session, body.username) is not None:
                 raise ApiError(409, "username_taken", "Username already exists")
             # Compte du back-office : aucun compte bancaire n'est créé.
             session.add(User(username=body.username, password_hash=password_hash, role=body.role))
@@ -173,9 +183,10 @@ def add_admin_api(
         request: Request, username: str, body: RoleUpdate, actor: str = Depends(require_admin)
     ):
         with admins_lock, session_factory() as session:
-            user = session.scalar(select(User).where(User.username == username))
+            user = find_user_ci(session, username)
             if user is None:
                 raise ApiError(404, "unknown_user", "Unknown user")
+            username = user.username
             previous = user.role
             # Le face-id n'est interrogé que si la rétrogradation peut vider le groupe.
             if (
@@ -205,9 +216,10 @@ def add_admin_api(
         request: Request, username: str, body: EnrollRequest, actor: str = Depends(require_admin)
     ):
         with session_factory() as session:
-            known = session.scalar(select(User.id).where(User.username == username)) is not None
-        if not known:
-            raise ApiError(404, "unknown_user", "Unknown user")
+            user = find_user_ci(session, username)
+            if user is None:
+                raise ApiError(404, "unknown_user", "Unknown user")
+            username = user.username
         result = _enroll(username, body.poses.model_dump(), actor)
         log_event(
             log,
@@ -222,6 +234,7 @@ def add_admin_api(
     @app.delete("/api/v1/admin/users/{username}/face", status_code=204)
     @limiter.limit(rate)
     def revoke_face(request: Request, username: str, actor: str = Depends(require_admin)):
+        username = _canonical(username)
         with admins_lock:
             with session_factory() as session:
                 role = session.scalar(select(User.role).where(User.username == username))
@@ -243,7 +256,7 @@ def add_admin_api(
     @limiter.limit(rate)
     def face_photos(request: Request, username: str, actor: str = Depends(require_admin)):
         # `actor` est transmis comme `viewer` : face-id journalise la consultation (face_photos_viewed).
-        photos = _face(face_client.photos, username, actor)
+        photos = _face(face_client.photos, _canonical(username), actor)
         if photos is None:
             raise ApiError(404, "not_enrolled", "User has no face enrollment")
         return PhotosOut(photos=photos)
@@ -337,38 +350,37 @@ def add_admin_api(
             if not required:
                 raise _bootstrap_denied(body.username, "an enrolled admin already exists")
             with session_factory() as session:
-                user = session.scalar(select(User).where(User.username == body.username))
+                # Insensible à la casse : « louis » désigne le compte existant « Louis » (même
+                # règle de rôle) ; la suite utilise le nom canonique stocké en base.
+                user = find_user_ci(session, body.username)
+                username = user.username if user is not None else body.username
                 snapshot: tuple[str, str] | None = None
                 if user is not None and user.role not in ("admin", "operator"):
                     # Un compte client existant ne peut pas être promu par le bootstrap.
-                    raise _bootstrap_denied(body.username, "existing account is not staff")
+                    raise _bootstrap_denied(username, "existing account is not staff")
                 if user is None:
                     # Premier administrateur : aucun compte bancaire.
-                    session.add(
-                        User(username=body.username, password_hash=password_hash, role="admin")
-                    )
+                    session.add(User(username=username, password_hash=password_hash, role="admin"))
                 else:
                     snapshot = (user.password_hash, user.role)
                     user.password_hash, user.role = password_hash, "admin"
                 session.commit()
             try:
                 # face-id lit le compte en base : l'enrôlement ne peut avoir lieu qu'après commit.
-                _enroll(body.username, body.poses.model_dump(), body.username)
+                _enroll(username, body.poses.model_dump(), username)
             except ApiError as exc:
                 # 422/404 : face-id a refusé, rien n'est stocké. Autre échec (503) : état
                 # incertain, on révoque, sauf si le compte était déjà enrôlé avant le bootstrap
                 # (on ne détruit pas un enrôlement légitime).
                 uncertain = exc.status not in (404, 422)
-                _rollback_bootstrap(
-                    body.username, snapshot, uncertain and body.username not in enrolled
-                )
+                _rollback_bootstrap(username, snapshot, uncertain and username not in enrolled)
                 raise
         log_event(
             log,
             logging.INFO,
             "backoffice_bootstrap",
-            f"Bootstrap token holder created the first admin {body.username} (face enrolled)",
+            f"Bootstrap token holder created the first admin {username} (face enrolled)",
             http_status=201,
-            user=body.username,
+            user=username,
         )
-        return AdminUserOut(username=body.username, role="admin")
+        return AdminUserOut(username=username, role="admin")

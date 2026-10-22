@@ -305,6 +305,8 @@ Machine à états : `IDENTIFY → FACE → PASSWORD → OK` (détail, verrouilla
 | `GET /api/v1/auth/device` | → `{led_online: bool \| null}` : dernier statut MQTT (LWT/heartbeat) du module LED ; `null` si inconnu, LED simulée, ou lien `auth`↔broker perdu/refusé (un `true` d'avant la coupure n'est jamais présenté comme courant). Sans authentification (booléen seul). |
 | `POST /api/v1/login` | **Conservé** : comptes de service (`verify_tx`, `seed`) et front client. Hors facteur visage, **hors listener hôte** (sert sur 80/443). |
 
+Identifiant du back-office **insensible à la casse** (`louis` atteint le compte `Louis`) : `identify` résout le nom canonique stocké (transmis à face-id et à l'étape mot de passe), verrouillage et journaux sont indexés sur le nom replié en minuscules, et la création/le bootstrap refusent un doublon de casse ; `POST /api/v1/login` reste sensible à la casse.
+
 Verrouillage (consigne CA4) : quota d'échecs d'accès par `(username, source_ip)` — défaut **2** (« 1 reprise ») puis **5 min** (`BACKOFFICE_MAX_ATTEMPTS`, `BACKOFFICE_LOCKOUT_SECONDS`). Refroidissements **par poste** (`client_ip`), imposés côté serveur : visage refusé **30 s** (`BACKOFFICE_REJECT_COOLDOWN`), mot de passe refusé **3 s** (`BACKOFFICE_FAIL_COOLDOWN`) ; `identify` renvoie `429 cooldown` + `Retry-After` pendant ce délai (événement `auth_cooldown`). `challenge_id` à usage unique, TTL court (`BACKOFFICE_CHALLENGE_TTL`, défaut 60 s ; **120 s** dans le Compose : chargement à froid de MediaPipe + 3 maintiens de pose).
 
 ### 5.3 Protocole LED (MQTT)

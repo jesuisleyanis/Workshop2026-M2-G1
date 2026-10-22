@@ -8,6 +8,12 @@ Le verrouillage est contrôlé à **chaque** étape (un challenge pré-créé ne
 contourner le blocage). Les challenges sont retirés atomiquement (`take`) : pas de rejeu ni de
 TOCTOU. Les routes sont rate-limitées comme `/login`.
 
+L'identifiant est **insensible à la casse** (« louis » atteint le compte « Louis ») : le nom
+canonique stocké en base est porté par le challenge, donc transmis à face-id et à l'étape mot de
+passe. Le verrouillage et les journaux sont indexés sur le nom **replié en minuscules** :
+« LOUIS » et « louis » partagent le même compteur (pas de contournement par changement de casse).
+`POST /api/v1/login` (front client, comptes de service) reste, lui, sensible à la casse.
+
 Les dépendances externes sont injectables (vérificateur de visage, notifieur LED, horloge)
 pour des tests déterministes sans réseau ni matériel.
 """
@@ -28,7 +34,7 @@ from resilience_common.metrics import (
 from resilience_db.models import User
 from resilience_db.passwords import DUMMY_HASH, verify_password
 from slowapi import Limiter
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from auth_service.challenge import (
     POSES,
@@ -59,6 +65,26 @@ LED_RECOGNIZED = "recognized"
 LED_AUTH_OK = "auth_ok"
 LED_AUTH_FAIL = "auth_fail"
 LED_NOT_RECOGNIZED = "not_recognized"
+
+
+def lock_key(username: str) -> str:
+    """Clé de verrouillage et de journalisation : identifiant replié (insensible à la casse)."""
+    return username.strip().lower()
+
+
+def find_user_ci(session, username: str) -> User | None:
+    """Compte dont l'identifiant correspond **sans tenir compte de la casse** (None sinon).
+
+    `/register` reste sensible à la casse : si plusieurs comptes ne diffèrent que par la casse,
+    on préfère la correspondance exacte, puis un compte du back-office, puis le plus ancien.
+    """
+    typed = username.strip()
+    rows = session.scalars(
+        select(User).where(func.lower(User.username) == typed.lower()).order_by(User.id)
+    ).all()
+    if not rows:
+        return None
+    return min(rows, key=lambda u: (u.username != typed, u.role not in PRIVILEGED_ROLES, u.id))
 
 
 class FaceVerifier(Protocol):
@@ -117,7 +143,15 @@ def add_backoffice_auth(
         with session_factory() as session:
             return session.scalar(select(User).where(User.username == username))
 
+    def _canonical_username(typed: str) -> str:
+        """Nom canonique stocké en base, ou le nom saisi s'il n'existe pas (anti-énumération :
+        même réponse et une seule requête dans les deux cas)."""
+        with session_factory() as session:
+            user = find_user_ci(session, typed)
+            return user.username if user is not None else typed
+
     def _locked_response(username: str, ip: str | None, retry_after: int) -> ApiError:
+        username = lock_key(username)
         led.publish(LED_IDLE, None)
         log_event(
             log, logging.WARNING, "auth_locked_out",
@@ -127,6 +161,7 @@ def add_backoffice_auth(
 
     def _record_and_maybe_lock(username: str, ip: str | None) -> int:
         """Enregistre un échec ; incrémente la métrique/journal SEULEMENT sur la transition."""
+        username = lock_key(username)
         outcome = lockouts.record_failure(username, ip)
         if outcome.just_locked:
             auth_lockouts_total.inc()
@@ -146,14 +181,17 @@ def add_backoffice_auth(
     @limiter.limit(rate)
     def identify(request: Request, body: IdentifyRequest):
         ip = client_ip_var.get()
-        status = lockouts.status(body.username, ip)
+        typed = body.username.strip()
+        key = lock_key(typed)
+        # Verrou indexé sur le nom replié : changer la casse ne remet pas le compteur à zéro.
+        status = lockouts.status(key, ip)
         if status.locked:
-            raise _locked_response(body.username, ip, status.retry_after)
+            raise _locked_response(key, ip, status.retry_after)
         wait, reason = cooldowns.remaining(ip)
         if wait > 0:
             log_event(
                 log, logging.WARNING, "auth_cooldown",
-                f"Cooldown active ({reason}), retry in {wait}s", http_status=429, user=body.username,
+                f"Cooldown active ({reason}), retry in {wait}s", http_status=429, user=key,
             )
             raise ApiError(429, "cooldown", "Please wait", {"Retry-After": str(wait)})
         # Mode dégradé documenté (répétitions de démo) : sans facteur visage, on va direct au mdp.
@@ -163,12 +201,13 @@ def add_backoffice_auth(
             poses = tuple(secrets.SystemRandom().sample(POSES, 3))
         else:
             step, poses = ChallengeStep.PASSWORD, ()
-        challenge = challenges.create(body.username, step=step, poses=poses)
+        # Nom canonique (« louis » -> « Louis ») : face-id et l'étape mot de passe le reçoivent.
+        challenge = challenges.create(_canonical_username(typed), step=step, poses=poses)
         led.publish(LED_IDLE, challenge.challenge_id)
         # Toujours 200 hors blocage : ne révèle pas l'existence du compte (anti-énumération).
         log_event(
             log, logging.INFO, "auth_identify_started",
-            f"Identify step started for {body.username}", http_status=200, user=body.username,
+            f"Identify step started for {key}", http_status=200, user=key,
         )
         return IdentifyResponse(
             challenge_id=challenge.challenge_id,
@@ -183,7 +222,7 @@ def add_backoffice_auth(
         if challenge is None:
             raise ApiError(400, "challenge_invalid", "Unknown or expired challenge")
         ip = client_ip_var.get()
-        status = lockouts.status(challenge.username, ip)
+        status = lockouts.status(lock_key(challenge.username), ip)
         if status.locked:
             # Blocage vérifié aussi ici : un challenge pré-créé ne contourne pas le verrou.
             raise _locked_response(challenge.username, ip, status.retry_after)
@@ -217,7 +256,7 @@ def add_backoffice_auth(
                 log, logging.INFO, "auth_face_recognized",
                 f"Face recognized for {challenge.username}", http_status=200, user=challenge.username,
             )
-            left = lockouts.status(challenge.username, ip).attempts_left
+            left = lockouts.status(lock_key(challenge.username), ip).attempts_left
             return FaceResponse(
                 recognized=True, step=ChallengeStep.PASSWORD.value, attempts_left=left, cooldown=0
             )
@@ -274,7 +313,7 @@ def add_backoffice_auth(
             raise ApiError(403, "role_not_authorized", "Account not authorized for the back-office")
 
         # Succès complet : jeton émis (rôle en claim), verrou réinitialisé, LED vert fixe.
-        lockouts.reset(challenge.username, ip)
+        lockouts.reset(lock_key(challenge.username), ip)
         token, expires_in = create_access_token(user.username, settings.jwt_secret, role=user.role)
         auth_logins_total.labels(result="success").inc()
         led.publish(LED_AUTH_OK, None)

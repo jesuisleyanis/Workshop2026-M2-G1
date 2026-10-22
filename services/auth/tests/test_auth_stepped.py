@@ -203,6 +203,59 @@ def test_identify_unknown_user_still_returns_a_challenge(client):
     assert sorted(r.json()["poses"]) == sorted(POSES)
 
 
+# --------------------------------------------------------------------------- casse de l'identifiant
+
+
+def test_identify_is_case_insensitive_and_uses_the_canonical_username(client, engine, face):
+    # « lOUIS » atteint le compte « Louis » : face-id et l'étape mot de passe reçoivent le nom
+    # canonique stocké en base, pas la saisie.
+    with make_session_factory(engine)() as s:
+        s.add(User(username="Louis", password_hash=hash_password(PASSWORD), role="admin"))
+        s.commit()
+    ident = _identify(client, "  lOUIS ")
+    assert _face(client, ident).json()["recognized"] is True
+    assert [u for u, _ in face.calls] == ["Louis"]
+    r = _password(client, ident)
+    assert r.status_code == 200
+    claims = jwt.decode(r.json()["access_token"], JWT_SECRET, algorithms=["HS256"])
+    assert claims["sub"] == "Louis" and r.json()["role"] == "admin"
+
+
+def test_lockout_is_shared_across_case_variants(client, clock):
+    # Changer la casse ne remet pas le compteur à zéro (pas de contournement du verrou).
+    assert _face(client, _identify(client, "op01"), BAD).json()["attempts_left"] == 1
+    clock.advance(30)
+    assert _face(client, _identify(client, "OP01"), BAD).json()["attempts_left"] == 0
+    for variant in ("op01", "OP01", "Op01"):
+        r = client.post("/api/v1/auth/identify", json={"username": variant})
+        assert r.status_code == 429
+        assert r.json()["error"]["code"] == "locked_out"
+
+
+def test_lockout_logs_use_a_case_folded_user(client, clock, log_lines):
+    _face(client, _identify(client, "OP01"), BAD)
+    clock.advance(30)
+    _face(client, _identify(client, "Op01"), BAD)
+    started = log_lines("auth_identify_started")
+    assert {row["user"] for row in started} == {"op01"}
+
+
+def test_unknown_user_response_is_unchanged_whatever_the_case(client, face):
+    # Anti-énumération : même forme de réponse pour un compte inconnu, et le nom saisi est
+    # conservé tel quel (rien à résoudre).
+    known = client.post("/api/v1/auth/identify", json={"username": "OP01"})
+    unknown = client.post("/api/v1/auth/identify", json={"username": "GhOsT"})
+    assert known.status_code == unknown.status_code == 200
+    assert set(known.json()) == set(unknown.json())
+    for key in ("step", "expires_in", "camera"):
+        assert known.json()[key] == unknown.json()[key]
+    assert sorted(unknown.json()["poses"]) == sorted(POSES)
+    ident = unknown.json()
+    assert _face(client, ident).json()["recognized"] is True  # le stub ne connaît pas les comptes
+    assert face.calls[-1][0] == "GhOsT"
+    assert _password(client, ident).status_code == 401
+
+
 # --------------------------------------------------------------------------- étapes / rejets
 
 

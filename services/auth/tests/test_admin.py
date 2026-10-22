@@ -267,6 +267,34 @@ def test_create_user_duplicate_is_409(client):
     assert r.json()["error"]["code"] == "username_taken"
 
 
+@pytest.mark.parametrize("variant", ["OP01", "Op01"])
+def test_create_user_duplicate_is_case_insensitive(client, engine, variant):
+    # L'identifiant du back-office est résolu sans casse : « OP01 » serait inatteignable.
+    body = {"username": variant, "password": NEW_PASSWORD, "role": "operator"}
+    r = client.post("/api/v1/admin/users", json=body, headers=bearer())
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "username_taken"
+    assert user_row(engine, variant) is None
+
+
+def test_change_role_is_case_insensitive(client, engine, log_lines):
+    r = client.patch("/api/v1/admin/users/OP01", json={"role": "admin"}, headers=bearer())
+    assert r.status_code == 200
+    assert r.json() == {"username": "op01", "role": "admin"}  # nom canonique
+    assert user_row(engine, "op01").role == "admin"
+    assert log_lines("admin_role_changed")[0]["user"] == "op01"
+
+
+def test_face_routes_resolve_the_canonical_username(client, face):
+    body = {"poses": POSES}
+    assert client.put("/api/v1/admin/users/OP01/face", json=body, headers=bearer()).status_code == 200
+    assert face.enroll_calls[-1][0] == "op01"
+    assert client.get("/api/v1/admin/users/Op01/face/photos", headers=bearer()).status_code == 200
+    assert face.photo_calls[-1][0] == "op01"
+    assert client.delete("/api/v1/admin/users/oP01/face", headers=bearer()).status_code == 204
+    assert "op01" not in face.rows
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -600,6 +628,37 @@ def test_bootstrap_existing_staff_gets_new_password_and_admin_role(
     assert user.role == "admin"
     assert verify_password(NEW_PASSWORD, user.password_hash)
     assert not verify_password(PASSWORD, user.password_hash)
+
+
+def test_bootstrap_existing_staff_is_matched_case_insensitively(
+    boot, empty_engine, boot_face, log_lines
+):
+    with make_session_factory(empty_engine)() as s:
+        s.add(User(username="Root01", password_hash=hash_password(PASSWORD), role="operator"))
+        s.commit()
+    r = boot.post("/api/v1/auth/bootstrap", json=boot_body(username="root01"))
+    assert r.status_code == 201
+    assert r.json() == {"username": "Root01", "role": "admin"}  # nom canonique
+    with make_session_factory(empty_engine)() as s:
+        names = list(s.scalars(select(User.username)))
+    assert names == ["Root01"]  # pas de doublon « root01 »
+    user = user_row(empty_engine, "Root01")
+    assert user.role == "admin" and verify_password(NEW_PASSWORD, user.password_hash)
+    assert boot_face.enroll_calls == [("Root01", POSES, "Root01")]
+    assert log_lines("backoffice_bootstrap")[0]["user"] == "Root01"
+
+
+def test_bootstrap_refuses_existing_customer_account_whatever_the_case(
+    boot, empty_engine, boot_face
+):
+    with make_session_factory(empty_engine)() as s:
+        s.add(User(username="Root01", password_hash=hash_password(PASSWORD), role="customer"))
+        s.commit()
+    r = boot.post("/api/v1/auth/bootstrap", json=boot_body(username="root01"))
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "bootstrap_denied"
+    assert user_row(empty_engine, "Root01").role == "customer"
+    assert boot_face.enroll_calls == []
 
 
 def test_bootstrap_refuses_existing_customer_account(boot, empty_engine, boot_face):

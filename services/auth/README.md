@@ -93,6 +93,7 @@ curl -s -XPOST localhost:8002/api/v1/auth/face -H 'content-type: application/jso
 curl -s -XPOST localhost:8002/api/v1/auth/password -H 'content-type: application/json' -d '{"challenge_id":"…","password":"…"}'
 ```
 
+- **Identifiant insensible à la casse** (back-office uniquement) : `louis` atteint le compte `Louis` ; le nom canonique est transmis à face-id et à l'étape mot de passe, le verrouillage et les journaux utilisent le nom replié en minuscules (« LOUIS »/« louis » partagent le compteur), et la création de compte / le bootstrap refusent un doublon de casse. `POST /api/v1/login` reste sensible à la casse.
 - **Refroidissements** (par IP ; `429 cooldown` + `Retry-After` sur `identify`) : **30 s** après un visage refusé (`BACKOFFICE_REJECT_COOLDOWN`), **3 s** après un mot de passe refusé (`BACKOFFICE_FAIL_COOLDOWN`).
 - **Verrouillage** : 2 échecs (`BACKOFFICE_MAX_ATTEMPTS`) pour un `(identifiant, IP)` ⇒ `429 locked_out` pendant **300 s**, contrôlé à chaque étape.
 - Face-id injoignable ⇒ `503 face_service_unavailable` : le back-office est inaccessible par conception, jamais ouvert par défaut.
