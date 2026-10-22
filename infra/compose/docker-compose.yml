@@ -61,12 +61,11 @@ services:
       - "127.0.0.1:9443:9443"
     environment:
       # Audit ModSecurity (blocages 4xx/5xx, JSON Serial) écrit dans le volume partagé lu par waf-exporter (#12).
-      # Plafonds de corps ModSecurity alignés sur `client_max_body_size 4m` du listener hôte 9443 (images de
-      # capture faciale en base64 JSON, jusqu'à ~4 Mo). Sans cela, le défaut de l'image CRS (~128 Kio hors
-      # fichiers) rejetterait ces requêtes avant nginx. Le serveur public 80/443 garde le défaut nginx
-      # (client_max_body_size 1m) : ses corps restent plafonnés par nginx.
-      MODSEC_REQ_BODY_LIMIT: "4194304"
-      MODSEC_REQ_BODY_NOFILES_LIMIT: "4194304"
+      # Plafond de corps ModSecurity GLOBAL = défaut de l'image CRS (128 Kio hors fichiers, 413 au-delà) :
+      # il s'applique au serveur public 80/443. Seul le listener hôte 9443 le relève à 4 Mo
+      # (`modsecurity_rules` dans son bloc server de nginx.conf, aligné sur `client_max_body_size 4m`)
+      # pour les images de capture faciale en base64 JSON.
+      MODSEC_REQ_BODY_NOFILES_LIMIT: "131072"
       # Méthodes HTTP admises par le CRS (règle 911100). Le défaut de l'image (GET HEAD POST OPTIONS)
       # bloquerait l'API d'administration du back-office (PATCH rôle, PUT/DELETE visage) sur 9443.
       # Le serveur public 80/443 ne proxifie que ses routes nommées (404 ailleurs) : élargir la liste

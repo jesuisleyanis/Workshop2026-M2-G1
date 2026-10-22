@@ -93,17 +93,30 @@ def test_backoffice_upstream_targets_backoffice_container():
 
 
 def test_modsecurity_body_limits_match_host_client_max_body_size():
-    """Les plafonds ModSecurity doivent suivre le 4m du listener hôte, sinon le défaut CRS (~128 Kio) rejette les captures."""
+    """Plafond ModSecurity relevé à 4 Mo UNIQUEMENT sur le listener hôte 9443 (captures faciales).
+
+    Le serveur public 80/443 garde le défaut de l'image CRS (128 Kio hors fichiers) : un corps JSON
+    plus gros y est rejeté par ModSecurity (règle 200002, 400) avant d'atteindre auth/payment-api.
+    Recette live : POST ~300 Kio sur https://localhost/api/v1/login -> 400 (WAF) ; même taille sur
+    https://localhost:9443/api/v1/auth/face -> réponse d'auth (422 de validation), pas du WAF.
+    """
     yaml = pytest.importorskip("yaml")
     env = yaml.safe_load(COMPOSE)["services"]["waf"]["environment"]
     size = re.search(r"client_max_body_size\s+(\d+)m;", HOST_SERVER)
     assert size, "le listener hôte doit déclarer client_max_body_size en Mo"
     expected = int(size.group(1)) * 1024 * 1024
     assert expected == 4194304
-    assert int(env["MODSEC_REQ_BODY_LIMIT"]) == expected
-    assert int(env["MODSEC_REQ_BODY_NOFILES_LIMIT"]) == expected
-    # Le serveur public garde le défaut nginx (1m) : pas de client_max_body_size, donc plafonné par nginx.
+    # Listener hôte : plafonds ModSecurity alignés sur client_max_body_size (directives du bloc server).
+    raised = dict(re.findall(r"modsecurity_rules\s+'(SecRequestBody(?:NoFiles)?Limit)\s+(\d+)';", HOST_SERVER))
+    assert {k: int(v) for k, v in raised.items()} == {
+        "SecRequestBodyLimit": expected, "SecRequestBodyNoFilesLimit": expected,
+    }
+    # Serveur public : aucun relèvement, défaut CRS 128 Kio explicite dans le Compose (global).
+    assert "modsecurity_rules" not in PUBLIC_SERVER
     assert "client_max_body_size" not in PUBLIC_SERVER
+    assert int(env["MODSEC_REQ_BODY_NOFILES_LIMIT"]) == 131072
+    assert "MODSEC_REQ_BODY_LIMIT" not in env, "défaut de l'image (12,5 Mo avec fichiers) conservé"
+    assert "modsecurity_rules " not in _directives(NGINX).replace(HOST_SERVER, "")
     # Aucun autre endroit ne surcharge ces limites (Dockerfile / entrypoint).
     assert "MODSEC_REQ_BODY" not in DOCKERFILE
     for script in (WAF / "docker-entrypoint.d").glob("*"):

@@ -371,7 +371,7 @@ Réservée au rôle `admin` (`Authorization: Bearer`, JWT émis par l'étape mot
 | Point d'entrée | Contenu |
 |---|---|
 | WAF `443` (public ; `80` = `/healthz` + `301` vers HTTPS) | front client, API métier, `POST /api/v1/login`, `POST /api/v1/auth/step-up` (ré-authentification du front, #51, seule exception exacte) ; tout autre `/api/v1/auth/*` et `/api/v1/admin/*` → **404**. |
-| WAF `127.0.0.1:9443` (**hôte uniquement**, jamais sur le hotspot) | back-office, `/api/v1/auth/*`, `/api/v1/admin/*`. Corps ≤ **4 MiB** (`client_max_body_size 4m`, plafonds ModSecurity `MODSEC_REQ_BODY_LIMIT` alignés : 3 captures JSON). |
+| WAF `127.0.0.1:9443` (**hôte uniquement**, jamais sur le hotspot) | back-office, `/api/v1/auth/*`, `/api/v1/admin/*`. Corps ≤ **4 MiB** (`client_max_body_size 4m` + plafonds ModSecurity relevés à 4 MiB dans ce seul bloc `server` : 3 captures JSON). Le serveur public 80/443 garde le défaut CRS de 128 KiB hors fichiers. |
 | Mosquitto `${MQTT_BIND_ADDR:-192.168.137.1}:1883` (hotspot, profil `iot` : `make up-iot`) | bus LED uniquement (ACL §5.3). |
 
 Seul un navigateur du PC Hôte joint l'étape visage : la caméra capturée est donc forcément celle de l'hôte (consigne).
