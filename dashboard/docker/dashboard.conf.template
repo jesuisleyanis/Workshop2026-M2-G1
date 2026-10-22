@@ -38,6 +38,21 @@ server {
     add_header Cache-Control "no-cache" always;
   }
 
+  # Carte « IP bloquées » : liste noire du WAF en LECTURE SEULE (GET), jeton injecté côté serveur.
+  # Aucune autre route du moteur n'est exposée (pas de déblocage depuis le navigateur).
+  location = /remediation/waf/blocked-ips {
+    include /etc/nginx/security-headers.conf;
+    limit_except GET { deny all; }
+    set $remediation_upstream "http://${REMEDIATION_UPSTREAM}";
+    rewrite ^/remediation(/.*)$ $1 break;
+    proxy_pass $remediation_upstream;
+    proxy_http_version 1.1;
+    proxy_set_header Authorization "${REMEDIATION_AUTH_HEADER}";
+    proxy_set_header Host $host;
+    proxy_read_timeout 10s;
+    add_header Cache-Control "no-store" always;
+  }
+
   location /remediation/ {
     return 404;
   }

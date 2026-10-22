@@ -68,6 +68,7 @@ src/
     IncidentTimeline           4 cartes, statut textuel, décalages +N s
     IncidentDetails            ActionsPanel, SignalsPanel, PlaybooksPanel, EvidencePanel
     ServicesGrid               santé des services
+    BlockedIpsCard             IP en liste noire du WAF (GET /remediation/waf/blocked-ips, lecture seule, relève 3 s)
     GrafanaLinks, Panel        liens Grafana / Explore ; carte, pastilles, tonalités
   test/                        setup, fixtures (exemple du contrat, séquence d'incident, FakeEventSource)
 mock/remediation-mock.mjs      faux moteur SSE (hors image Docker)

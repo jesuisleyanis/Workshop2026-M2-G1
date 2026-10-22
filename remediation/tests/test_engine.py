@@ -306,3 +306,11 @@ async def test_timeline_covers_detection_decision_action_verification_closure(ma
     assert q.qsize() == len(phases)  # tout ce qui est journalisé est diffusé en direct
     ids = [r["id"] for r in env.journal.timeline_since(0)]
     assert ids == sorted(ids)
+
+
+async def test_journal_remembers_successful_blocks_for_the_blocked_ips_card(make_env):
+    env = make_env(verify=[True])
+    sub = await env.run(make_event("auth_abuse", source_ip="203.0.113.9"))
+    (block,) = env.journal.last_blocks()
+    assert block["incident_id"] == sub.incident_id and block["incident_type"] == "auth_abuse"
+    assert block["action_type"] == "waf_block_ip" and block["detail"].startswith("203.0.113.9 ")

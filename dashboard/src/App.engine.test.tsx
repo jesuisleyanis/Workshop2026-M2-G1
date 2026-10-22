@@ -62,7 +62,11 @@ describe('Dashboard contre le moteur réel (event: timeline)', () => {
     expect(fetchMock.mock.calls.map(([u]) => u)).toEqual(
       expect.arrayContaining(['/prometheus/api/v1/query?query=resilience_anomaly_score', '/prometheus/api/v1/query?query=up']),
     )
-    expect(fetchMock.mock.calls.every(([u]) => (u as string).startsWith('/prometheus/'))).toBe(true) // jamais remediation:8005 ni prometheus:9090
+    // Same-origin uniquement : proxy Prometheus + liste noire du WAF en lecture seule (carte « IP bloquées »).
+    // Jamais remediation:8005 ni prometheus:9090 en direct.
+    expect(
+      fetchMock.mock.calls.every(([u]) => (u as string).startsWith('/prometheus/') || u === '/remediation/waf/blocked-ips'),
+    ).toBe(true)
     expect(screen.getByTestId('score-gauge')).toHaveAttribute('data-level', 'alert') // payment-api 0.83 >= 0.6
     expect(screen.getByText('Hors service')).toBeInTheDocument() // up{job="payment-api"} = 0
     expect(active()).toHaveTextContent('AVANT') // un score haut sans incident moteur ne change pas la phase

@@ -63,6 +63,8 @@ class Settings:
     # --- Ansible (opérations WAF / restauration), exécuté DANS le conteneur ---
     ansible_private_data_dir: str = "/tmp/ansible-runner"  # artefacts (inscriptible)
     ansible_project_dir: str = "/opt/ansible/project"  # playbooks (lecture seule)
+    # Deny-list partagée avec le WAF (volume waf-deny), écrite par waf_deny_ip.yml ; lue par GET /waf/blocked-ips.
+    waf_deny_file: str = "/etc/resilience/waf-deny/blocked_ips.conf"
     waf_service: str = "waf"  # service Compose rechargé (SIGHUP) après mise à jour de la deny-list
     # --- Garde-fous ---
     dry_run: bool = False  # REMEDIATION_DRY_RUN : peut seulement FORCER le dry-run
@@ -97,6 +99,7 @@ class Settings:
             action_timeout_s=float(e.get("ACTION_TIMEOUT_S", d.action_timeout_s)),
             ansible_private_data_dir=e.get("ANSIBLE_PRIVATE_DATA_DIR", d.ansible_private_data_dir),
             ansible_project_dir=e.get("ANSIBLE_PROJECT_DIR", d.ansible_project_dir),
+            waf_deny_file=e.get("WAF_DENY_FILE", d.waf_deny_file),
             waf_service=e.get("WAF_SERVICE", d.waf_service),
             dry_run=_bool(e.get("REMEDIATION_DRY_RUN")),
             never_block_ips=_csv(e.get("NEVER_BLOCK_IPS"), d.never_block_ips),

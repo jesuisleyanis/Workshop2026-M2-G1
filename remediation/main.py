@@ -18,6 +18,7 @@ import httpx
 from actions.docker_proxy import DockerProxy
 from actions.runner import AnsibleRunnerAdapter
 from alertmanager import AlertmanagerPayload, to_events
+from blocklist import list_blocked_ips
 from config import Settings
 from decision import DecisionTable, DecisionTableError, load_decision_table
 from engine import RemediationEngine, Services
@@ -193,6 +194,11 @@ def create_app(
         if inc is None:
             return _error(404, "incident_not_found", "incident inconnu", request)
         return inc
+
+    @app.get("/waf/blocked-ips", dependencies=[auth])
+    async def blocked_ips() -> dict[str, Any]:
+        """IP actuellement en liste noire du WAF (lecture seule), enrichies par le journal."""
+        return {"blocked": list_blocked_ips(settings.waf_deny_file, journal.last_blocks())}
 
     @app.get("/decision-table", dependencies=[auth])
     async def get_table() -> dict[str, Any]:
