@@ -512,6 +512,8 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD requis (voir security/sops/secrets.example.env) — jamais de repli silencieux sur "admin"}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # Page d'accueil = dashboard SOC provisionné (infra/grafana/provisioning/dashboards/)
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/resilience-overview.json
     volumes:
       - ../grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana

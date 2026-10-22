@@ -1,0 +1,15 @@
+# Provisioning des dashboards Grafana (R7) : tout fichier *.json de ce dossier est chargé au démarrage
+# et relu toutes les 30 s. Le dossier est déjà monté par le compose (../grafana/provisioning, :ro).
+# Les dashboards sont du code : modifier le JSON versionné, pas l'UI (allowUiUpdates: false).
+apiVersion: 1
+providers:
+  - name: resilience
+    orgId: 1
+    folder: RESILIENCE-ALPHA
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false
