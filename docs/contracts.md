@@ -202,7 +202,8 @@ Le `detector` émet cet objet JSON vers le moteur de remédiation (HTTP `POST /e
 **`source_ip` (champ additif, optionnel)** : IP qui domine les logs d'accès du WAF (Loki, `client_ip`) sur les
 30 dernières secondes, filtrés selon le type (flood : toutes les requêtes ; `auth_abuse` : logins en 401/429 ;
 `web_attack` : 403). Renseignée par le detector seulement si elle pèse ≥ 60 % des lignes (et ≥ 5 lignes) ; absente
-(`null`) sinon, et toujours pour `data_corruption` / `unknown`. Une seule IP littérale validée (jamais de nom ni de
+(`null`) sinon, et toujours pour `data_corruption` / `unknown`. Une seule IP littérale validée, en forme canonique
+(IPv4-mappée `::ffff:a.b.c.d` repliée sur `a.b.c.d`), jamais de nom ni de
 réseau). Elle est la cible des actions `source: "from_event"` (`waf_block_ip`, `waf_blacklist_ip`) ; sans elle, ces
 actions échouent proprement et l'action suivante de la règle s'exécute. Rétro-compatible : `schema_version` inchangée.
 

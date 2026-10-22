@@ -7,7 +7,7 @@ def test_deny_file_parsing_ignores_comments_duplicates_and_garbage(tmp_path):
     f = tmp_path / "blocked_ips.conf"
     f.write_text("# vidé par make unblock\n192.168.137.115 1;\n192.168.137.115 1;\n"
                  "1.2.3.4; deny all 1;\n\n::ffff:10.0.0.7 1;\n", encoding="utf-8")
-    assert read_deny_file(f) == ["192.168.137.115", "::ffff:a00:7"]
+    assert read_deny_file(f) == ["192.168.137.115", "10.0.0.7"]  # IPv4-mappée repliée
     assert read_deny_file(tmp_path / "absent.conf") == []
 
 

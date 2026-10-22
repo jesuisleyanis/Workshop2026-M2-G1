@@ -17,7 +17,6 @@ import ipaddress
 import time
 
 import httpx
-
 from resilience_common import IncidentType, get_logger
 
 log = get_logger("detector")
@@ -63,6 +62,8 @@ def dominant_ip(result: list[dict], min_share: float, min_count: int,
             n = float(sample["value"][1])
         except (ValueError, KeyError, IndexError, TypeError):
             continue  # ligne sans IP littérale valide : jamais de cible fabriquée
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+            addr = addr.ipv4_mapped  # forme canonique : ::ffff:a.b.c.d -> a.b.c.d (exclusions IPv4 incluses)
         if any(addr.version == net.version and addr in net for net in exclude):
             continue
         ip = str(addr)

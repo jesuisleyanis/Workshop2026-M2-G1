@@ -16,10 +16,16 @@ _LIST_OF_ACTION = {"waf_block_ip": "temporary", "waf_blacklist_ip": "permanent"}
 
 
 def _ip(token: str) -> str | None:
+    """Forme canonique d'une IP littérale ; l'IPv4-mappée (``::ffff:a.b.c.d``) est repliée sur son IPv4
+    (même règle que actions/waf.py) : rendu stable quelle que soit la version de Python, et un déblocage
+    de ``10.0.0.7`` retire aussi la ligne ``::ffff:10.0.0.7``."""
     try:
-        return str(ipaddress.ip_address(token.strip()))
+        addr = ipaddress.ip_address(token.strip())
     except ValueError:
         return None
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return str(addr.ipv4_mapped)
+    return str(addr)
 
 
 def read_deny_file(path: str | Path) -> list[str]:
