@@ -95,7 +95,7 @@ make seed        # comptes fictifs demo01..demo05 financés
 ## Vérifier le système
 
 - **WAF (seul point HTTP exposé)** : `https://localhost` (80/443) — front « Banque Résilience » ; les API internes ne sont pas publiées. Le profil `iot` expose uniquement MQTT sur `192.168.137.1:1883`.
-- **Back-office (PC Hôte uniquement)** : `https://localhost:9443` — listener WAF lié à `127.0.0.1` (authentification visage + mot de passe, administration des agents ; ADR 0007).
+- **Back-office (PC Hôte uniquement)** : `https://localhost:9443` — listener WAF lié à `127.0.0.1` (authentification visage + mot de passe, administration des agents ; ADR 0007). Pas à pas (lancement, premier admin, login facial, LED ESP8266, dépannage) : [`docs/RUNBOOK-BACKOFFICE-FACIAL.md`](docs/RUNBOOK-BACKOFFICE-FACIAL.md).
 - **Comptes de test fictifs** : `demo01` … `demo05`, mot de passe commun `SEED_PASSWORD` (SOPS, cf. `security/sops/secrets.example.env`).
 - **Transaction de contrôle** : `make verify` (code retour `0` = transaction fictive rejouée OK). Démo complète : `make demo` (5 temps). Détails : [`scripts/README.md`](scripts/README.md).
 
