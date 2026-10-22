@@ -280,6 +280,18 @@ def test_caddy_overwrites_x_forwarded_for_and_targets_the_loopback_waf():
     assert "admin off" in caddy and "https://192.168.137.1" in caddy
 
 
+def test_caddy_listens_only_on_the_hotspot_and_loopback_by_default():
+    # Sans default_bind, Caddy écoute sur TOUTES les interfaces (le nom d'hôte ne filtre que `Host`).
+    caddy = (ROOT / "infra/caddy/Caddyfile").read_text(encoding="utf-8")
+    directives = "\n".join(line.split("#", 1)[0] for line in caddy.splitlines())
+    match = re.search(r"^\s*default_bind \{\$CADDY_BIND:([^}]*)\}\s*$", directives, re.MULTILINE)
+    assert match, "default_bind {$CADDY_BIND:...} absent du bloc global"
+    assert match.group(1).split() == ["192.168.137.1", "127.0.0.1"]
+    assert directives.index("default_bind") < directives.index("https://192.168.137.1")  # bloc global
+    recipe = _target("caddy")[1]
+    assert 'CADDY_BIND="$(CADDY_BIND)"' in recipe  # surcharge : make caddy CADDY_BIND=127.0.0.1
+
+
 # ---------------------------------------------------------------- dépendances Python
 def test_requirements_files_pin_each_package_once() -> None:
     # Un paquet listé deux fois finit tôt ou tard épinglé à deux versions différentes (pip échoue au build).

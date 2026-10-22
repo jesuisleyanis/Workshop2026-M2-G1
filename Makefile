@@ -7,6 +7,8 @@ SHELL := /bin/bash   # pipefail dans les recettes de tests
 # (`=`) : le wildcard est évalué à l'exécution de la recette, donc APRÈS `make decrypt`.
 # REAL_IP=1 : mode « IP réelle » (proxy natif Caddy devant le WAF, publié en 127.0.0.1) — infra/caddy/README.md.
 REAL_IP ?=
+# Interfaces d'écoute de Caddy (`make caddy`) : hotspot + boucle locale ; hotspot inactif -> CADDY_BIND=127.0.0.1.
+CADDY_BIND ?= 192.168.137.1 127.0.0.1
 COMPOSE = docker compose -f infra/compose/docker-compose.yml $(if $(REAL_IP),-f infra/compose/docker-compose.realip.yml) $(if $(wildcard .env),--env-file .env)
 ROOT    := $(shell pwd)
 # Charge .env (produit par `make decrypt`) dans l'environnement d'une cible : SEED_PASSWORD, tokens...
@@ -100,7 +102,7 @@ ui: check-env ## Ouvre le dashboard sur http://127.0.0.1:8081 (PC hôte seulemen
 
 caddy: ## Lance le proxy natif Windows (mode REAL_IP=1) : vraie IP des clients transmise au WAF
 	@command -v caddy >/dev/null || { echo "Caddy absent : winget install --id CaddyServer.Caddy -e (voir infra/caddy/README.md)"; exit 1; }
-	caddy run --config infra/caddy/Caddyfile --adapter caddyfile
+	CADDY_BIND="$(CADDY_BIND)" caddy run --config infra/caddy/Caddyfile --adapter caddyfile
 
 ps: ## État des conteneurs (tous profils)
 	$(COMPOSE) $(PROFILES_ALL) ps

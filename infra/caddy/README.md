@@ -29,6 +29,9 @@ PC attaquant ──► Caddy (Windows, :443) ──X-Forwarded-For: <vraie IP>�
 3. Le WAF ne croit cet en-tête que venant des passerelles Docker (`WAF_TRUST_FORWARDED_FROM`), c.-à-d. du trafic
    publié en local. En mode par défaut, la liste est **vide** : aucun client ne peut choisir son IP.
 4. Les protections restent : réseaux Docker internes jamais bloqués (`NEVER_BLOCK_IPS`), IP validées.
+5. Caddy n'**écoute** que sur l'interface du hotspot et la boucle locale (`default_bind`, variable `CADDY_BIND`,
+   défaut `192.168.137.1 127.0.0.1`) : il n'est pas joignable depuis le Wi-Fi/Ethernet du PC hôte. Sans cette
+   directive, Caddy écoute sur toutes les interfaces (les noms d'hôte du Caddyfile ne filtrent que l'en-tête `Host`).
 
 ## Mise en place (PC hôte)
 
@@ -36,7 +39,8 @@ PC attaquant ──► Caddy (Windows, :443) ──X-Forwarded-For: <vraie IP>�
 2. Pare-feu Windows : autoriser **Caddy** en entrée sur le réseau du hotspot (ports 80/443) — à la première
    exécution, Windows le propose.
 3. Lever la stack en mode IP réelle : `make down` puis `REAL_IP=1 make up-full` (puis `REAL_IP=1 make ui`).
-4. Lancer Caddy (fenêtre dédiée, laisser tourner) : `make caddy`.
+4. Lancer Caddy (fenêtre dédiée, laisser tourner) : `make caddy` (Caddy >= 2.7). Hotspot inactif (adresse
+   `192.168.137.1` absente : Caddy refuse de démarrer) : `make caddy CADDY_BIND=127.0.0.1`.
 5. Vérifier : `make verify` (passe par Caddy) ; depuis le PC attaquant, `https://192.168.137.1` répond ; les logs du
    WAF montrent l'IP `192.168.137.x` du PC attaquant :
    `docker logs resilience-g1-waf-1 --since 1m | grep client_ip`.
