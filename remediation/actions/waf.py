@@ -14,6 +14,10 @@ Dans tous les cas, jamais une adresse protégée (NEVER_BLOCK_IPS, loopback...).
 
 Label Loki `service` = nom du service Compose émetteur (posé par Promtail) : l'événement
 `waf_blocked` vient du conteneur `waf-exporter`, pas de `waf`.
+
+Durée de vie : chaque blocage est écrit avec une échéance (`REMEDIATION_WAF_BLOCK_TTL_S`, 0 = permanent).
+Les entrées échues sont purgées avant chaque écriture, à chaque relecture (GET /waf/blocked-ips), au
+démarrage puis périodiquement (`purge_and_reload`) ; le WAF est rechargé dès qu'une entrée est retirée.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from collections import Counter
 from typing import Any
 
 import httpx
+from blocklist import deny_lock, purge_expired
 
 from actions.base import Action, ActionContext, ActionError, ActionParamError, ActionResult
 from actions.docker_proxy import DockerProxyError
@@ -137,6 +142,36 @@ async def resolve_target(params: dict[str, Any], ctx: ActionContext) -> str:
     return guard_ip(ip, ctx)
 
 
+async def reload_waf(docker: Any, service: str) -> list[str]:
+    """SIGHUP (`nginx -s reload`) à chaque conteneur du service WAF, via le proxy. Lève DockerProxyError."""
+    cids = await docker.find_containers(service)
+    for cid in cids:
+        await docker.reload(cid)
+    return cids
+
+
+async def purge_and_reload(settings: Any, docker: Any, log: Any, now: float | None = None) -> list[str]:
+    """Retire les blocages échus de la deny-list puis recharge le WAF s'il y en avait.
+
+    Best effort (relecture, démarrage, tâche périodique) : un rechargement impossible est journalisé,
+    jamais levé ; la purge suivante ne le refera pas, mais le prochain blocage/déblocage rechargera.
+    """
+    async with deny_lock(settings.waf_deny_file):
+        try:
+            removed = purge_expired(settings.waf_deny_file, time.time() if now is None else now)
+        except OSError as exc:
+            log.warning(f"purge de la deny-list WAF impossible : {exc}", extra={"event": "remediation_failed"})
+            return []
+    if removed:
+        log.info(f"blocage(s) WAF expiré(s) retiré(s) : {', '.join(removed)}",
+                 extra={"event": "remediation_action"})
+        try:
+            await reload_waf(docker, settings.waf_service)
+        except DockerProxyError as exc:
+            log.warning(f"deny-list purgée mais WAF non rechargé : {exc}", extra={"event": "remediation_failed"})
+    return removed
+
+
 def guard_ip_or_reason(raw: object, ctx: ActionContext) -> str:
     try:
         return guard_ip(raw, ctx)
@@ -166,25 +201,33 @@ class _WafDeny(Action):
 
     async def execute(self, ctx: ActionContext) -> ActionResult:
         ip = await resolve_target(self.params, ctx)
-        res = await ctx.runner.run_playbook(
-            PLAYBOOK_WAF_DENY,
-            {"deny_ip": ip, "deny_list": self.deny_list, "incident_id": ctx.incident_id},
-            timeout=ctx.settings.action_timeout_s,
-        )
+        ttl = ctx.settings.waf_block_ttl_s
+        now = time.time()
+        until = int(now) + ttl if ttl > 0 else 0  # 0 = permanent (ligne sans échéance)
+        async with deny_lock(ctx.settings.waf_deny_file):
+            try:
+                expired = purge_expired(ctx.settings.waf_deny_file, now)
+            except OSError:
+                expired = []  # purge best effort : ne jamais empêcher un blocage
+            res = await ctx.runner.run_playbook(
+                PLAYBOOK_WAF_DENY,
+                {"deny_ip": ip, "deny_list": self.deny_list, "incident_id": ctx.incident_id,
+                 "deny_until": until},
+                timeout=ctx.settings.action_timeout_s,
+            )
         if not res.ok:
             raise ActionError(f"playbook {PLAYBOOK_WAF_DENY} en échec ({res.detail or res.rc})")
-        # Idempotent : le playbook (lineinfile) ne duplique pas l'entrée ; changed=False si déjà bloquée,
-        # auquel cas Nginx n'a pas besoin d'être rechargé.
+        # Idempotent : le playbook (lineinfile) ne duplique pas l'entrée ; changed=False si déjà bloquée
+        # avec la même échéance, auquel cas Nginx n'a pas besoin d'être rechargé (sauf purge).
         reloaded: list[str] = []
-        if res.changed is not False:
+        if res.changed is not False or expired:
             try:
-                reloaded = await ctx.docker.find_containers(ctx.settings.waf_service)
-                for cid in reloaded:
-                    await ctx.docker.reload(cid)  # SIGHUP = `nginx -s reload`, via le proxy
+                reloaded = await reload_waf(ctx.docker, ctx.settings.waf_service)
             except DockerProxyError as exc:
                 raise ActionError(f"deny-list écrite mais rechargement du WAF impossible : {exc}") from exc
         return ActionResult(ok=True, changed=res.changed,
-                            data={"ip": ip, "list": self.deny_list, "reloaded": [c[:12] for c in reloaded]},
+                            data={"ip": ip, "list": self.deny_list, "reloaded": [c[:12] for c in reloaded],
+                                  "until": until or None, "expired": expired},
                             detail=f"{ip} {'déjà bloquée' if res.changed is False else 'bloquée'} ({self.deny_list})"
                                    + (f", WAF rechargé ({len(reloaded)})" if reloaded else ""))
 

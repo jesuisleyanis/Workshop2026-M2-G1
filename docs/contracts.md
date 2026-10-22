@@ -308,7 +308,7 @@ déclenche `verify_tx` → clos, l'échec du blocage restant tracé. Aucun bloca
 |---|---|---|
 | `restart_service` | Docker API (via docker-socket-proxy, verbe limité) | restart conteneur |
 | `recreate_service` | Docker API depuis image saine | create/remove conteneur |
-| `waf_block_ip` / `waf_blacklist_ip` | Ansible → reload Nginx (fichier de deny) | écriture conf WAF + reload |
+| `waf_block_ip` / `waf_blacklist_ip` | Ansible → reload Nginx (fichier de deny). Ligne `<ip> 1; # until=<epoch>` : échéance `REMEDIATION_WAF_BLOCK_TTL_S` (défaut 3600 s, `0` = permanent ; ligne sans `until=` = permanente). Le moteur purge les lignes échues et recharge le WAF | écriture conf WAF + reload |
 | `tighten_rate_limit` | appel API interne du service auth | aucun (API applicative) |
 | `restore_pg_dump` | Ansible → `pg_restore` depuis backup planifié | accès réseau `data` |
 | `confirm_waf_block` | lecture logs Loki (`{service="waf-exporter", event="waf_blocked"}`), pas d'action ; `require: true` = échec si aucun blocage observé | lecture Loki (réseau `obs`) |

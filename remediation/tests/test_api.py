@@ -215,5 +215,5 @@ def test_blocked_ips_endpoint_lists_the_deny_file_with_journal_context(env, tmp_
     with TestClient(app) as c:
         r = c.get("/waf/blocked-ips", headers=AUTH)
     assert r.status_code == 200
-    assert r.json() == {"blocked": [{"ip": "203.0.113.7", "blocked_at": None, "list": "unknown",
-                                     "incident_id": None, "incident_type": None}]}
+    assert r.json() == {"blocked": [{"ip": "203.0.113.7", "blocked_at": None, "expires_at": None,
+                                     "list": "unknown", "incident_id": None, "incident_type": None}]}

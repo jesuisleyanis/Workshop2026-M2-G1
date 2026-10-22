@@ -1,16 +1,37 @@
-"""Liste noire du WAF en lecture seule (carte « IP bloquées » du dashboard).
+"""Liste noire du WAF : lecture (carte « IP bloquées » du dashboard), déblocage et expiration.
 
 Source de vérité : la deny-list réellement appliquée par le WAF (fichier partagé `waf-deny`, une ligne
 `<ip> 1;` par IP, écrite par waf_deny_ip.yml). Le journal du moteur l'enrichit : quand, par quel incident,
 liste temporaire ou permanente. Une IP présente dans le fichier mais absente du journal (ajout manuel,
 journal purgé) est quand même listée — on montre ce que le WAF bloque, pas ce que le moteur croit.
+
+Durée de vie (REMEDIATION_WAF_BLOCK_TTL_S) : le moteur écrit `<ip> 1; # until=<epoch>` (commentaire
+ignoré par nginx). Une ligne sans `until=` (ancien format, ajout manuel, TTL 0) est PERMANENTE.
+`purge_expired` retire les lignes échues ; l'appelant recharge alors le WAF.
 """
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
+import re
+import weakref
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+_UNTIL = re.compile(r"\buntil=(\d+)\b")
+# Un verrou par boucle asyncio et par fichier : purge, écriture (playbook) et déblocage ne s'entrelacent
+# jamais (sinon une purge pourrait réécrire le fichier par-dessus une IP tout juste ajoutée).
+_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def deny_lock(path: str | Path) -> asyncio.Lock:
+    """Verrou d'écriture de la deny-list (à prendre autour de toute lecture-modification-écriture)."""
+    per_loop = _LOCKS.setdefault(asyncio.get_running_loop(), {})
+    return per_loop.setdefault(str(path), asyncio.Lock())
 
 _LIST_OF_ACTION = {"waf_block_ip": "temporary", "waf_blacklist_ip": "permanent"}
 
@@ -28,21 +49,65 @@ def _ip(token: str) -> str | None:
     return str(addr)
 
 
-def read_deny_file(path: str | Path) -> list[str]:
-    """IP de la deny-list (ordre du fichier, sans doublon) ; lignes invalides ou commentées ignorées."""
+def _line_ip(line: str) -> str | None:
+    head = line.split("#", 1)[0].strip()
+    return _ip(head.split()[0]) if head else None
+
+
+def _line_until(line: str) -> int | None:
+    """Échéance (epoch, s) d'une ligne de la deny-list ; None = permanente (pas de `until=`)."""
+    _, _, comment = line.partition("#")
+    m = _UNTIL.search(comment)
+    return int(m.group(1)) if m else None
+
+
+def read_deny_entries(path: str | Path) -> list[tuple[str, int | None]]:
+    """(IP, échéance epoch ou None) de la deny-list, ordre du fichier, sans doublon."""
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return []
-    ips: list[str] = []
+    out: dict[str, int | None] = {}
     for line in lines:
-        line = line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        ip = _ip(line.split()[0])
-        if ip and ip not in ips:
-            ips.append(ip)
-    return ips
+        ip = _line_ip(line)
+        if ip and ip not in out:
+            out[ip] = _line_until(line)
+    return list(out.items())
+
+
+def read_deny_file(path: str | Path) -> list[str]:
+    """IP de la deny-list (ordre du fichier, sans doublon) ; lignes invalides ou commentées ignorées."""
+    return [ip for ip, _ in read_deny_entries(path)]
+
+
+def _atomic_write(p: Path, content: str) -> None:
+    """Fichier temporaire + rename dans le même répertoire : le WAF ne relit jamais un fichier partiel."""
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(p)
+
+
+def purge_expired(path: str | Path, now: float) -> list[str]:
+    """Retire les lignes dont l'échéance `until` est passée ; renvoie les IP retirées.
+
+    Les lignes sans échéance (permanentes, ancien format), les commentaires et les autres IP sont
+    conservés tels quels. Aucune écriture si rien n'a expiré.
+    """
+    p = Path(path)
+    try:
+        lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+    except FileNotFoundError:
+        return []
+    kept, removed = [], []
+    for line in lines:
+        until, ip = _line_until(line), _line_ip(line)
+        if ip and until is not None and until <= now:
+            removed.append(ip)
+        else:
+            kept.append(line)
+    if removed:
+        _atomic_write(p, "".join(kept))
+    return removed
 
 
 def list_blocked_ips(deny_file: str | Path, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -53,11 +118,14 @@ def list_blocked_ips(deny_file: str | Path, blocks: list[dict[str, Any]]) -> lis
         if ip and ip not in latest:
             latest[ip] = b
     out = []
-    for ip in read_deny_file(deny_file):
+    for ip, until in read_deny_entries(deny_file):
         b = latest.get(ip, {})
         out.append({
             "ip": ip,
             "blocked_at": b.get("ts"),
+            # Échéance du blocage (ISO 8601 UTC), None = permanent (TTL 0 ou ligne sans échéance).
+            "expires_at": None if until is None else datetime.fromtimestamp(until, UTC)
+            .isoformat(timespec="seconds").replace("+00:00", "Z"),
             "list": _LIST_OF_ACTION.get(b.get("action_type", ""), "unknown"),
             "incident_id": b.get("incident_id"),
             "incident_type": b.get("incident_type"),
@@ -80,10 +148,8 @@ def remove_ip(path: str | Path, ip: str) -> bool:
         lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
     except FileNotFoundError:
         return False
-    kept = [ln for ln in lines if _ip(ln.split("#", 1)[0].strip().split(" ")[0] or "-") != target]
+    kept = [ln for ln in lines if _line_ip(ln) != target]
     if len(kept) == len(lines):
         return False
-    tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text("".join(kept), encoding="utf-8")
-    tmp.replace(p)
+    _atomic_write(p, "".join(kept))
     return True

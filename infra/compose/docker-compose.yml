@@ -418,6 +418,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       # waf_block_ip : deny-list partagée + SIGHUP du service `waf` via le proxy
       WAF_SERVICE: waf
+      # Durée de vie d'un blocage WAF (s) ; 0 = permanent. Un faux positif CRS ne bannit pas indéfiniment.
+      REMEDIATION_WAF_BLOCK_TTL_S: "3600"
       # Jamais bloquées : boucle locale, PC hôte (hotspot) et réseaux du WAF ENTIERS (cf. networks) :
       # passerelle par laquelle Docker Desktop fait entrer tous les clients, et services internes
       # (dont la remédiation elle-même, via verify_tx).

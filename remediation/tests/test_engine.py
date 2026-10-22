@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest.mock import ANY
 
 import pytest
 from broker_helpers import capture_logs
@@ -330,7 +331,7 @@ async def test_web_attack_blocks_the_detector_ip_even_if_the_waf_already_contain
     inc = env.incident(sub.incident_id)
     assert env.action_types(sub.incident_id) == ["waf_blacklist_ip"]
     assert env.runner.calls == [("waf_deny_ip.yml", {"deny_ip": "198.51.100.23", "deny_list": "permanent",
-                                                     "incident_id": sub.incident_id})]
+                                                     "incident_id": sub.incident_id, "deny_until": ANY})]
     assert inc["status"] == "closed"
 
 
@@ -341,7 +342,7 @@ async def test_web_attack_falls_back_to_the_loki_source_without_source_ip(make_e
     inc = env.incident(sub.incident_id)
     assert env.action_types(sub.incident_id) == ["waf_blacklist_ip"]
     assert env.runner.calls == [("waf_deny_ip.yml", {"deny_ip": "203.0.113.50", "deny_list": "permanent",
-                                                     "incident_id": sub.incident_id})]
+                                                     "incident_id": sub.incident_id, "deny_until": ANY})]
     assert inc["status"] == "closed"
 
 

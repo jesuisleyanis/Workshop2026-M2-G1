@@ -6,6 +6,7 @@ import logging
 import stat
 import sys
 from pathlib import Path
+from unittest.mock import ANY
 
 import httpx
 import pytest
@@ -72,7 +73,7 @@ async def test_waf_block_ip_runs_playbook_then_reloads_waf_only_when_changed():
     res = await build_action("waf_block_ip", {"source": "from_event"}).execute(ctx)
     assert res.ok and res.changed is True
     assert ctx.runner.calls == [("waf_deny_ip.yml", {"deny_ip": "203.0.113.9", "deny_list": "temporary",
-                                                     "incident_id": "inc-1"})]
+                                                     "incident_id": "inc-1", "deny_until": ANY})]
     assert net.docker_calls() == [("GET", "/containers/json"), ("POST", "/containers/cid-waf/kill")]
     assert res.data["reloaded"] == ["cid-waf"]
 
@@ -267,7 +268,7 @@ async def test_from_loki_blocks_the_most_frequent_waf_blocked_source():
     res = await build_action("waf_blacklist_ip", {"source": "from_loki"}).execute(ctx)
     assert res.ok and res.data["ip"] == "203.0.113.50" and res.data["list"] == "permanent"
     assert ctx.runner.calls == [("waf_deny_ip.yml", {"deny_ip": "203.0.113.50", "deny_list": "permanent",
-                                                     "incident_id": "inc-1"})]
+                                                     "incident_id": "inc-1", "deny_until": ANY})]
     loki = [r for r in net.requests if r.url.host == "loki"]
     assert len(loki) == 1 and loki[0].method == "GET"
     assert loki[0].url.params["query"] == '{service="waf-exporter", event="waf_blocked"}'

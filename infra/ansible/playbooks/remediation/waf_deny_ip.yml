@@ -8,7 +8,10 @@
 # (seul canal Docker du moteur), et uniquement si ce playbook a changé quelque chose.
 #
 # Extravars (actions/waf.py) : deny_ip (IP littérale validée), deny_list (temporary|permanent),
-# incident_id. Idempotent : lineinfile -> changed=false si l'IP est déjà présente.
+# incident_id, deny_until (échéance epoch en s ; 0 = permanent). La ligne porte l'échéance en
+# commentaire (`<ip> 1; # until=<epoch>`, ignoré par nginx) ; le moteur purge les lignes échues.
+# Idempotent : lineinfile -> changed=false si la même ligne est déjà présente ; un nouveau blocage
+# de la même IP remplace sa ligne (échéance prolongée), jamais de doublon.
 - name: Bloquer une IP au WAF (deny-list partagée)
   hosts: localhost
   connection: local
@@ -18,6 +21,7 @@
     deny_ip: ""
     deny_list: temporary
     incident_id: ""
+    deny_until: 0
     deny_file: "{{ lookup('env', 'WAF_DENY_FILE') | default('/etc/resilience/waf-deny/blocked_ips.conf', true) }}"
   tasks:
     - name: Vérifier les paramètres fournis par le moteur
@@ -26,12 +30,13 @@
           - deny_ip | length > 0
           - deny_ip is match('^[0-9a-fA-F:.]+$')
           - deny_list in ['temporary', 'permanent']
+          - deny_until | string is match('^[0-9]+$')
         fail_msg: "IP invalide/absente ou liste inconnue"
 
     - name: Ajouter l'IP à la deny-list (format geo nginx, idempotent)
       ansible.builtin.lineinfile:
         path: "{{ deny_file }}"
-        line: "{{ deny_ip }} 1;"
+        line: "{{ deny_ip }} 1;{{ (' # until=' ~ deny_until) if (deny_until | int) > 0 else '' }}"
         regexp: "^{{ deny_ip | regex_escape }} "
         create: true
         mode: "0644"

@@ -8,9 +8,9 @@ déchiffré au démarrage (secret monté en lecture seule, jamais dans l'image).
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
 
 HERE = Path(__file__).resolve().parent
 MIN_TOKEN_LENGTH = 16
@@ -70,12 +70,19 @@ class Settings:
     # Deny-list partagée avec le WAF (volume waf-deny), écrite par waf_deny_ip.yml ; lue par GET /waf/blocked-ips.
     waf_deny_file: str = "/etc/resilience/waf-deny/blocked_ips.conf"
     waf_service: str = "waf"  # service Compose rechargé (SIGHUP) après mise à jour de la deny-list
+    # Durée de vie d'un blocage écrit par le moteur (waf_block_ip ET waf_blacklist_ip), en s ; 0 = permanent.
+    # Borne l'effet d'un faux positif (client légitime banni par le CRS) sans intervention humaine.
+    waf_block_ttl_s: int = 3600
     # --- Garde-fous ---
     dry_run: bool = False  # REMEDIATION_DRY_RUN : peut seulement FORCER le dry-run
     never_block_ips: tuple[str, ...] = ("127.0.0.1", "::1", "192.168.137.1")
     # --- SSE ---
     sse_keepalive_s: float = 15.0
     service_name: str = field(default="remediation")
+
+    def __post_init__(self) -> None:
+        if self.waf_block_ttl_s < 0:
+            raise ValueError("REMEDIATION_WAF_BLOCK_TTL_S doit être >= 0 (0 = permanent)")
 
     @property
     def token_configured(self) -> bool:
@@ -89,7 +96,7 @@ class Settings:
         return len(tok) >= MIN_TOKEN_LENGTH and tok != (self.token or "")
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
+    def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
         e = os.environ if env is None else env
         d = cls()
         return cls(
@@ -113,6 +120,7 @@ class Settings:
             ansible_project_dir=e.get("ANSIBLE_PROJECT_DIR", d.ansible_project_dir),
             waf_deny_file=e.get("WAF_DENY_FILE", d.waf_deny_file),
             waf_service=e.get("WAF_SERVICE", d.waf_service),
+            waf_block_ttl_s=int(e.get("REMEDIATION_WAF_BLOCK_TTL_S", d.waf_block_ttl_s)),
             dry_run=_bool(e.get("REMEDIATION_DRY_RUN")),
             never_block_ips=_csv(e.get("NEVER_BLOCK_IPS"), d.never_block_ips),
             sse_keepalive_s=float(e.get("SSE_KEEPALIVE_S", d.sse_keepalive_s)),

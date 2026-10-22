@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import ANY
 
 import pytest
 from actions.runner import PLAYBOOK_WAF_DENY
@@ -38,7 +39,7 @@ def test_block_ip_success_journal_and_stream(client, env):
     out = r.json()
     assert out["action"] == "waf_block_ip" and out["status"] == "ok" and "203.0.113.9" in out["detail"]
     assert env.runner.calls == [(PLAYBOOK_WAF_DENY, {"deny_ip": "203.0.113.9", "deny_list": "temporary",
-                                                     "incident_id": out["incident_id"]})]
+                                                     "incident_id": out["incident_id"], "deny_until": ANY})]
 
     inc = client.get(f"/incidents/{out['incident_id']}", headers=AUTH).json()
     assert inc["incident_type"] == "manual_action" and inc["status"] == "closed"

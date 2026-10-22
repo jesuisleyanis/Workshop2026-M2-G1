@@ -287,6 +287,7 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 
 | # | Écart | Résolution | Statut / preuve |
 |---|---|---|---|
+| R2 | Liste noire WAF sans expiration : un faux positif CRS bannissait un client légitime jusqu'à `attacks/reset.sh` | `REMEDIATION_WAF_BLOCK_TTL_S` (défaut 3600 s, 0 = permanent) : ligne `<ip> 1; # until=<epoch>` écrite par `waf_deny_ip.yml` ; purge atomique des échues avant chaque blocage, à chaque `GET /waf/blocked-ips`, au démarrage et toutes les 60 s, puis SIGHUP du WAF ; anciennes lignes sans échéance = permanentes ; `expires_at` dans `GET /waf/blocked-ips` | ✅ `test_block_ttl.py`, `test_playbooks.py` (playbook réel : échéance, idempotence, valeur piégée refusée) ; 🟨 live (expiration effective sur le WAF) |
 | R1 | Exemption du rate-limit de `/login` usurpable : `X-Forwarded-For` cru quel que soit le pair, un conteneur du réseau `app` joignant `auth:8002` en direct avec `XFF: 172.31.0.20` brute-forçait sans limite (même motif dans payment-api : IP des logs → ML) | `TRUSTED_PROXIES` (auth + payment-api) : XFF lu seulement si le pair TCP est le WAF, IP fixe `172.31.0.10` sur `app` ; plage dynamique `ip_range 172.31.0.128/25` (IP fixes jamais prises) ; entrée invalide = refus de démarrer | ✅ `test_auth_ratelimit.py` (spoof direct → 429, XFF non fiable ignoré, CIDR), `test_payment_contracts.py::test_xff_is_only_trusted_from_the_waf`, `test_services_trust_x_forwarded_for_only_from_the_waf_fixed_ip` ; 🟨 live (IP fixe du WAF, `verify_tx` toujours exempté) |
 
 ## Risques projet (vivant)

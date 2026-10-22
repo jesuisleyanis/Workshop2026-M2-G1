@@ -24,10 +24,11 @@ def test_blocked_ips_are_enriched_with_the_latest_journal_block(tmp_path):
     ]
     out = list_blocked_ips(f, blocks)
     assert out == [
-        {"ip": "192.168.137.115", "blocked_at": "2026-10-21T13:40:00.000Z", "list": "permanent",
-         "incident_id": "i2", "incident_type": "web_attack"},
+        {"ip": "192.168.137.115", "blocked_at": "2026-10-21T13:40:00.000Z", "expires_at": None,
+         "list": "permanent", "incident_id": "i2", "incident_type": "web_attack"},
         # ajoutée hors moteur (ou journal purgé) : listée quand même, c'est ce que le WAF bloque
-        {"ip": "203.0.113.9", "blocked_at": None, "list": "unknown", "incident_id": None, "incident_type": None},
+        {"ip": "203.0.113.9", "blocked_at": None, "expires_at": None, "list": "unknown", "incident_id": None,
+         "incident_type": None},
     ]
     # 10.9.9.9 a été débloquée (absente du fichier) : jamais listée, même si le journal s'en souvient
     assert all(e["ip"] != "10.9.9.9" for e in out)

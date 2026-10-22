@@ -137,7 +137,7 @@ Action : `restore_pg_dump` (`remediation/actions/postgres.py`), paramètre `back
 
 ### 5.3 `web_attack`
 
-Compromission tentée, pas perte de disponibilité : **pas de `verify_first`** (ModSecurity renvoie déjà 403, `verify_tx` passerait d'emblée et l'attaquant ne serait jamais bloqué). `waf_blacklist_ip` (liste `permanent`, `source: from_event_or_loki` : IP désignée par le detector, sinon la source la plus fréquente des `waf_blocked` des 120 s dans Loki), puis `confirm_waf_block(require: true)` (lecture seule Loki `{service="waf-exporter", event="waf_blocked"}`). IP non bloquable (passerelle Docker protégée) : clos sur preuve du blocage WAF ; aucun blocage observé : escalade. Aucune restauration de service nécessaire : le CRS a répondu 403 avant l'application. Retour arrière : retirer la ligne de `blocked_ips.conf` + reload (ou `attacks/reset.sh`).
+Compromission tentée, pas perte de disponibilité : **pas de `verify_first`** (ModSecurity renvoie déjà 403, `verify_tx` passerait d'emblée et l'attaquant ne serait jamais bloqué). `waf_blacklist_ip` (liste `permanent`, `source: from_event_or_loki` : IP désignée par le detector, sinon la source la plus fréquente des `waf_blocked` des 120 s dans Loki), puis `confirm_waf_block(require: true)` (lecture seule Loki `{service="waf-exporter", event="waf_blocked"}`). IP non bloquable (passerelle Docker protégée) : clos sur preuve du blocage WAF ; aucun blocage observé : escalade. Aucune restauration de service nécessaire : le CRS a répondu 403 avant l'application. Retour arrière : **automatique** à l'échéance du blocage (`REMEDIATION_WAF_BLOCK_TTL_S`, 1 h par défaut), ou bouton « Débloquer » du dashboard / `attacks/reset.sh`.
 
 ### 5.4 PRA : reconstruction sur une autre machine (manuel, non éprouvé)
 
@@ -156,7 +156,7 @@ Déclencheurs : escalade `remediation_failed`, moteur ou proxy en panne, type `u
 
 | Playbook | Appelé par | Variables | État au 2026-10-19 |
 |---|---|---|---|
-| `waf_deny_ip.yml` | `waf_block_ip`, `waf_blacklist_ip` | `deny_ip`, `deny_list` (temporary / permanent), `incident_id` | [R] `infra/ansible/playbooks/remediation/waf_deny_ip.yml` |
+| `waf_deny_ip.yml` | `waf_block_ip`, `waf_blacklist_ip` | `deny_ip`, `deny_list` (temporary / permanent), `incident_id`, `deny_until` (epoch, 0 = permanent) | [R] `infra/ansible/playbooks/remediation/waf_deny_ip.yml` |
 | `pg_restore.yml` | `restore_pg_dump` | `backup`, `incident_id` | [R] `infra/ansible/playbooks/remediation/pg_restore.yml` |
 | playbooks de déploiement et de reprise (R6) : `deploy.yml`, `pg_backup.yml` | opérateur / `make up` | — | [R] `infra/ansible/playbooks/` ; planification de `pg_backup.yml` [S] |
 
@@ -213,7 +213,7 @@ R = réalise, A = rend compte, C = consulté, I = informé. Les noms sont à ren
 | **R2** | **Dump déjà corrompu** restauré par `latest` | `latest` = dernier dump sans contrôle de contenu | retour à un état altéré, `verify_tx` peut passer | rétention >= 12 dumps, contrôle d'invariants avant rotation, `backup=<nom>` pour remonter |
 | **R3** | **Corruption silencieuse non détectée** | le signal retenu est `db_errors_per_s` + `verify_tx` KO | corruption sans erreur DB ignorée | contrôles d'intégrité périodiques (invariants §5.2) |
 | **R4** | **Rotation d'IP / attaque distribuée** | blocage par IP source uniquement | le flood reprend ; escalade après 3 tentatives | transfert (scrubbing) ; limites par compte ; hors périmètre |
-| **R5** | **Mesures sans retour arrière** | deny-list sans expiration côté moteur ; rate-limit durci levé seulement au redémarrage de `auth` ; **`auth` ne dédoublonne pas `Idempotency-Key`** donc re-durcissement à chaque tentative (10 -> 5 -> 2 -> 1/min) | pénalise des utilisateurs légitimes | corriger le dédoublonnage ; expiration de la deny-list `temporary` ; levée post-incident par décision humaine |
+| **R5** | **Mesures sans retour arrière** | deny-list : expiration après `REMEDIATION_WAF_BLOCK_TTL_S` (corrigé) ; rate-limit durci levé seulement au redémarrage de `auth` ; **`auth` ne dédoublonne pas `Idempotency-Key`** donc re-durcissement à chaque tentative (10 -> 5 -> 2 -> 1/min) | pénalise des utilisateurs légitimes | corriger le dédoublonnage ; expiration de la deny-list `temporary` ; levée post-incident par décision humaine |
 | **R6** | **Faux positif ML** | seuil 0,6296, 0/2000 FP sur baseline **synthétique** | redémarrage inutile de `payment-api` (interruption courte auto-infligée) | cooldown 60 s ; ré-entraînement sur trafic réel avant production |
 | **R7** | **Points uniques de défaillance** : hôte, WAF, Postgres, moteur | architecture imposée | arrêt total ou perte d'autonomie | PRA §3.3, mode dégradé §5.5 |
 | **R8** | **Sauvegardes sur le même hôte** | aucune copie hors hôte | perte de l'hôte = perte des dumps ; RPO PRA non tenu | copie hors hôte horaire [S] |

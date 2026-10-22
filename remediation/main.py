@@ -12,6 +12,8 @@ Le service n'est jamais publié (`ports:`) ni rattaché au réseau `edge`.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hmac
 import time
 import uuid
@@ -23,8 +25,9 @@ import httpx
 from actions import ActionError, ActionParamError
 from actions.docker_proxy import DockerProxy, DockerProxyError
 from actions.runner import AnsibleRunnerAdapter
+from actions.waf import purge_and_reload, reload_waf
 from alertmanager import AlertmanagerPayload, to_events
-from blocklist import list_blocked_ips, remove_ip
+from blocklist import deny_lock, list_blocked_ips, remove_ip
 from config import Settings
 from decision import DecisionTable, DecisionTableError, load_decision_table
 from engine import RemediationEngine, Services
@@ -41,6 +44,9 @@ from verify import ScriptVerifier
 
 SERVICE = "remediation"
 PROBES = frozenset({"/health", "/ready", "/metrics"})
+# Purge périodique des blocages WAF échus (en plus de chaque écriture/relecture) : un blocage expire
+# même si personne ne consulte le dashboard. Sans objet si REMEDIATION_WAF_BLOCK_TTL_S=0.
+WAF_PURGE_INTERVAL_S = 60.0
 
 
 class ManualAction(BaseModel):
@@ -83,8 +89,14 @@ def create_app(
     engine = RemediationEngine(table=table, settings=settings, journal=journal, broker=broker,
                                services=services, log=log)
 
+    async def _purge_loop() -> None:
+        while True:  # 1re passe immédiate = purge au démarrage
+            await purge_and_reload(settings, services.docker, log)
+            await asyncio.sleep(WAF_PURGE_INTERVAL_S)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        purger = asyncio.create_task(_purge_loop())
         orphans = journal.recover_orphans()
         if orphans:
             log.warning(f"{orphans} incident(s) interrompu(s) par un redémarrage",
@@ -95,6 +107,9 @@ def create_app(
             log.warning("REMEDIATION_OPERATOR_TOKEN absent, trop court ou égal au jeton de service : "
                         "actions opérateur refusées (fail closed)")
         yield
+        purger.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await purger
         await engine.shutdown()
         await http.aclose()
         journal.close()
@@ -246,7 +261,8 @@ def create_app(
 
     @app.get("/waf/blocked-ips", dependencies=[auth])
     async def blocked_ips() -> dict[str, Any]:
-        """IP actuellement en liste noire du WAF (lecture seule), enrichies par le journal."""
+        """IP actuellement en liste noire du WAF, enrichies par le journal (blocages échus purgés d'abord)."""
+        await purge_and_reload(settings, services.docker, log)
         return {"blocked": list_blocked_ips(settings.waf_deny_file, journal.last_blocks())}
 
     @app.delete("/waf/blocked-ips/{ip}", dependencies=[operator])
@@ -257,7 +273,8 @@ def create_app(
         Jeton OPÉRATEUR exigé : le jeton de service (détenu par le nginx du dashboard) est refusé.
         """
         try:
-            removed = remove_ip(settings.waf_deny_file, ip)
+            async with deny_lock(settings.waf_deny_file):
+                removed = remove_ip(settings.waf_deny_file, ip)
         except ValueError:
             return _error(400, "invalid_ip", "adresse IP littérale attendue", request)
         if not removed:
@@ -265,9 +282,7 @@ def create_app(
         log.warning(f"IP {ip} débloquée par l'opérateur (dashboard)",
                     extra={"event": "remediation_action", "client_ip": ip})
         try:
-            reloaded = await services.docker.find_containers(settings.waf_service)
-            for cid in reloaded:
-                await services.docker.reload(cid)  # SIGHUP = `nginx -s reload`, via le proxy
+            reloaded = await reload_waf(services.docker, settings.waf_service)  # SIGHUP via le proxy
         except DockerProxyError:
             return _error(502, "waf_reload_failed",
                           "IP retirée de la liste noire mais WAF non rechargé (réessayer)", request)
