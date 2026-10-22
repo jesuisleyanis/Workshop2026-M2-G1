@@ -5,21 +5,21 @@ export interface CategoryInfo {
   id: Category
   label: string
   icon: IconName
-  /** Teinte de gris (maquette D8 noir & blanc) : fond de pastille / barre. */
+  /** Couleur propre à la catégorie (fond de pastille / barre) ; assez foncée pour l'icône blanche. */
   tone: string
 }
 
 /** Les 9 catégories de payment-api (#44), dans l'ordre d'affichage du sélecteur. */
 export const CATEGORIES: readonly CategoryInfo[] = [
-  { id: 'transfer', label: 'Virement', icon: 'swap', tone: '#121316' },
-  { id: 'food', label: 'Alimentation', icon: 'food', tone: '#2a2c32' },
-  { id: 'shopping', label: 'Shopping', icon: 'bag', tone: '#3f4249' },
-  { id: 'transport', label: 'Transport', icon: 'car', tone: '#555962' },
-  { id: 'subscriptions', label: 'Abonnements', icon: 'repeat', tone: '#6b6f76' },
-  { id: 'health', label: 'Santé', icon: 'heart', tone: '#82868d' },
-  { id: 'leisure', label: 'Loisirs', icon: 'star', tone: '#9a9ea6' },
-  { id: 'housing', label: 'Logement', icon: 'home', tone: '#b1b4ba' },
-  { id: 'other', label: 'Autre', icon: 'grid', tone: '#c8cbd0' },
+  { id: 'transfer', label: 'Virement', icon: 'swap', tone: '#6d4aff' },
+  { id: 'food', label: 'Alimentation', icon: 'food', tone: '#ea580c' },
+  { id: 'shopping', label: 'Shopping', icon: 'bag', tone: '#db2777' },
+  { id: 'transport', label: 'Transport', icon: 'car', tone: '#2563eb' },
+  { id: 'subscriptions', label: 'Abonnements', icon: 'repeat', tone: '#0891b2' },
+  { id: 'health', label: 'Santé', icon: 'heart', tone: '#dc2626' },
+  { id: 'leisure', label: 'Loisirs', icon: 'star', tone: '#16a34a' },
+  { id: 'housing', label: 'Logement', icon: 'home', tone: '#92400e' },
+  { id: 'other', label: 'Autre', icon: 'grid', tone: '#64748b' },
 ]
 
 const BY_ID = new Map(CATEGORIES.map((c) => [c.id, c]))

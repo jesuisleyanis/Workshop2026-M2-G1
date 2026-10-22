@@ -398,9 +398,9 @@ describe('Front - revue complète', () => {
     stubFetch({
       'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
       'GET /api/v1/transactions': () => jsonResponse(TXS),
-      'GET /api/v1/stats/spending?period=week&offset=0': () =>
-        jsonResponse({ period: 'week', offset: 0, start: today, end: today, total_cents: 123456, by_category: [], by_day: [{ date: today, amount_cents: 123456 }] }),
-      'GET /api/v1/stats/spending?period=week&offset=-1': () => new Promise<Response>(() => {}), // ne répond jamais
+      'GET /api/v1/stats/spending?period=month&offset=0': () =>
+        jsonResponse({ period: 'month', offset: 0, start: today, end: today, total_cents: 123456, by_category: [], by_day: [{ date: today, amount_cents: 123456 }] }),
+      'GET /api/v1/stats/spending?period=month&offset=-1': () => new Promise<Response>(() => {}), // ne répond jamais
     })
     renderApp('/stats')
     await waitFor(() => expect(screen.getByTestId('stats-total')).toHaveTextContent(/1\s?234,56/))
@@ -426,8 +426,8 @@ describe('Front - revue complète', () => {
     stubFetch({
       'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
       'GET /api/v1/transactions': () => jsonResponse(TXS),
-      'GET /api/v1/stats/spending?period=week&offset=0': () =>
-        jsonResponse({ period: 'week', offset: 0, start: today, end: today, total_cents: 123456, by_category: [], by_day: [{ date: today, amount_cents: 123456 }] }),
+      'GET /api/v1/stats/spending?period=month&offset=0': () =>
+        jsonResponse({ period: 'month', offset: 0, start: today, end: today, total_cents: 123456, by_category: [], by_day: [{ date: today, amount_cents: 123456 }] }),
     })
     renderApp('/stats')
     await waitFor(() => expect(screen.getByTestId('stats-total')).toHaveTextContent(/1\s?234,56/))
@@ -665,9 +665,9 @@ describe('Front - catégories (#44)', () => {
       'GET /api/v1/stats/spending?period=month&offset=-1': () => jsonResponse({ ...EMPTY, period: 'month', offset: -1 }),
     })
     renderApp('/stats')
-    expect(await screen.findByText('Aucune dépense cette semaine.')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Mois' }))
     const list = await screen.findByRole('list', { name: 'Dépenses par catégorie' })
+    // Vue « Mois » par défaut.
+    expect(screen.getByRole('button', { name: 'Mois' })).toHaveAttribute('aria-pressed', 'true')
     const rows = within(list).getAllByRole('listitem')
     expect(rows[0]).toHaveTextContent(/Alimentation.*73,00\s€.*73 %/)
     expect(rows[1]).toHaveTextContent(/Transport.*27 %/)
@@ -675,6 +675,8 @@ describe('Front - catégories (#44)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Période précédente' }))
     expect(await screen.findByText('Aucune dépense sur cette période.')).toBeInTheDocument()
     expect(f.mock.calls.some(([u]) => String(u).endsWith('period=month&offset=-1'))).toBe(true)
+    await userEvent.click(screen.getByRole('button', { name: 'Semaine' }))
+    expect(await screen.findByText('Aucune dépense cette semaine.')).toBeInTheDocument()
   })
 
   it('accueil : tuile Dépenses avec la 1re catégorie du mois ; rien si erreur', async () => {

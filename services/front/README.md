@@ -76,7 +76,7 @@ src/
     bank.ts                  vues métier pures : sens/montant signé, groupes par jour, dépenses par période,
                              destinataires connus, CSV (anti-injection de formules)
     serviceStatus.ts         état du service (ok / perturbé / rétabli) pour le bandeau D6
-    categories.ts            9 catégories de dépense (#44) : libellé, icône, teinte de gris
+    categories.ts            9 catégories de dépense (#44) : libellé, icône, couleur (pastille + barre des Statistiques)
     limits.ts                plafonds (#46) : part restante, dépassement (avertissement), date de remise à zéro
     notifications.ts         notifications (#49) : icône par type, badge « 9+ », groupes par jour
     schedules.ts             virements programmés (#48) : libellés fréquence/statut/motif d'échec, dates YYYY-MM-DD

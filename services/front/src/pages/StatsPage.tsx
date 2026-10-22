@@ -19,7 +19,7 @@ export function StatsPage() {
   const { transactions } = useBankData()
   const { views } = useTxViews()
   const navigate = useNavigate()
-  const [mode, setMode] = useState<StatsMode>('week')
+  const [mode, setMode] = useState<StatsMode>('month')
   const [offset, setOffset] = useState(0)
   // Montants de la période = agrégat serveur (GET /stats/spending) : l'historique local ne contient que
   // les 50 dernières opérations, un total calculé dessus serait faux dès qu'on remonte dans le temps.
