@@ -9,8 +9,9 @@ Trois familles de sources, toutes en LECTURE :
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import yaml
 from langchain_core.documents import Document
@@ -90,7 +91,7 @@ def _fmt(value: Any) -> str:
         return "; ".join(_fmt(v) for v in value)
     if isinstance(value, dict):
         # imbrication (ex. params d'une action) en JSON compact : sinon ses clés se mêlent à celles du parent
-        return ", ".join(f"{k}={json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else _fmt(v)}"
+        return ", ".join(f"{k}={json.dumps(v, ensure_ascii=False) if isinstance(v, dict | list) else _fmt(v)}"
                          for k, v in value.items())
     return str(value)
 

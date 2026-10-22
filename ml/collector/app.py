@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
@@ -113,7 +113,5 @@ async def _loop(collector: Collector, stop: asyncio.Event) -> None:
             if not prev_ok:
                 log.info("Collecte rétablie")
             prev_ok = True
-        try:
+        with suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=collector.interval)
-        except asyncio.TimeoutError:
-            pass

@@ -60,7 +60,7 @@ class DecisionTable(_Strict):
     rules: list[Rule]
 
     @model_validator(mode="after")
-    def _check(self) -> "DecisionTable":
+    def _check(self) -> DecisionTable:
         if self.version not in SUPPORTED_VERSIONS:
             raise ValueError(f"version de table non supportée : {self.version!r}")
         seen: set[IncidentType] = set()

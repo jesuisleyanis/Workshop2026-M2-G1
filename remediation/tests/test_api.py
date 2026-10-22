@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from conftest import TOKEN, Env, make_event, make_settings, make_table
@@ -15,7 +15,7 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 
 def body(event_type: str = "data_corruption", **kw) -> dict:
-    ev = make_event(event_type, ts=datetime.now(timezone.utc), **{"source_ip": None, **kw})
+    ev = make_event(event_type, ts=datetime.now(UTC), **{"source_ip": None, **kw})
     return json.loads(ev.model_dump_json())
 
 

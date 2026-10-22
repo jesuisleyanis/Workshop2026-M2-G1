@@ -17,10 +17,11 @@ Gestion de l'absence de données (point dur de la fiche) :
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import time
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -170,12 +171,12 @@ class Collector:
         """Une collecte. Lève CollectError (Prometheus KO) ou NoData (rien à lire)."""
         names = list(FEATURE_NAMES)
         values = await asyncio.gather(*(self.prom.query_scalar(self.queries[n]) for n in names))
-        raw = dict(zip(names, values))
+        raw = dict(zip(names, values, strict=False))
         missing = tuple(n for n in names if raw[n] is None)
         if len(missing) == len(names):
             raise NoData("aucune série disponible pour les 9 features")
         vector = vector_from_dict({n: (0.0 if v is None else v) for n, v in raw.items()})
-        return Snapshot(vector=vector, ts=datetime.now(timezone.utc), missing=missing)
+        return Snapshot(vector=vector, ts=datetime.now(UTC), missing=missing)
 
     async def tick(self) -> Snapshot | None:
         """Collecte + mise à jour de l'état ; ne lève jamais (la boucle doit survivre)."""
@@ -201,10 +202,8 @@ class Collector:
         if self.seq <= after:
             cond = self._condition()
             async with cond:
-                try:
+                with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(cond.wait_for(lambda: self.seq > after), timeout)
-                except asyncio.TimeoutError:
-                    pass
         return self.fresh()
 
     def _condition(self) -> asyncio.Condition:

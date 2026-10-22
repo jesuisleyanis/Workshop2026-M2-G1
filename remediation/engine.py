@@ -18,15 +18,17 @@ verrou `_action_lock` qui sérialise les actions (jamais deux modifications simu
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import json
 import logging
 import time
 import uuid
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from actions import ActionContext, ActionError, ActionParamError, ActionResult, build_action
 from actions.base import Action
@@ -245,12 +247,12 @@ class RemediationEngine:
     async def _remediate(self, inc: _Incident) -> None:
         max_attempts = self.table.defaults.max_attempts
         cooldown = self.table.defaults.cooldown_seconds
-        if inc.rule.verify_first and not inc.dry_run:
-            if await self._verify(inc, 0, after="pré-contrôle (avant toute action)"):
-                self._emit_inc(inc, "decision", "info",
-                               "Service disponible : attaque contenue par les protections du WAF, aucune action",
-                               {"verify_first": True})
-                return self._close(inc)
+        if (inc.rule.verify_first and not inc.dry_run
+                and await self._verify(inc, 0, after="pré-contrôle (avant toute action)")):
+            self._emit_inc(inc, "decision", "info",
+                           "Service disponible : attaque contenue par les protections du WAF, aucune action",
+                           {"verify_first": True})
+            return self._close(inc)
         for attempt in range(1, max_attempts + 1):
             if attempt > 1 and inc.last_action_at is not None:
                 wait = cooldown - (self.clock() - inc.last_action_at).total_seconds()
@@ -277,9 +279,9 @@ class RemediationEngine:
             if inc.dry_run:
                 continue
             # On vérifie après toute action qui modifie l'état, et après la dernière.
-            if result.ok and (action.mutating or idx == len(specs) - 1):
-                if await self._verify(inc, attempt, after=spec.type):
-                    return "verified"
+            if (result.ok and (action.mutating or idx == len(specs) - 1)
+                    and await self._verify(inc, attempt, after=spec.type)):
+                return "verified"
         return "dry_run" if inc.dry_run else "failed"
 
     # ------------------------------------------------------------------ actions
@@ -313,7 +315,7 @@ class RemediationEngine:
                     result = await asyncio.wait_for(action.execute(ctx), timeout=s.action_timeout_s)
         except ActionError as exc:
             result = ActionResult(ok=False, detail=str(exc))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             result = ActionResult(ok=False, detail=f"timeout après {s.action_timeout_s}s")
         except Exception as exc:  # noqa: BLE001 — détail volontairement limité au type (pas de fuite)
             self.log.exception("Action en erreur", extra={"incident_id": inc.incident_id})
@@ -394,7 +396,5 @@ class RemediationEngine:
         while len(self._gauge_ids) > MAX_GAUGE_INCIDENTS:
             old = self._gauge_ids.popleft()
             for g in (mttd_seconds, mttr_seconds):
-                try:
+                with contextlib.suppress(KeyError):
                     g.remove(old)
-                except KeyError:
-                    pass

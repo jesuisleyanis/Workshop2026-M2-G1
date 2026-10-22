@@ -5,7 +5,6 @@ import logging
 
 import pytest
 from pydantic import ValidationError
-
 from resilience_common.events import AnomalyEvent, FeatureTop, IncidentType
 from resilience_common.logging import JsonFormatter, get_logger
 
@@ -51,7 +50,7 @@ def test_anomaly_event_matches_schema():
 
 
 def test_anomaly_event_source_ip_is_optional_and_a_single_ip_literal():
-    base = dict(service="payment-api", anomaly_score=0.9, threshold=0.7, incident_type="service_flood")
+    base = {"service": "payment-api", "anomaly_score": 0.9, "threshold": 0.7, "incident_type": "service_flood"}
     assert AnomalyEvent(**base).source_ip is None  # champ additif : rétro-compatible
     assert AnomalyEvent(**base, source_ip=" 192.168.137.42 ").source_ip == "192.168.137.42"
     for bad in ("10.0.0.0/8", "attacker.example", "1.2.3.4; deny all", ""):

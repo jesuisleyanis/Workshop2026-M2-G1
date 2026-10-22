@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 import httpx
@@ -142,10 +142,8 @@ def create_app(runtime: Runtime | None = None, start_loop: bool = True) -> FastA
                 ok = await runtime.poll_once()
                 if ok and runtime.wait and runtime.last_seq is not None:
                     continue  # attente longue : c'est le collector qui cadence, pas de pause
-                try:
+                with suppress(TimeoutError):
                     await asyncio.wait_for(stop.wait(), timeout=runtime.interval)
-                except asyncio.TimeoutError:
-                    pass
 
         task = asyncio.create_task(loop()) if start_loop else None
         try:

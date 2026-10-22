@@ -73,14 +73,14 @@ def vector_from_dict(values: Mapping[str, float]) -> list[float]:
 def vector_to_dict(vector: Sequence[float]) -> dict[str, float]:
     """Inverse de `vector_from_dict` ; valide la longueur."""
     validate_vector(vector)
-    return {name: float(v) for name, v in zip(FEATURE_NAMES, vector)}
+    return {name: float(v) for name, v in zip(FEATURE_NAMES, vector, strict=False)}
 
 
 def validate_vector(vector: Sequence[float]) -> None:
     """Lève ValueError si la longueur est incorrecte ou si une valeur n'est pas finie."""
     if len(vector) != N_FEATURES:
         raise ValueError(f"vecteur de {len(vector)} features, {N_FEATURES} attendues")
-    for name, v in zip(FEATURE_NAMES, vector):
+    for name, v in zip(FEATURE_NAMES, vector, strict=False):
         if not math.isfinite(v):
             raise ValueError(f"feature {name} non finie: {v!r}")
 
@@ -96,7 +96,7 @@ def zscores(
     """Z-score signé de chaque feature vs la baseline (écart-type planché par STD_FLOOR)."""
     validate_vector(vector)
     out: dict[str, float] = {}
-    for name, v in zip(FEATURE_NAMES, vector):
+    for name, v in zip(FEATURE_NAMES, vector, strict=False):
         std = max(float(stds[name]), STD_FLOOR[name])
         out[name] = (float(v) - float(means[name])) / std
     return out

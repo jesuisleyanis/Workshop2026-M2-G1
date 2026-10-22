@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 import pytest
@@ -22,6 +23,7 @@ from models import IncomingEvent
 from timeline import Broker
 from verify import VerifyResult
 
+
 def waf_blocked_entry(ip: str) -> list[str]:
     """Une entrée Loki [horodatage, ligne] d'un événement waf_blocked (contrat §1, émis par waf-exporter)."""
     return ["1", json.dumps({"level": "WARNING", "service": "waf", "event": "waf_blocked", "client_ip": ip})]
@@ -30,7 +32,7 @@ def waf_blocked_entry(ip: str) -> list[str]:
 TOKEN = "t0ken-" + "x" * 32
 OPERATOR_TOKEN = "0perator-" + "z" * 32  # jeton opérateur (humain), distinct du jeton de service
 TABLE_PATH = Path(__file__).resolve().parent.parent / "decision_table.yml"
-T0 = datetime(2026, 10, 21, 9, 14, 35, tzinfo=timezone.utc)
+T0 = datetime(2026, 10, 21, 9, 14, 35, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -123,9 +125,9 @@ class FakeNetwork:
 
 
 def make_settings(**overrides: Any) -> Settings:
-    base = dict(token=TOKEN, operator_token=OPERATOR_TOKEN, internal_token="internal-" + "y" * 16,
-                db_path=":memory:",
-                verify_retries=1, verify_interval_s=0.0, action_timeout_s=5.0)
+    base = {"token": TOKEN, "operator_token": OPERATOR_TOKEN, "internal_token": "internal-" + "y" * 16,
+                "db_path": ":memory:",
+                "verify_retries": 1, "verify_interval_s": 0.0, "action_timeout_s": 5.0}
     base.update(overrides)
     return Settings(**base)
 

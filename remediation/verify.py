@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import signal
 from dataclasses import dataclass
@@ -39,11 +40,9 @@ class ScriptVerifier:
             return VerifyResult(ok=False, rc=None, detail=f"verify_tx non exécutable ({type(exc).__name__})")
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=self.timeout_s)
-        except asyncio.TimeoutError:
-            try:
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
                 os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
             await proc.wait()
             return VerifyResult(ok=False, rc=None, detail=f"verify_tx timeout ({self.timeout_s}s)")
         tail = out.decode("utf-8", "replace").strip().splitlines()[-1:] or [""]

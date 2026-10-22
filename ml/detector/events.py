@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from resilience_common import AnomalyEvent, FeatureTop, IncidentType
 from resilience_common.events import Evidence
@@ -49,7 +49,7 @@ def build_event(
 ) -> AnomalyEvent:
     """Assemble l'événement ; la validation pydantic garantit la conformité au schéma partagé."""
     prom_q, loki_q = EVIDENCE[incident_type]
-    ts = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    ts = (now or datetime.now(UTC)).astimezone(UTC)
     return AnomalyEvent(
         ts=ts.replace(microsecond=ts.microsecond // 1000 * 1000),  # précision ms (contrat)
         service=service,

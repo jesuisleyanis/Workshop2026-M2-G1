@@ -135,9 +135,9 @@ def test_below_threshold_emits_nothing(loaded):
 
 def test_incident_type_routing_end_to_end(loaded):
     cases = {
-        "auth_abuse": dict(auth_failed_per_s=40.0, ratio_4xx=0.5),
-        "web_attack": dict(waf_blocked_per_s=30.0, ratio_4xx=0.4),
-        "data_corruption": dict(db_errors_per_s=10.0, ratio_5xx=0.5),
+        "auth_abuse": {"auth_failed_per_s": 40.0, "ratio_4xx": 0.5},
+        "web_attack": {"waf_blocked_per_s": 30.0, "ratio_4xx": 0.4},
+        "data_corruption": {"db_errors_per_s": 10.0, "ratio_5xx": 0.5},
     }
     for expected, patch in cases.items():
         fake = FakeRemediation()
