@@ -54,6 +54,22 @@ def test_without_db_config_delegates_to_compose(monkeypatch):
     assert "payment-api" in cmd and env["SEED_PASSWORD"] == "fake-seed-pass"
 
 
+def test_configured_but_unreachable_db_delegates_to_compose(monkeypatch, capsys):
+    # Cas du PC Hôte : .env chargé (POSTGRES_PASSWORD) + venv avec resilience_db, mais `postgres`
+    # n'est résolu que sur le réseau Docker -> on passe par le conteneur au lieu de planter.
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@host.invalid:5432/db?connect_timeout=1")
+    monkeypatch.setenv("SEED_PASSWORD", "fake-seed-pass")
+    calls = []
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(seed.subprocess, "run", lambda cmd, env=None: calls.append(cmd) or _Done())
+    assert seed.main() == 0
+    assert calls and "payment-api" in calls[0]
+    assert "injoignable" in capsys.readouterr().err
+
+
 def test_compose_path_requires_seed_password(monkeypatch, capsys):
     for var in ("DATABASE_URL", "POSTGRES_PASSWORD", "POSTGRES_PASSWORD_FILE", "SEED_PASSWORD"):
         monkeypatch.delenv(var, raising=False)
