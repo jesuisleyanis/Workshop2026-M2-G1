@@ -76,18 +76,6 @@ async function pulse({ width = 2400, height = 300, stroke = 6 } = {}) {
   return toData(await sharp(Buffer.from(svg)).png().toBuffer());
 }
 
-// Pastille lumineuse (LED, nœuds de la frise) : disque + halo.
-async function glowDot(color, size = 256) {
-  const r = size * 0.22;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
-  <defs><radialGradient id="h"><stop offset="0" stop-color="#${color}" stop-opacity="0.55"/>
-  <stop offset="1" stop-color="#${color}" stop-opacity="0"/></radialGradient></defs>
-  <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}" fill="url(#h)"/>
-  <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="#${color}"/>
-</svg>`;
-  return toData(await sharp(Buffer.from(svg)).png().toBuffer());
-}
-
 async function icon(name, color, size = 256) {
   const Comp = lu[name];
   if (!Comp) throw new Error(`icône inconnue : ${name}`);
@@ -95,4 +83,4 @@ async function icon(name, color, size = 256) {
   return toData(await sharp(Buffer.from(svg)).resize(size, size).png().toBuffer());
 }
 
-module.exports = { PALETTE, background, pulse, glowDot, icon };
+module.exports = { PALETTE, background, pulse, icon };

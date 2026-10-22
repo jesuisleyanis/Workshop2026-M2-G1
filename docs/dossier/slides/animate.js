@@ -34,7 +34,7 @@ function timingXml(groups, shapes, slideNo) {
     const sh = shapes.get(it.name);
     if (!sh) throw new Error(`slide ${slideNo} : forme « ${it.name} » introuvable pour l'animation`);
     const [preset, sub] = PRESETS[it.effect];
-    const dur = it.dur ?? (it.effect === "wipe" ? 1200 : 600);
+    const dur = it.dur ?? (it.effect === "wipe" ? 600 : 350);
     if (sh.hasText) built.add(sh.id);
     let body =
       `<p:set><p:cBhvr><p:cTn id="${next()}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>` +
@@ -85,12 +85,12 @@ function timingXml(groups, shapes, slideNo) {
 }
 
 function transitionXml(kind) {
-  const fade = `<p:transition spd="med"><p:fade/></p:transition>`;
+  const fade = `<p:transition spd="fast"><p:fade/></p:transition>`;
   if (kind !== "morph") return fade;
   return (
     `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">` +
     `<mc:Choice xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" Requires="p159">` +
-    `<p:transition xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" spd="slow" p14:dur="1200"><p159:morph option="byObject"/></p:transition>` +
+    `<p:transition xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" spd="med" p14:dur="600"><p159:morph option="byObject"/></p:transition>` +
     `</mc:Choice><mc:Fallback>${fade}</mc:Fallback></mc:AlternateContent>`
   );
 }
