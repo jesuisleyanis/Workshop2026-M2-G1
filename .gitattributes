@@ -7,3 +7,12 @@ Makefile      text eol=lf
 security/sops/*.enc.env text eol=lf
 # Script monté tel quel dans un conteneur Linux (bind mount) : LF obligatoire même sous autocrlf Windows.
 infra/mosquitto/entrypoint.sh text eol=lf
+# Exécutés ou lus dans un conteneur Linux : un checkout Windows (core.autocrlf=true) y mettrait des
+# CRLF -> shebang `#!/usr/bin/env python3\r` introuvable (verify_tx est lancé par le moteur de
+# remédiation, sans shell, depuis l'image), confs nginx/haproxy/promtail illisibles.
+Dockerfile*         text eol=lf
+*.conf              text eol=lf
+*.cfg               text eol=lf
+*.template          text eol=lf
+*.yml               text eol=lf
+*.yaml              text eol=lf
