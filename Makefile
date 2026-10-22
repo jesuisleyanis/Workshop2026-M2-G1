@@ -67,7 +67,9 @@ model: ml-tools ## Entraîne le modèle dans ml/training/artifacts/ s'il est abs
 
 check-env: ## Vérifie que .env existe et contient toutes les clés de secrets.example.env
 	@[ -f .env ] || { echo "ERREUR : .env absent — lancer \`make decrypt\` (clé age requise, voir security/sops/README.md)."; exit 1; }
+	@# Clé avec valeur par défaut dans le compose (`$${KEY:-...}`, ex. MQTT_BIND_ADDR) : réglage facultatif, pas un secret manquant.
 	@missing=$$(grep -oE '^[A-Z][A-Z0-9_]*=' security/sops/secrets.example.env | tr -d = | while read -r key; do \
+	  grep -qF "\$${$$key:-" infra/compose/docker-compose.yml && continue; \
 	  grep -qE "^$$key=" .env || printf '%s ' "$$key"; done); \
 	[ -z "$$missing" ] || { echo "ERREUR : .env incomplet (déchiffrement ancien ?) — clés absentes : $$missing"; \
 	  echo "  -> les ajouter à security/sops/secrets.enc.env (sops) puis make decrypt"; exit 1; }
