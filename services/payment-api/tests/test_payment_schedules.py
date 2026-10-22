@@ -247,13 +247,18 @@ def test_background_executor_runs_in_the_app_lifespan(engine, world, db, clock):
             c.post(S, headers=alice, json=_body(frequency="once", amount_cents=100)).status_code
             == 201
         )
-        deadline = time.monotonic() + 3
+        # SQLite de test = une connexion partagée (StaticPool) : une lecture qui croise le
+        # passage du scheduler peut échouer ponctuellement ; on retente au tour suivant.
+        row: dict = {}
+        deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            row = c.get(S, headers=alice).json()[0]
-            if row["status"] == "completed":
-                break
+            r = c.get(S, headers=alice)
+            if r.status_code == 200 and r.json():
+                row = r.json()[0]
+                if row["status"] == "completed":
+                    break
             time.sleep(0.05)
-    assert row["status"] == "completed" and row["last_run"]["status"] == "executed"
+    assert row.get("status") == "completed" and row["last_run"]["status"] == "executed"
 
 
 def test_resume_skips_occurrences_missed_during_the_pause(api, alice, engine, clock, db):

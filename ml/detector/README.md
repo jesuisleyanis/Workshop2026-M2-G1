@@ -11,9 +11,13 @@ Service FastAPI (port interne **8003**, réseau `app`). Relève `collector`, sco
 | `REMEDIATION_URL` | `http://remediation:8005/events` | destination des `AnomalyEvent` — URL **complète** de l'endpoint, POSTée telle quelle (testé : `tests/test_compose_wiring.py`) |
 | `REMEDIATION_TOKEN` / `REMEDIATION_TOKEN_FILE` | — | token Bearer (le fichier, ex. secret SOPS, est prioritaire) |
 | `TARGET_SERVICE` | `payment-api` | label `service` de la métrique et de l'événement |
-| `POLL_INTERVAL_SECONDS` | `15` | période de relève |
+| `FEATURES_WAIT_SECONDS` | `5` | attente longue sur le collector (`?after=<seq>`) : chaque collecte est scorée dès qu'elle existe ; `0` = relève périodique |
+| `POLL_INTERVAL_SECONDS` | `1` | pause après une relève en échec (ou période si attente longue désactivée) |
 | `EVENT_COOLDOWN_SECONDS` | `60` | un seul événement par fenêtre pendant qu'une anomalie persiste |
 | `ANOMALY_THRESHOLD` | seuil de `baseline_stats.json` | surcharge optionnelle |
+| `ANOMALY_CONFIRM_WINDOWS` | calibration (`confirm_windows`, 1 si non calibré) | fenêtres consécutives au-dessus du seuil pour confirmer ; une seule suffit au-dessus de `threshold_high` |
+| `LOKI_URL` | `http://loki:3100` | IP source dominante des logs WAF (`source_ip` de l'événement) ; vide = désactivé |
+| `SOURCE_IP_WINDOW_SECONDS` / `SOURCE_IP_MIN_SHARE` | `30` / `0.6` | fenêtre et part minimale des lignes WAF pour retenir une IP |
 
 ## Décision : qui décide quoi
 

@@ -4,9 +4,17 @@
 // internes (ci-dessous). Les kinds `health` / `score` sont alimentés par Prometheus (polling),
 // le moteur n'en émet pas. Détail : CAHIER-DES-CHARGES.md §3.
 
-/** incident_type : énumération figée (contrat §3). */
+/** incident_type : énumération figée de l'AnomalyEvent (contrat §3). */
 export const INCIDENT_TYPES = ['service_flood', 'auth_abuse', 'web_attack', 'data_corruption', 'unknown'] as const
 export type IncidentType = (typeof INCIDENT_TYPES)[number]
+
+/**
+ * Types d'incident du JOURNAL du moteur (trames SSE, incidents) : ceux du §3 + `manual_action`
+ * (action confirmée par un opérateur, POST /manual-actions — contrat « API du moteur »). Jamais émis
+ * par le detector : un AnomalyEvent `manual_action` reste refusé.
+ */
+export const JOURNAL_INCIDENT_TYPES = [...INCIDENT_TYPES, 'manual_action'] as const
+export type JournalIncidentType = (typeof JOURNAL_INCIDENT_TYPES)[number]
 
 export interface FeatureContribution {
   name: string
@@ -59,7 +67,7 @@ export type StreamMessage =
       kind: 'remediation_started'
       ts: string
       incidentId: string
-      incidentType: IncidentType | null
+      incidentType: JournalIncidentType | null
       service: string | null
       actions: PlannedAction[]
       dryRun: boolean
@@ -96,7 +104,7 @@ export type TimelineStatus = (typeof TIMELINE_STATUSES)[number]
 export interface TimelineFrame {
   id: number
   incident_id: string
-  incident_type: IncidentType
+  incident_type: JournalIncidentType
   ts: string
   phase: TimelinePhase
   status: TimelineStatus
@@ -136,7 +144,7 @@ export interface ActionRecord {
 
 export interface Incident {
   id: string
-  incidentType: IncidentType
+  incidentType: JournalIncidentType
   service: string
   detectedAt: string
   anomaly: AnomalyEvent | null

@@ -16,12 +16,12 @@ groups:
   - orgId: 1
     name: resilience-soc
     folder: SOC
-    interval: 30s
+    interval: 10s
     rules:
       - uid: soc-auth-abuse
         title: Rafale d'échecs d'authentification
         condition: C
-        for: 30s
+        for: 10s
         noDataState: OK
         execErrState: Error
         labels: { severity: warning, incident_type: auth_abuse }
@@ -33,7 +33,7 @@ groups:
             model:
               refId: A
               instant: true
-              expr: 'sum(rate(resilience_auth_logins_total{result="failed"}[1m]))'
+              expr: 'sum(rate(resilience_auth_logins_total{result="failed"}[30s]))'
           - refId: B
             datasourceUid: __expr__
             model: { refId: B, type: reduce, expression: A, reducer: last }
@@ -49,7 +49,7 @@ groups:
       - uid: soc-service-flood
         title: Pic de 5xx sur payment-api
         condition: C
-        for: 30s
+        for: 10s
         noDataState: OK
         execErrState: Error
         labels: { severity: critical, incident_type: service_flood }
@@ -61,7 +61,7 @@ groups:
             model:
               refId: A
               instant: true
-              expr: 'sum(rate(resilience_http_requests_total{service="payment-api",status=~"5.."}[1m]))'
+              expr: 'sum(rate(resilience_http_requests_total{service="payment-api",status=~"5.."}[30s]))'
           - refId: B
             datasourceUid: __expr__
             model: { refId: B, type: reduce, expression: A, reducer: last }
@@ -77,7 +77,7 @@ groups:
       - uid: soc-waf-blocks
         title: Hausse des blocages WAF
         condition: C
-        for: 30s
+        for: 10s
         noDataState: OK
         execErrState: Error
         labels: { severity: warning, incident_type: web_attack }
@@ -89,7 +89,7 @@ groups:
             model:
               refId: A
               instant: true
-              expr: 'sum(rate(resilience_waf_blocked_total[1m]))'
+              expr: 'sum(rate(resilience_waf_blocked_total[30s]))'
           - refId: B
             datasourceUid: __expr__
             model: { refId: B, type: reduce, expression: A, reducer: last }
@@ -107,7 +107,7 @@ groups:
       - uid: soc-data-corruption
         title: Erreurs base de données sur payment-api
         condition: C
-        for: 30s
+        for: 10s
         noDataState: OK
         execErrState: Error
         labels: { severity: critical, incident_type: data_corruption }
@@ -119,7 +119,7 @@ groups:
             model:
               refId: A
               instant: true
-              expr: 'sum(rate(resilience_db_errors_total[1m]))'
+              expr: 'sum(rate(resilience_db_errors_total[30s]))'
           - refId: B
             datasourceUid: __expr__
             model: { refId: B, type: reduce, expression: A, reducer: last }

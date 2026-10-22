@@ -51,15 +51,15 @@ void test_auth_ok_is_solid_green_then_off_after_30s() {
 }
 
 void test_auth_fail_blinks_red_ten_times_then_off() {
-    LedController led;  // rouge : demi-période 150 ms, 10 clignotements -> 3000 ms
+    LedController led;  // rouge : demi-période 600 ms, 10 clignotements -> 12000 ms
     led.setState(LedState::AuthFail, 0);
     auto first = led.update(0);
     ASSERT_ENUM(LedColor::Red, first.color);
     TEST_ASSERT_TRUE(first.on);
-    TEST_ASSERT_FALSE(led.update(150).on);   // seconde moitié du 1er cycle
-    TEST_ASSERT_TRUE(led.update(300).on);    // début du 2e cycle
-    ASSERT_ENUM(LedColor::Red, led.update(2999).color);  // encore en séquence
-    auto after = led.update(3000);  // 10 clignotements terminés -> éteint
+    TEST_ASSERT_FALSE(led.update(600).on);   // seconde moitié du 1er cycle
+    TEST_ASSERT_TRUE(led.update(1200).on);   // début du 2e cycle
+    ASSERT_ENUM(LedColor::Red, led.update(11999).color);  // encore en séquence
+    auto after = led.update(12000);  // 10 clignotements terminés -> éteint
     TEST_ASSERT_FALSE(after.on);
     ASSERT_ENUM(LedState::Idle, led.state());
 }

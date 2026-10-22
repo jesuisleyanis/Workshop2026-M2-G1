@@ -78,7 +78,7 @@ class HashEmbeddings(Embeddings):
         tokens = tokenize(text)
         features: Counter[str] = Counter(tokens)
         # Bigrammes : poids moindre, ils départagent les passages partageant les mêmes mots.
-        for a, b in zip(tokens, tokens[1:]):
+        for a, b in zip(tokens, tokens[1:], strict=False):
             features[f"{a} {b}"] += 0.5
         vec = [0.0] * HASH_DIM
         for feat, count in features.items():

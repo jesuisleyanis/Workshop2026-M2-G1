@@ -41,12 +41,11 @@ from dataclasses import dataclass, field
 
 BASE_URL = os.environ.get("BASE_URL", "https://localhost")
 TIMEOUT = 5.0
-#: Comptes fictifs créés par scripts/seed.py : (utilisateur, mot de passe).
-USERS = [
-    ("demo01", "demo-pass-01"),
-    ("demo02", "demo-pass-02"),
-    ("ops", "ops-pass-00"),
-]
+#: Comptes fictifs créés par scripts/seed.py (resilience_db.seed) : mot de passe commun
+#: SEED_PASSWORD (SOPS -> .env). Jamais de mot de passe en dur : les anciens `demo-pass-0N`
+#: n'existent plus et transformaient le « normal » en rafale de 401 (= signal auth_abuse).
+USERNAMES = ("demo01", "demo02", "demo03")
+USERS = [(u, os.environ.get("SEED_PASSWORD", "")) for u in USERNAMES]
 #: Identifiant de compte qui n'existe pas (payment-api répond 404 destination_not_found).
 UNKNOWN_ACCOUNT = 999_999
 #: Répartition des actions d'un client connecté (somme = 1).
@@ -307,6 +306,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--base-url", default=BASE_URL)
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args(argv)
+    if not all(password for _, password in USERS):
+        log.error("SEED_PASSWORD absent : lancer via `make traffic` (charge .env) ou exporter SEED_PASSWORD")
+        return 2
+
     def send(method, path, payload=None, token=None):
         return http(method, path, payload, token, base_url=args.base_url)
 

@@ -1,13 +1,16 @@
-"""Abstraction de reconnaissance faciale + backend stub déterministe.
+"""Abstraction de reconnaissance faciale (v2) + backend stub déterministe.
 
-Le service dépend de l'interface `Recognizer`, jamais d'un modèle concret. Deux backends :
+Le service dépend de l'interface `Recognizer`, jamais d'un modèle concret. Trois backends :
 
-- `stub` (défaut) : embedding déterministe dérivé des octets de l'image (sha256). Permet des
-  tests reproductibles du *plumbing* du service **sans modèle ni matériel** (image identique =>
-  correspondance, image différente => non-correspondance). La qualité de reconnaissance réelle
-  est validée en recette avec le backend `insightface`.
-- `insightface` : InsightFace `buffalo_s` (ONNX Runtime CPU), embeddings 512-d, similarité cosinus.
-  Chargé paresseusement, uniquement en recette (dépendances non installées pour les tests).
+- `stub` (défaut) : images de test de la forme `b"<pose>|<identite>"` (ex. `b"face|alice"`).
+  L'embedding ne dépend que de l'identité, la pose est lue dans l'image. Permet des tests
+  reproductibles du *plumbing* du service **sans modèle ni matériel**.
+- `team` : `face_recognition` (dlib), gabarits 128-d, distance euclidienne, pose par landmarks.
+- `insightface` : InsightFace `buffalo_s` (ONNX Runtime CPU), embeddings 512-d, distance
+  `1 - cosinus`. Les deux backends réels sont chargés paresseusement, uniquement en recette.
+
+Contrat v2 : `analyze()` renvoie un `FaceSample` (embedding + pose détectée) ; `distance()` est
+une distance (plus petit = plus proche) comparée à `threshold`.
 
 Un embedding est (dé)sérialisé via le module `array` (float32) — aucune dépendance numpy côté noyau.
 """
@@ -17,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import math
 from array import array
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 
@@ -24,8 +28,20 @@ class NoFaceError(ValueError):
     """Aucun visage exploitable dans l'image fournie."""
 
 
+class MultipleFacesError(ValueError):
+    """Plusieurs visages dans l'image : l'échantillon est ambigu, il est refusé."""
+
+
+@dataclass(frozen=True)
+class FaceSample:
+    """Résultat d'analyse d'une image : gabarit du visage + pose détectée (None si indéterminée)."""
+
+    embedding: list[float]
+    pose: str | None
+
+
 def serialize_embedding(vector: list[float]) -> bytes:
-    """Vecteur -> octets float32 (stockés en base, jamais l'image)."""
+    """Vecteur -> octets float32."""
     return array("f", vector).tobytes()
 
 
@@ -35,55 +51,68 @@ def deserialize_embedding(blob: bytes) -> list[float]:
     return list(arr)
 
 
-def cosine_similarity(a: list[float], b: list[float]) -> float:
+def euclidean(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         raise ValueError("dimensions d'embedding incompatibles")
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0.0 or nb == 0.0:
-        return 0.0
-    return dot / (na * nb)
+    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b, strict=True)))
 
 
 @runtime_checkable
 class Recognizer(Protocol):
     model_version: str
-    threshold: float
+    threshold: float  # distance max (plus petit = plus proche)
 
-    def embed(self, image: bytes) -> list[float]:
-        """Octets d'image -> embedding. Lève NoFaceError si aucun visage exploitable."""
+    def analyze(self, image: bytes, *, precise: bool = False) -> FaceSample:
+        """Octets d'image -> embedding + pose.
+
+        Lève NoFaceError (0 visage) ou MultipleFacesError (>1 visage). `precise=True` demande
+        un calcul plus coûteux (ex. plus de jitters) pour l'enrôlement.
+        """
+        ...
+
+    def distance(self, a: list[float], b: list[float]) -> float:
+        """Distance entre deux embeddings (plus petit = plus proche)."""
         ...
 
 
 class StubRecognizer:
-    """Embedding déterministe pour tests reproductibles (pas un vrai modèle)."""
+    """Reconnaissance factice déterministe pour tests reproductibles (pas un vrai modèle).
 
-    model_version = "stub-1.0"
-    _DIM = 64
+    Image de test = `b"<pose>|<identite>"` ; `b"none"` (ou vide) -> NoFaceError ; `b"many"` ->
+    MultipleFacesError ; pose hors face/gauche/droite -> pose None. L'embedding (16 floats dans
+    [-1, 1]) ne dépend que de l'identité : même identité => distance 0, identités différentes
+    => distance très supérieure au seuil.
+    """
+
+    model_version = "stub-2.0"
+    _DIM = 16
+    _POSES = frozenset({"face", "gauche", "droite"})
 
     def __init__(self, threshold: float = 0.6) -> None:
         self.threshold = threshold
 
-    def embed(self, image: bytes) -> list[float]:
-        if not image:
-            raise NoFaceError("image vide")
-        # Déroule sha256 en un vecteur déterministe : image identique => embedding identique.
-        # Composantes centrées sur 0 ([-1, 1]) : deux images différentes donnent des vecteurs
-        # quasi orthogonaux (cosinus ~ 0), une image identique un cosinus de 1.0.
-        vec: list[float] = []
-        seed = image
-        while len(vec) < self._DIM:
-            seed = hashlib.sha256(seed).digest()
-            vec.extend((b / 127.5) - 1.0 for b in seed)
-        return vec[: self._DIM]
+    def analyze(self, image: bytes, *, precise: bool = False) -> FaceSample:
+        if not image or image == b"none":
+            raise NoFaceError("aucun visage")
+        if image == b"many":
+            raise MultipleFacesError("plusieurs visages")
+        pose_raw, sep, identity = image.partition(b"|")
+        if not sep:  # pas de pose indiquée : toute l'image est l'identité
+            pose_raw, identity = b"", image
+        digest = hashlib.sha256(identity).digest()
+        embedding = [(b / 127.5) - 1.0 for b in digest[: self._DIM]]
+        pose = pose_raw.decode(errors="replace")
+        return FaceSample(embedding, pose if pose in self._POSES else None)
+
+    def distance(self, a: list[float], b: list[float]) -> float:
+        return euclidean(a, b)
 
 
 def build_recognizer(backend: str, threshold: float | None = None) -> Recognizer:
-    """Fabrique le backend demandé. `insightface` est importé paresseusement (recette).
+    """Fabrique le backend demandé. `team` / `insightface` sont importés paresseusement (recette).
 
-    Garde-fou : le backend `stub` (reconnaissance factice = égalité d'octets) n'est PAS une vraie
-    reconnaissance ; on refuse de démarrer dessus par accident en recette/démo, sauf opt-in explicite
+    Garde-fou : le backend `stub` (reconnaissance factice) n'est PAS une vraie reconnaissance ;
+    on refuse de démarrer dessus par accident en recette/démo, sauf opt-in explicite
     `ALLOW_STUB_RECOGNIZER=1`. Les tests injectent directement un StubRecognizer (sans passer ici).
     """
     import os
@@ -98,9 +127,9 @@ def build_recognizer(backend: str, threshold: float | None = None) -> Recognizer
     if backend == "insightface":  # pragma: no cover - validé en recette, deps non installées
         from face_id.backends.insightface_backend import InsightFaceRecognizer
 
-        return InsightFaceRecognizer(threshold if threshold is not None else 0.35)
+        return InsightFaceRecognizer(threshold if threshold is not None else 0.65)
     if backend == "team":  # pragma: no cover - modèle de l'équipe (cf. INTEGRATION-ML.md)
         from face_id.backends.team_backend import TeamRecognizer
 
-        return TeamRecognizer(threshold if threshold is not None else 0.5)
+        return TeamRecognizer(threshold if threshold is not None else 0.6)
     raise ValueError(f"backend de reconnaissance inconnu: {backend!r}")

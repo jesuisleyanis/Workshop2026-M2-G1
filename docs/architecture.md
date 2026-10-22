@@ -84,7 +84,7 @@ flowchart TB
 | waf-exporter | Python (`security/waf/waf_exporter.py`) | obs | non | Audit ModSecurity → `resilience_waf_blocked_total{rule}` (:9188) |
 | collector | Python | app | non | Construit le vecteur de features (15 s) |
 | detector | FastAPI + scikit-learn | app | non | Score ML, émet l'AnomalyEvent |
-| remediation | FastAPI + ansible-runner | app | non | Décision + actions + vérification |
+| remediation | FastAPI + ansible-runner | app/data/obs | non | Décision + actions + vérification (`data` : pg_restore ; `obs` : lecture Loki) |
 | docker-socket-proxy | HAProxy (liste blanche stricte) | app | non | Médie l'accès Docker (verbes limités) |
 | mosquitto | MQTT | app | `192.168.137.1:1883` (`iot`) | Transporte les états LED de `auth` vers l'ESP8266 |
 | dashboard | React/Vite/TS/Tailwind | app/obs | via WAF/interne | Supervision, timeline, MTTD/MTTR |

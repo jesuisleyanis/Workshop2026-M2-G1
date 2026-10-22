@@ -50,6 +50,7 @@ Le schéma (`users`, `accounts`, `transactions`), la config de connexion, les mi
 | `POSTGRES_PASSWORD` (ou `_FILE`) | oui | — | Mot de passe DB (`POSTGRES_HOST/PORT/DB/USER` : voir resilience_db ; défauts `postgres`/`5432`/`resilience`/`resilience`) |
 | `DATABASE_URL` | non | — | Surcharge complète de l'URL DB (tests : `sqlite://`) |
 | `TRUSTED_PROXY_HOPS` | non | `1` | Proxys de confiance devant le service (lecture de `X-Forwarded-For` depuis la droite) |
+| `TRUSTED_PROXIES` | non | vide | IP/CIDR des proxys dont `X-Forwarded-For` est cru (compose : le WAF, IP fixe `172.31.0.10` sur `app`). Pair TCP hors liste → son IP est utilisée et l'en-tête ignoré. Vide = aucune confiance. Entrée invalide = refus de démarrer |
 | `RUN_MIGRATIONS` | non | `true` | Applique Alembic au démarrage (verrou : sûr si auth démarre en parallèle) |
 | `ENABLE_DOCS` | non | `false` | Expose `/docs` (dev uniquement) |
 | `LOG_LEVEL` | non | `INFO` | Niveau de log |
@@ -118,3 +119,20 @@ pytest services/payment-api
 - Le middleware de contexte de requête (`request_id`, `client_ip`, `http_*`) prévu par le contrat n'existe pas dans `resilience_common` : il est dans `observability.py` (copie identique dans `auth`, à remonter dans la lib).
 - L'exemple de log du contrat montre `http_path:"/transactions"` ; le service journalise le chemin réel `/api/v1/transactions`.
 - Un corps mal typé (ex. `amount_cents` flottant) est un `422 validation_error` **sans** event `transaction_rejected` ; les refus de règles métier (montant ≤ 0, solde, comptes) en émettent un.
+
+## Répartition de charge (3 répliques)
+
+payment-api est **sans état** (tout est en base) : le compose en lance `PAYMENT_API_REPLICAS` (défaut **3**)
+derrière le WAF, qui répartit (`least_conn`) et retire 5 s une réplique après 2 échecs (`max_fails`). Le DNS
+Docker est relu toutes les 5 s (`resolve`) : les nouvelles IP après un redémarrage sont suivies sans recharger
+Nginx. Bascule automatique vers une autre réplique sur erreur de connexion / 502 / 503, **jamais pour un POST
+déjà transmis** (un virement n'est pas rejoué en double).
+
+| Point | Pourquoi |
+|---|---|
+| 3 répliques | tient une panne pendant un redémarrage progressif ; au-delà, le goulot est Postgres (pool 10 / réplique, `max_connections` 100) et le CPU de l'hôte |
+| Prometheus `dns_sd_configs` | une cible par réplique : sinon le ML ne verrait qu'1/N du trafic |
+| `restart_service` progressif | la remédiation redémarre une réplique à la fois, la suivante quand la précédente est `healthy` : jamais de coupure |
+| auth NON répliqué | son rate-limit (et le durcissement de la remédiation) est en mémoire : chaque réplique aurait sa propre limite |
+
+Changer le nombre : `PAYMENT_API_REPLICAS=2 make up-full`.

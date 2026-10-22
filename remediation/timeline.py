@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from journal import Journal
 
@@ -71,7 +72,7 @@ async def sse_stream(
         while True:
             try:
                 rec = await asyncio.wait_for(queue.get(), timeout=keepalive_s)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 yield ": keepalive\n\n"
                 continue
             if rec["id"] <= last or (incident_id and rec["incident_id"] != incident_id):

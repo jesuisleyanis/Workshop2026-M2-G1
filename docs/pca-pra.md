@@ -96,6 +96,7 @@ Après >= 10 rejeux par scénario : `RTO_retenu = arrondi_sup(1,5 x p95(D + MTTR
 
 | Sinistre | Pourquoi | Palliatif |
 |---|---|---|
+| **Facteur biométrique indisponible** (panne `face-id`, perte de `FACE_DATA_KEY`, caméra HS) | l'accès privilégié au back-office exige le visage **par conception** ; le paiement et la boucle ZTR n'en dépendent pas | procédure break-glass et réenrôlement : §5.7 |
 | **Panne simple d'un conteneur** (non attaque) | pas de type d'incident dédié : classé `unknown` donc rapport + escalade, pas d'action | healthcheck + politique de redémarrage Compose [R] (`infra/compose/docker-compose.yml`) ; à éprouver au **chaos engineering J4** |
 | **Perte de l'hôte / des volumes** | un seul hôte, dumps sur le même hôte | PRA §3.3 (reconstruction manuelle) |
 | **Panne du moteur de remédiation ou du proxy Docker** | SPOF de l'autonomie | runbook manuel §5.5 |
@@ -136,7 +137,7 @@ Action : `restore_pg_dump` (`remediation/actions/postgres.py`), paramètre `back
 
 ### 5.3 `web_attack`
 
-`confirm_waf_block` (lecture seule Loki : `{service="waf"} |= "waf_blocked"` sur 120 s, filtré par IP) puis `waf_blacklist_ip` (liste `permanent`). Aucune restauration de service nécessaire : le CRS a répondu 403 avant l'application. Retour arrière : retirer la ligne de `blocked_ips.conf` + reload (ou `attacks/reset.sh`).
+Compromission tentée, pas perte de disponibilité : **pas de `verify_first`** (ModSecurity renvoie déjà 403, `verify_tx` passerait d'emblée et l'attaquant ne serait jamais bloqué). `waf_blacklist_ip` (liste `permanent`, `source: from_event_or_loki` : IP désignée par le detector, sinon la source la plus fréquente des `waf_blocked` des 120 s dans Loki), puis `confirm_waf_block(require: true)` (lecture seule Loki `{service="waf-exporter", event="waf_blocked"}`). IP non bloquable (passerelle Docker protégée) : clos sur preuve du blocage WAF ; aucun blocage observé : escalade. Aucune restauration de service nécessaire : le CRS a répondu 403 avant l'application. Retour arrière : **automatique** à l'échéance du blocage (`REMEDIATION_WAF_BLOCK_TTL_S`, 1 h par défaut), ou bouton « Débloquer » du dashboard / `attacks/reset.sh`.
 
 ### 5.4 PRA : reconstruction sur une autre machine (manuel, non éprouvé)
 
@@ -155,12 +156,26 @@ Déclencheurs : escalade `remediation_failed`, moteur ou proxy en panne, type `u
 
 | Playbook | Appelé par | Variables | État au 2026-10-19 |
 |---|---|---|---|
-| `waf_deny_ip.yml` | `waf_block_ip`, `waf_blacklist_ip` | `deny_ip`, `deny_list` (temporary / permanent), `incident_id` | [R] `infra/ansible/playbooks/remediation/waf_deny_ip.yml` |
+| `waf_deny_ip.yml` | `waf_block_ip`, `waf_blacklist_ip` | `deny_ip`, `deny_list` (temporary / permanent), `incident_id`, `deny_until` (epoch, 0 = permanent) | [R] `infra/ansible/playbooks/remediation/waf_deny_ip.yml` |
 | `pg_restore.yml` | `restore_pg_dump` | `backup`, `incident_id` | [R] `infra/ansible/playbooks/remediation/pg_restore.yml` |
 | playbooks de déploiement et de reprise (R6) : `deploy.yml`, `pg_backup.yml` | opérateur / `make up` | — | [R] `infra/ansible/playbooks/` ; planification de `pg_backup.yml` [S] |
 
 `ALLOWED_PLAYBOOKS` ne contient **que** ces deux noms : tout autre playbook est refusé par le moteur.
 **Rechargement de Nginx (tranché à l'écriture, [R])** : deny-list en volume partagé `waf-deny`, puis signal `SIGHUP` au seul conteneur WAF via `docker-socket-proxy` (liste fermée de couples méthode/chemin, voir `infra/compose/docker-compose.yml`). **Ne pas élargir le proxy à `exec`** (cela ouvrirait une exécution arbitraire dans les conteneurs).
+
+### 5.7 Perte du facteur biométrique : break-glass et réenrôlement (consigne additionnelle 1)
+
+**Périmètre :** seul l'accès **privilégié** du back-office est concerné. `payment-api`, le front, la boucle Zero-Touch Recovery (`verify_tx`, détection, remédiation) et le Clip Chrono **ne dépendent pas** de `face-id`, de la caméra, du broker ni de l'ESP (D4) : aucun RTO de la §3 n'est affecté. Toute intervention ci-dessous est **manuelle**, sur le PC Hôte, et **interdite pendant la démo notée** (même règle que §5.5).
+
+| Déclencheur | Effet | Procédure (non éprouvée : [M]) |
+|---|---|---|
+| `face-id` en panne ou base illisible | `POST /auth/face` répond `503 face_service_unavailable` ; back-office inaccessible | 1. `docker compose ps face-id`, relancer le service ; si impossible, **break-glass** : ajouter `BACKOFFICE_FACE_REQUIRED=false` à l'environnement `auth` de `infra/compose` (variable non câblée par défaut) puis `docker compose up -d auth` ; l'étape visage est sautée mais **mot de passe + rôle restent obligatoires**. 2. Réparer, **retirer** la variable, redéployer `auth`. 3. Consigner dans le post-mortem. |
+| **Perte ou changement de `FACE_DATA_KEY`** | gabarits et photos **illisibles** (`face_verify_error`, motif `templates_unreadable`) ; le service refuse de démarrer sans clé valide | 1. Si la clé est dans SOPS/age : la restaurer (`scripts/decrypt-secrets.sh`, §5.4) — aucune perte. 2. Sinon **la perte est définitive** : générer une nouvelle clé (SOPS), redéployer `face-id`, puis **réenrôler tous les agents** : break-glass ci-dessus pour ouvrir une session `admin` par mot de passe, puis `PUT /api/v1/admin/users/{u}/face` pour chacun. Alternative : supprimer les lignes `face_enrollments` (SQL, ou `DELETE /api/v1/enroll/{u}` avec `FACE_INTERNAL_TOKEN`) pour que le **bootstrap** (`BACKOFFICE_BOOTSTRAP_TOKEN`) soit à nouveau requis. |
+| Enrôlements d'un **autre modèle** (`model_version` différent) ou issus de la v1 | vérification `face_verify_error` (`model_version_mismatch`) ; ces lignes sont `usable:false` chez face-id, donc **ne comptent pas** comme enrôlées pour `auth` (badge « Réenrôlement requis » dans Habilitations) | réenrôlement des agents concernés (aucune conversion possible). Si **aucun** admin n'a plus d'enrôlement utilisable, le **bootstrap** redevient requis (`GET /api/v1/auth/bootstrap` → `required:true`) : le détenteur de `BACKOFFICE_BOOTSTRAP_TOKEN` réenrôle un admin (compte existant `admin`/`operator` repris) sans break-glass. |
+| Dernier admin enrôlé injoignable (visage non reconnu, caméra HS) | plus personne ne franchit l'étape visage ; `last_admin` interdit de le désenrôler | break-glass (ligne 1), session `admin` par mot de passe, enrôler un second admin avant de retirer le premier. |
+| Caméra USB HS | étape visage impossible | remplacer la caméra (UVC standard) ; en attendant, break-glass. |
+
+**Objectifs (cibles, non mesurées [M])** : RTO d'accès au back-office après panne `face-id` ≈ temps d'un redéploiement `auth` (minutes) ; RTO complet après perte de clé ≈ temps de réenrôlement (quelques minutes par agent). **RPO biométrie = dernier enrôlement** : une sauvegarde Postgres ne contient que des **blobs chiffrés**, inutilisables sans `FACE_DATA_KEY` ; la clé doit donc être sauvegardée **séparément et hors hôte** (SOPS + clé age, §5.4), jamais avec les dumps. Une restauration `data_corruption` rétablit `face_enrollments` à l'état du dump (cohérent avec la clé tant que celle-ci n'a pas changé).
 
 ## 6. Responsabilités
 
@@ -198,7 +213,7 @@ R = réalise, A = rend compte, C = consulté, I = informé. Les noms sont à ren
 | **R2** | **Dump déjà corrompu** restauré par `latest` | `latest` = dernier dump sans contrôle de contenu | retour à un état altéré, `verify_tx` peut passer | rétention >= 12 dumps, contrôle d'invariants avant rotation, `backup=<nom>` pour remonter |
 | **R3** | **Corruption silencieuse non détectée** | le signal retenu est `db_errors_per_s` + `verify_tx` KO | corruption sans erreur DB ignorée | contrôles d'intégrité périodiques (invariants §5.2) |
 | **R4** | **Rotation d'IP / attaque distribuée** | blocage par IP source uniquement | le flood reprend ; escalade après 3 tentatives | transfert (scrubbing) ; limites par compte ; hors périmètre |
-| **R5** | **Mesures sans retour arrière** | deny-list sans expiration côté moteur ; rate-limit durci levé seulement au redémarrage de `auth` ; **`auth` ne dédoublonne pas `Idempotency-Key`** donc re-durcissement à chaque tentative (10 -> 5 -> 2 -> 1/min) | pénalise des utilisateurs légitimes | corriger le dédoublonnage ; expiration de la deny-list `temporary` ; levée post-incident par décision humaine |
+| **R5** | **Mesures sans retour arrière** | deny-list : expiration après `REMEDIATION_WAF_BLOCK_TTL_S` (corrigé) ; rate-limit durci levé seulement au redémarrage de `auth` ; **`auth` ne dédoublonne pas `Idempotency-Key`** donc re-durcissement à chaque tentative (10 -> 5 -> 2 -> 1/min) | pénalise des utilisateurs légitimes | corriger le dédoublonnage ; expiration de la deny-list `temporary` ; levée post-incident par décision humaine |
 | **R6** | **Faux positif ML** | seuil 0,6296, 0/2000 FP sur baseline **synthétique** | redémarrage inutile de `payment-api` (interruption courte auto-infligée) | cooldown 60 s ; ré-entraînement sur trafic réel avant production |
 | **R7** | **Points uniques de défaillance** : hôte, WAF, Postgres, moteur | architecture imposée | arrêt total ou perte d'autonomie | PRA §3.3, mode dégradé §5.5 |
 | **R8** | **Sauvegardes sur le même hôte** | aucune copie hors hôte | perte de l'hôte = perte des dumps ; RPO PRA non tenu | copie hors hôte horaire [S] |
@@ -206,5 +221,6 @@ R = réalise, A = rend compte, C = consulté, I = informé. Les noms sont à ren
 | **R10** | **Journal d'incidents local** | SQLite `incidents.db` | perte du journal si le volume n'est pas persistant | volume dédié ; export vers Loki (`remediation_*`) |
 | **R11** | **Sessions JWT non révocables** | JWT stateless 15 min, secret partagé | un jeton volé reste valide jusqu'à expiration | rotation de `JWT_SECRET` en cas de compromission ; JWT asymétrique en réel |
 | **R12** | **Restauration pendant écritures actives** | pas de quiescence des écrivains (le moteur ne peut redémarrer que 3 services et ne coupe pas le trafic) | écritures concurrentes perdues ou bloquées par les verrous | `--single-transaction` ; blocage préalable de la source (déjà dans le flux `service_flood`) ; étudier une mise en maintenance du WAF |
+| **R13** | **Accès privilégié dépendant du facteur biométrique** | back-office inaccessible si `face-id`/caméra/`FACE_DATA_KEY` indisponibles ; break-glass et réenrôlement **manuels et non éprouvés** (§5.7) | pas d'accès aux habilitations ; le paiement et la ZTR ne sont pas touchés | tester la procédure en recette ; sauvegarder la clé hors hôte ; garder deux admins enrôlés |
 
 **Synthèse pour la direction** : la reprise automatique tient la **disponibilité** (RTO de l'ordre de la minute, RPO nul) pour trois scénarios sur quatre ; pour l'**intégrité** elle restaure, mais **au prix d'une perte bornée au RPO**, que la direction doit accepter explicitement. Deux conditions manquent pour que ces chiffres soient exacts : le **job de dump planifié** (sans lui le RPO n'est pas tenu) et la **mesure** des MTTR (sans elle le RTO reste une cible).

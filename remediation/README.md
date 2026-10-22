@@ -68,7 +68,7 @@ POST /events/alertmanager ──► alertmanager.py (webhook → AnomalyEvent) �
 - **`main.py`** : `create_app(settings, table, services, http_transport)` assemble l'ensemble (injection pour les tests) ; `app_factory()` est le point d'entrée uvicorn (`--factory`) et quitte avec un message clair si la table est invalide. Gère : middleware (`X-Request-ID`, logs d'accès JSON, métriques HTTP), handlers d'erreur au format du contrat, dépendance d'authentification `require_token` (Bearer, `hmac.compare_digest`, fail closed), `lifespan` (marque les incidents orphelins `interrupted` au démarrage, annule les tâches à l'arrêt). `/docs`, `/redoc`, `/openapi.json` sont désactivés.
 - **`engine.py`** : `RemediationEngine`. `handle_event` fait l'admission (rejeu d'`event_id`, doublon de clé `incident_type:service`, cooldown), crée l'incident et lance `_run` en tâche de fond. `_remediate` boucle sur `max_attempts` (avec attente du cooldown entre tentatives) ; `_attempt` exécute les actions de la règle dans l'ordre et vérifie après chaque action mutante réussie et après la dernière ; `_execute` gère le dry-run (plan seulement pour une action mutante), le verrou `_action_lock` (une action mutante à la fois), le timeout, la métrique `remediation_actions_total`, les gauges MTTD/MTTR (bornées à 20 incidents), le journal et la timeline ; `_verify` rejoue `verify_tx` jusqu'à `VERIFY_RETRIES` fois ; `_close`, `_finish_dry_run`, `_escalate` produisent les trois issues. Les dépendances externes sont regroupées dans `Services` (http, docker, runner, verifier) pour être mockées.
 - **`decision.py`** : modèles Pydantic stricts (`extra="forbid"`) de la table (`DecisionTable`, `Defaults`, `Rule`, `ActionSpec`) ; `load_decision_table` (`yaml.safe_load`). La validation vérifie : version `1.0`, une règle exacte par `IncidentType` (ni doublon, ni manquant), actions connues et paramètres valides, escalade non mutante, et les invariants de sécurité (`data_corruption` contient `restore_pg_dump` et jamais `restart/recreate` ; `restore_pg_dump` réservé à `data_corruption` ; `unknown` sans action mutante). Erreur → `DecisionTableError`.
-- **`actions/`** : une action = `type`, `params` (issus de la table), `mutating`, `check_params` (validation au chargement ET à l'exécution), `execute`, `plan` (dry-run). `docker_proxy.py` n'autorise que `GET /_ping`, `GET /containers/json`, `GET /containers/{id}/json`, `POST /containers/{id}/restart` et `POST /containers/{id}/kill?signal=HUP` (`reload()`, tout autre signal refusé) (+ stop/rename/create/start/DELETE si `DOCKER_PROXY_ALLOW_RECREATE`). `waf.py` résout l'IP (`source_ip` de l'événement), refuse les IP protégées (`NEVER_BLOCK_IPS`, loopback…), écrit la deny-list via le playbook `waf_deny_ip.yml` puis, si elle a changé, recharge le WAF (SIGHUP via le proxy). `runner.py` n'accepte que `waf_deny_ip.yml` et `pg_restore.yml`, exécutés **dans le conteneur** (`hosts: localhost`) depuis `ANSIBLE_PROJECT_DIR` (lecture seule), artefacts dans `ANSIBLE_PRIVATE_DATA_DIR` (tmpfs). `ops.py` : `dry_run_report` (journalisation) et `notify_operator` (log `remediation_failed` + webhook optionnel).
+- **`actions/`** : une action = `type`, `params` (issus de la table), `mutating`, `check_params` (validation au chargement ET à l'exécution), `execute`, `plan` (dry-run). `docker_proxy.py` n'autorise que `GET /_ping`, `GET /containers/json`, `GET /containers/{id}/json`, `POST /containers/{id}/restart` et `POST /containers/{id}/kill?signal=HUP` (`reload()`, tout autre signal refusé) (+ stop/rename/create/start/DELETE si `DOCKER_PROXY_ALLOW_RECREATE`). `waf.py` résout l'IP (`source_ip` de l'événement ; `from_loki` : source la plus fréquente des `waf_blocked` des 120 s, lue dans Loki `{service="waf-exporter", event="waf_blocked"}` ; `from_event_or_loki` : la première, sinon la seconde), refuse les IP protégées (`NEVER_BLOCK_IPS`, loopback…), écrit la deny-list via le playbook `waf_deny_ip.yml` avec une **échéance** (`<ip> 1; # until=<epoch>`, `REMEDIATION_WAF_BLOCK_TTL_S`) puis, si elle a changé, recharge le WAF (SIGHUP via le proxy). Les blocages échus sont purgés (écriture atomique) avant chaque blocage, à chaque `GET /waf/blocked-ips`, au démarrage puis toutes les 60 s ; une ligne sans `until=` (ancien format, ajout manuel, TTL 0) reste permanente. `runner.py` n'accepte que `waf_deny_ip.yml` et `pg_restore.yml`, exécutés **dans le conteneur** (`hosts: localhost`) depuis `ANSIBLE_PROJECT_DIR` (lecture seule), artefacts dans `ANSIBLE_PRIVATE_DATA_DIR` (tmpfs). `ops.py` : `dry_run_report` (journalisation) et `notify_operator` (log `remediation_failed` + webhook optionnel).
 - **`journal.py`** : SQLite (`INCIDENTS_DB`), accès protégé par verrou. Tables `incidents`, `actions`, `verifications`, `timeline`. Fournit l'idempotence (`incident_for_event`), le cooldown (`last_action_at`), la reprise après redémarrage (`recover_orphans`) et le rejeu de timeline (`timeline_since`, `latest_timeline_id`). Statuts : `in_progress`, puis `closed | escalated | dry_run | interrupted`.
 - **`timeline.py`** : `Broker` (file `asyncio.Queue` de 1000 par abonné ; un abonné trop lent est déconnecté et se reconnecte), `frame()` (trame SSE), `sse_stream()` (abonnement *avant* le rejeu, donc sans trou ni doublon ; commentaire `: keepalive` si inactif).
 - **`verify.py`** : `ScriptVerifier` lance `VERIFY_TX_PATH` sans shell, avec timeout (`VERIFY_TIMEOUT_S`) ; exit 0 = OK ; renvoie `VerifyResult(ok, rc, detail)` (dernière ligne de sortie, 200 caractères max).
@@ -77,19 +77,39 @@ POST /events/alertmanager ──► alertmanager.py (webhook → AnomalyEvent) �
 
 ## Endpoints
 
-API sur le port **8005** (interne, réseau `app` ; jamais publié). Sauf sondes, tout exige `Authorization: Bearer <REMEDIATION_TOKEN>`.
+API sur le port **8005** (interne, réseau `app` ; jamais publié). Sauf sondes, tout exige un `Authorization: Bearer <jeton>` ; colonne *Auth* : **service** = `REMEDIATION_TOKEN` (machine-à-machine : detector, Alertmanager, nginx du dashboard pour ses lectures) ; **opérateur** = `REMEDIATION_OPERATOR_TOKEN` (écriture déclenchée par un humain, saisie dans le dashboard ; le jeton de service y est refusé en `403 operator_token_required`, l'absence de jeton en `401`, un jeton opérateur non configuré / trop court / égal au jeton de service en `503`).
 
 | Méthode | Chemin | Auth | Description |
 |---|---|---|---|
-| `POST` | `/events` | oui | Reçoit un `AnomalyEvent` (+ `source_ip` optionnel). `202` `{incident_id, decision, dry_run, detail}` avec `decision` ∈ `started`, `duplicate`, `replayed`, `cooldown`. `422` si le corps est invalide. |
-| `POST` | `/events/alertmanager` | oui | **Webhook Alertmanager** (chemin SOC, secondaire — #13). Corps = webhook v4 `{alerts:[…]}` ; chaque alerte `firing` portant un label `incident_type` (§3) est traduite en `AnomalyEvent` (`alertmanager.py`) et soumise comme `/events`. `202` `{accepted:[{alertname, incident_id, decision, dry_run, detail}], skipped:[{alertname, reason}]}`. `422` si le corps n'est pas un webhook. |
-| `GET` | `/incidents?limit=50` | oui | Derniers incidents (`limit` 1 à 500). |
-| `GET` | `/incidents/{incident_id}` | oui | Détail : incident + `actions` + `verifications` + `timeline`. `404 incident_not_found`. |
-| `GET` | `/decision-table` | oui | Table de décision chargée (JSON). |
-| `GET` | `/stream` | oui | Timeline temps réel (SSE). Voir ci-dessous. |
+| `POST` | `/events` | service | Reçoit un `AnomalyEvent` (+ `source_ip` optionnel). `202` `{incident_id, decision, dry_run, detail}` avec `decision` ∈ `started`, `duplicate`, `replayed`, `cooldown`. `422` si le corps est invalide. |
+| `POST` | `/manual-actions` | **opérateur** | Action confirmée par un opérateur (dashboard). Voir « Action manuelle » ci-dessous. |
+| `POST` | `/events/alertmanager` | service | **Webhook Alertmanager** (chemin SOC, secondaire — #13). Corps = webhook v4 `{alerts:[…]}` ; chaque alerte `firing` portant un label `incident_type` (§3) est traduite en `AnomalyEvent` (`alertmanager.py`) et soumise comme `/events`. `202` `{accepted:[{alertname, incident_id, decision, dry_run, detail}], skipped:[{alertname, reason}]}`. `422` si le corps n'est pas un webhook. |
+| `GET` | `/incidents?limit=50` | service | Derniers incidents (`limit` 1 à 500). |
+| `GET` | `/incidents/{incident_id}` | service | Détail : incident + `actions` + `verifications` + `timeline`. `404 incident_not_found`. |
+| `GET` | `/decision-table` | service | Table de décision chargée (JSON). |
+| `GET` | `/waf/blocked-ips` | service | IP réellement en liste noire du WAF (fichier `WAF_DENY_FILE`), enrichies par le journal : `{blocked: [{ip, blocked_at, expires_at, list, incident_id, incident_type}]}` (`expires_at` ISO 8601 UTC, `null` = permanent). Purge d'abord les blocages échus (puis recharge le WAF s'il y en avait). Carte « IP bloquées » du dashboard. |
+| `DELETE` | `/waf/blocked-ips/{ip}` | **opérateur** | Déblocage par l'opérateur (bouton du dashboard) : retire l'IP de la deny-list (écriture atomique) puis recharge le WAF (SIGHUP via le proxy). `400 invalid_ip`, `404 ip_not_blocked`, `502 waf_reload_failed`. Tracé dans les logs (`remediation_action`). Hors boucle de reprise. |
+| `GET` | `/stream` | service | Timeline temps réel (SSE). Voir ci-dessous. |
 | `GET` | `/health` | non | Liveness : `{"status": "ok"}`. |
 | `GET` | `/ready` | non | Readiness : `200`/`503` avec `checks` = `decision_table`, `journal`, `auth_configured`, `docker_socket_proxy` (ping du proxy). |
 | `GET` | `/metrics` | non | Métriques Prometheus (`resilience_remediation_actions_total`, `resilience_mttd_seconds`, `resilience_mttr_seconds`, métriques HTTP). |
+
+### Action manuelle (`POST /manual-actions`)
+
+Appelée **uniquement par le dashboard** après confirmation opérateur, avec le **jeton opérateur** (`REMEDIATION_OPERATOR_TOKEN`) saisi par l'humain : nginx relaie son en-tête `Authorization` et n'injecte **rien** ; le jeton de service est refusé (`403 operator_token_required`), l'absence de jeton donne `401`. L'assistant ne l'appelle jamais, et depuis le réseau `ai` rien ne peut l'appeler sans ce jeton.
+
+```json
+{"action": "waf_block_ip",    "params": {"source": "203.0.113.9"},  "reason": "optionnel, <= 200 car."}
+{"action": "restart_service", "params": {"service": "payment-api"}}
+```
+
+- Liste blanche **stricte** (`engine.MANUAL_ACTIONS`) : `waf_block_ip` (param unique `source` = IP littérale, `from_event` refusé) et `restart_service` (param unique `service`). Toute autre action, clé de `params` en trop/absente ou champ inconnu → `422`.
+- Mêmes garde-fous qu'en automatique, vérifiés **avant** toute écriture : `NEVER_BLOCK_IPS` + loopback/multicast/non spécifiée, après dépliage des IPv6 mappées IPv4 (`::ffff:127.0.0.1` = `127.0.0.1`) ; IPv6 avec zone (`%eth0`) refusée (`422 action_refused`), `RESTARTABLE_SERVICES` (`422 action_refused`), validation des paramètres (`422 invalid_params` / `invalid_request`). En cas de refus : rien n'est exécuté ni journalisé.
+- Exécution via le même chemin que le moteur (`build_action` → `RemediationEngine._execute` : verrou d'actions, timeout, dry-run, métrique `resilience_remediation_actions_total`).
+- Journal : un incident `incident_type = "manual_action"` (`service` = IP ou service ciblé, `event_id = manual-<incident_id>`, `reason` = motif opérateur), l'action, puis clôture (`closed` si OK, `dry_run`, `escalated` si l'action a échoué). Timeline SSE : `decision` (`data.manual = true`, `reason`) → `action` (running, puis résultat) → `closure`. Exporté par `export_journal.py` comme tout incident. Log `remediation_manual_action`.
+- Pas de `verify_tx` ni de rejeu : l'opérateur décide, il voit le résultat de l'action.
+- **Aucun MTTD / MTTR** : pas de détection derrière une action manuelle ; `mttd_seconds` reste `null` et les jauges `resilience_mttd_seconds` / `resilience_mttr_seconds` ne sont pas alimentées (sinon ~0 s fausserait les indicateurs montrés au jury).
+- Réponse `200` : `{"incident_id", "action", "status", "detail"}` avec `status` ∈ `ok`, `dry_run`, `failed`.
 
 Codes d'erreur d'authentification : `401 unauthorized` (+ `WWW-Authenticate: Bearer`), `503 auth_not_configured` si le token est absent ou fait moins de 16 caractères (fail closed). Corps d'erreur : `{"error": {"code", "message", "request_id"}}`.
 
@@ -118,7 +138,7 @@ Le dashboard consomme **Server-Sent Events** (pas de WebSocket) sur `GET /stream
 - `phase` : `detection` → `decision` → `action` → `verification` → `closure` | `escalation`. `status` : `info`, `running`, `ok`, `ko`, `failed`, `skipped`, `dry_run`.
 - Réponse : `text/event-stream`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`.
 - L'`id` SSE est l'id SQLite de la timeline : persistant, croissant, rejouable après reconnexion ou redémarrage du moteur.
-- Un `EventSource` navigateur ne peut pas poser de header : le dashboard passe par son reverse-proxy nginx (`GET /remediation/stream` → `/stream`) qui injecte `Authorization` (variable `REMEDIATION_AUTH_HEADER` du conteneur dashboard). Voir [`../dashboard/README.md`](../dashboard/README.md).
+- Un `EventSource` navigateur ne peut pas poser de header : le dashboard passe par son reverse-proxy nginx (`GET /remediation/stream` → `/stream`) qui injecte `Authorization` (variable `REMEDIATION_AUTH_HEADER` du conteneur dashboard). Ce proxy n'expose que `GET /remediation/stream`, `GET /remediation/waf/blocked-ips` (lectures, jeton de service injecté) et les écritures `DELETE /remediation/waf/blocked-ips/<ip>` et `POST /remediation/manual-actions` (`application/json` exigé), sur lesquelles il relaie le jeton opérateur du client sans rien injecter ; tout autre chemin `/remediation/*` répond `404`. Voir [`../dashboard/README.md`](../dashboard/README.md).
 
 ## Variables d'environnement
 
@@ -126,16 +146,18 @@ Lues par `config.py` (`Settings.from_env`). **Aucun secret n'a de valeur par dé
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `REMEDIATION_TOKEN` / `REMEDIATION_TOKEN_FILE` | — (obligatoire, ≥ 16 car.) | Bearer exigé sur l'API. Absent/court = routes protégées en `503` (fail closed). |
+| `REMEDIATION_TOKEN` / `REMEDIATION_TOKEN_FILE` | — (obligatoire, ≥ 16 car.) | Jeton de **service** exigé sur l'API (sauf routes opérateur). Absent/court = routes protégées en `503` (fail closed). |
+| `REMEDIATION_OPERATOR_TOKEN` / `REMEDIATION_OPERATOR_TOKEN_FILE` | — (≥ 16 car., ≠ `REMEDIATION_TOKEN`) | Jeton **opérateur** des écritures humaines (`DELETE /waf/blocked-ips/{ip}`). Absent, court ou égal au jeton de service = ces routes en `503` (fail closed), le reste de l'API fonctionne. Généré dans `.env.local` par `make decrypt` (`scripts/ensure-local-secrets.sh`) tant qu'il n'est pas dans SOPS. |
 | `INTERNAL_TOKEN` / `INTERNAL_TOKEN_FILE` | — | Token de l'API interne du service `auth` (`tighten_rate_limit`) ; absent = l'action échoue. |
 | `DOCKER_PROXY_URL` | `http://docker-socket-proxy:2375` | URL du docker-socket-proxy. |
 | `DOCKER_PROXY_ALLOW_RECREATE` | `false` | Autorise `recreate_service` (nécessite un proxy élargi). |
 | `RESTARTABLE_SERVICES` | `payment-api,auth,front` | Liste blanche (CSV) des services redémarrables/recréables. |
 | `AUTH_URL` | `http://auth:8002` | Base de l'API du service auth. |
-| `LOKI_URL` | `http://loki:3100` | Base de Loki (`confirm_waf_block`). |
+| `LOKI_URL` | `http://loki:3100` | Base de Loki (`confirm_waf_block`, sources `from_loki` / `from_event_or_loki`) ; joignable sur le réseau interne `obs`. |
 | `NOTIFY_WEBHOOK_URL` | — | Webhook optionnel appelé à l'escalade. |
 | `DECISION_TABLE` | `<dossier>/decision_table.yml` | Chemin de la table de décision. |
 | `INCIDENTS_DB` | `incidents.db` | Fichier SQLite du journal (`/var/lib/remediation/incidents.db` dans l'image). |
+| `INCIDENTS_EXPORT_PATH` | `/var/lib/remediation/export/incidents.json` | Fichier produit par `export_journal.py` (CLI uniquement). |
 | `VERIFY_TX_PATH` | `scripts/verify_tx` | Script de vérification (`/opt/scripts/verify_tx` dans l'image). |
 | `VERIFY_TIMEOUT_S` | `30` | Timeout d'une exécution de `verify_tx`. |
 | `VERIFY_RETRIES` | `5` | Essais de `verify_tx` après une action (min. 1). |
@@ -144,6 +166,7 @@ Lues par `config.py` (`Settings.from_env`). **Aucun secret n'a de valeur par dé
 | `ANSIBLE_PROJECT_DIR` | `/opt/ansible/project` | Playbooks de remédiation (copie de `infra/ansible/playbooks/remediation/`, lecture seule). |
 | `ANSIBLE_PRIVATE_DATA_DIR` | `/tmp/ansible-runner` | Artefacts ansible-runner (inscriptible, tmpfs ; créé au premier usage). |
 | `WAF_SERVICE` | `waf` | Service Compose rechargé (SIGHUP) après mise à jour de la deny-list. |
+| `REMEDIATION_WAF_BLOCK_TTL_S` | `3600` | Durée de vie (s) d'un blocage écrit par le moteur (`waf_block_ip` et `waf_blacklist_ip`) ; `0` = permanent. Borne l'effet d'un faux positif CRS sur un client légitime ; un nouveau blocage de la même IP prolonge l'échéance. |
 | `WAF_DENY_FILE` | `/etc/resilience/waf-deny/blocked_ips.conf` | Deny-list partagée (volume `waf-deny`), lue par `waf_deny_ip.yml`. |
 | `PG_BACKUP_DIR` | `/opt/backups` | Dumps sains (montage `infra/ansible/backups` en lecture seule), lus par `pg_restore.yml`. |
 | `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | `postgres` / `5432` / `resilience` / `resilience` / — | Connexion de `pg_restore.yml` (réseau `data`). |
@@ -200,6 +223,20 @@ L'image tourne en non-root (uid 10001), expose 8005 et a un `HEALTHCHECK` sur `/
 
 Détail du modèle et des playbooks : [`../infra/ansible/README.md`](../infra/ansible/README.md).
 
+### Exploitation : export du journal pour l'assistant
+
+L'assistant RAG n'indexe qu'une **copie** JSON du journal (jamais l'API ni la base). Commande à lancer à la demande (aucun hook dans la boucle de remédiation) :
+
+```bash
+docker compose exec remediation python export_journal.py [--db PATH] [--out PATH] [--limit N]
+# -> 12 incident(s) exporté(s) vers /var/lib/remediation/export/incidents.json
+```
+
+- Écrit `{"exported_at": "...", "incidents": [<GET /incidents/{id}> ...]}` (incident complet avec `actions`, `verifications`, `timeline`, les `--limit` plus récents, 200 par défaut), UTF-8.
+- Base ouverte en **lecture seule** (`file:...?mode=ro`) ; base absente = code retour `2`, aucune base vide créée.
+- Écriture **atomique** (temporaire dans le même dossier + `os.replace`) : l'assistant ne lit jamais un fichier partiel.
+- `/var/lib/remediation/export` est le volume nommé `incidents-export`, monté en `:ro` sur l'assistant (`/data/incidents`). Ré-indexation complète : `make assistant-reindex` (voir [`../assistant/README.md`](../assistant/README.md)).
+
 ## Tester
 
 Les tests mockent tout l'extérieur (proxy Docker, Ansible, `verify_tx`, HTTP, horloge) : aucun Docker ni réseau requis.
@@ -221,8 +258,10 @@ pytest -q
 | `tests/test_actions.py` | Catalogue d'actions, liste blanche du client Docker (dont `kill` limité à `signal=HUP`), `waf_block_ip` (playbook + reload seulement si changé, échec explicite si le proxy refuse), recreate + rollback, `tighten_rate_limit`, `confirm_waf_block`, `notify_operator`, validation des paramètres, liste blanche de playbooks, contrat de `verify_tx`, reprise des incidents orphelins. |
 | `tests/test_playbooks.py` | Contrat moteur ↔ playbooks (`hosts: localhost`, extravars déclarées, jamais `docker exec`), `--syntax-check` de tous les playbooks, **exécution réelle** de `waf_deny_ip.yml` par ansible-runner (deny-list écrite, idempotence, IP invalide refusée). |
 | `tests/test_api.py` | Authentification (401, token en query refusé, fail closed), `POST /events` bout en bout, erreurs au format du contrat, `/incidents`, `/decision-table`, `/stream` avec `Last-Event-ID`, sondes, `/metrics`. |
+| `tests/test_manual_actions.py` | `POST /manual-actions` : blocage IP et restart OK, liste blanche (422), IP protégées refusées, 401 sans token, **403 avec le jeton de service, 503 sans jeton opérateur configuré**, aucun MTTD, dry-run, journal + SSE + log `remediation_manual_action`, export. |
 | `tests/test_alertmanager.py` | Chemin SOC : adaptateur Alertmanager → `AnomalyEvent` (firing/résolue, `incident_type` absent ou inconnu ignoré, service par défaut, `source_ip` invalide ignorée, `event_id` stable par occurrence), route `/events/alertmanager` (401, 202 accepted/skipped, rejeu idempotent, 422). |
 | `tests/test_sse.py` | Flux SSE en direct après rejeu, keepalive, format de trame. |
+| `tests/test_export_journal.py` | Export JSON pour l'assistant : contenu complet, `--limit`, lecture seule, écriture atomique, base absente. |
 | `tests/conftest.py`, `tests/broker_helpers.py` | Faux horloge, vérificateur, runner Ansible, réseau ; capture de logs. |
 
 ## Voir aussi

@@ -1,7 +1,7 @@
 """Entraînement sur séries réelles (CSV capturé) : chargement, découpage, calibration, CLI."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
@@ -11,7 +11,7 @@ from ml.shared.features import FEATURE_NAMES
 from ml.training.dataset import ATTACK_KINDS, generate_attack, generate_baseline, load_csv
 from ml.training.train import HELDOUT_FRACTION, main, model_fingerprint, train
 
-T0 = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
+T0 = datetime(2026, 10, 19, 10, 0, tzinfo=UTC)
 
 
 def iso(i: int, step_s: int = 15, t0: datetime = T0) -> str:

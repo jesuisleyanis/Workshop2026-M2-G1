@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest.mock import ANY
 
 import pytest
 from broker_helpers import capture_logs
-from conftest import T0, make_event, make_table
+from conftest import T0, make_event, make_settings, make_table, waf_blocked_entry
 from prometheus_client import REGISTRY
 
 pytestmark = pytest.mark.anyio
@@ -42,8 +43,9 @@ async def test_data_corruption_restores_dump_and_never_touches_availability(make
 @pytest.mark.parametrize("itype,expected,verify", [
     # auth_abuse : verify KO après le blocage -> on enchaîne sur le durcissement du rate-limit
     ("auth_abuse", ["waf_block_ip", "tighten_rate_limit"], [False, True]),
-    # web_attack : confirm_waf_block est en lecture seule (pas de vérification), blacklist modifie l'état
-    ("web_attack", ["confirm_waf_block", "waf_blacklist_ip"], [True]),
+    # web_attack : la liste noire (modifiante) est vérifiée et suffit ; la preuve en lecture seule n'est
+    # jouée que si le blocage échoue
+    ("web_attack", ["waf_blacklist_ip"], [True]),
     ("unknown", ["dry_run_report"], [True]),
 ])
 async def test_other_types_run_their_own_sequence(make_env, itype, expected, verify):
@@ -84,8 +86,29 @@ async def test_verify_ko_moves_to_next_action_then_stops_when_ok(make_env):
     env = make_env(verify=[False, True])
     sub = await env.run(make_event("service_flood"))
     assert env.action_types(sub.incident_id) == ["waf_block_ip", "restart_service"]
-    assert env.verifier.calls == 2
+    assert env.verifier.calls == 3  # pré-contrôle (KO) + après chaque action modifiante
     assert env.incident(sub.incident_id)["status"] == "closed"
+
+
+async def test_contained_attack_is_closed_without_any_action(make_env):
+    # Flood déjà écrêté par le WAF (service disponible) : aucun restart de payment-api.
+    # Constaté le 21/10 sans ce pré-contrôle : 12 redémarrages en 20 min pendant un flood continu.
+    env = make_env(precheck_ok=True)
+    sub = await env.run(make_event("service_flood"))
+    inc = env.incident(sub.incident_id)
+    assert inc["status"] == "closed"
+    assert env.action_types(sub.incident_id) == []
+    assert env.verifier.calls == 1 and env.net.docker_calls() == []
+
+
+async def test_types_without_verify_first_always_act(make_env):
+    # data_corruption : une corruption ne se « contient » pas toute seule ; web_attack : compromission
+    # tentée, ModSecurity renvoie déjà 403 (verify_tx passerait) mais l'attaquant doit être bloqué.
+    env = make_env(verify=[True], precheck_ok=True)
+    sub = await env.run(make_event("data_corruption"))
+    assert env.action_types(sub.incident_id) == ["restore_pg_dump"]
+    sub = await env.run(make_event("web_attack", service="waf", source_ip="198.51.100.23"))
+    assert env.action_types(sub.incident_id) == ["waf_blacklist_ip"]
 
 
 async def test_verify_ok_after_first_action_skips_remaining_actions(make_env):
@@ -209,7 +232,9 @@ async def test_dry_run_still_allows_read_only_actions(make_env):
     env = make_env(table=make_table(dry_run=True))
     sub = await env.run(make_event("web_attack"))
     inc = env.incident(sub.incident_id)
-    assert [a["result"] for a in inc["actions"]] == ["success", "dry_run"]  # confirm (lecture) vs blacklist (bloquée)
+    # blacklist (modifiante) simulée ; la preuve en lecture seule s'exécute réellement
+    assert [(a["type"], a["result"]) for a in inc["actions"]] == [
+        ("waf_blacklist_ip", "dry_run"), ("confirm_waf_block", "success")]
     assert env.runner.calls == []
 
 
@@ -231,6 +256,18 @@ async def test_waf_never_blocks_protected_or_missing_ips(make_env):
     first3 = env3.incident(sub3.incident_id)["actions"][0]
     assert first3["result"] == "failure" and "protégée" in first3["detail"]
     assert env3.runner.calls == []
+
+
+async def test_waf_never_blocks_an_ip_inside_a_protected_network(make_env):
+    # Constaté le 21/10 : le detector a désigné l'IP de la remédiation elle-même (trafic verify_tx) ;
+    # bloquée, chaque vérification suivante aurait échoué. Les réseaux Docker internes sont protégés.
+    from conftest import make_settings
+
+    env = make_env(verify=[True], settings=make_settings(never_block_ips=("127.0.0.1", "172.31.0.0/24")))
+    sub = await env.run(make_event("service_flood", source_ip="172.31.0.9"))
+    first = env.incident(sub.incident_id)["actions"][0]
+    assert first["result"] == "failure" and "protégée" in first["detail"]
+    assert env.runner.calls == []
 
 
 async def test_restart_refuses_service_outside_allow_list(make_env):
@@ -275,3 +312,59 @@ async def test_timeline_covers_detection_decision_action_verification_closure(ma
     assert q.qsize() == len(phases)  # tout ce qui est journalisé est diffusé en direct
     ids = [r["id"] for r in env.journal.timeline_since(0)]
     assert ids == sorted(ids)
+
+
+async def test_journal_remembers_successful_blocks_for_the_blocked_ips_card(make_env):
+    env = make_env(verify=[True])
+    sub = await env.run(make_event("auth_abuse", source_ip="203.0.113.9"))
+    (block,) = env.journal.last_blocks()
+    assert block["incident_id"] == sub.incident_id and block["incident_type"] == "auth_abuse"
+    assert block["action_type"] == "waf_block_ip" and block["detail"].startswith("203.0.113.9 ")
+
+
+# ---------------------------------------------------------------- web_attack : compromission tentée
+async def test_web_attack_blocks_the_detector_ip_even_if_the_waf_already_contains_it(make_env):
+    """Table RÉELLE. ModSecurity renvoie déjà 403 -> verify_tx passerait d'emblée : sans verify_first,
+    l'attaquant (IP désignée par le detector) est quand même mis en liste noire, puis incident clos."""
+    env = make_env(precheck_ok=True)
+    sub = await env.run(make_event("web_attack", service="waf", source_ip="198.51.100.23"))
+    inc = env.incident(sub.incident_id)
+    assert env.action_types(sub.incident_id) == ["waf_blacklist_ip"]
+    assert env.runner.calls == [("waf_deny_ip.yml", {"deny_ip": "198.51.100.23", "deny_list": "permanent",
+                                                     "incident_id": sub.incident_id, "deny_until": ANY})]
+    assert inc["status"] == "closed"
+
+
+async def test_web_attack_falls_back_to_the_loki_source_without_source_ip(make_env):
+    env = make_env(verify=[True])
+    env.net.loki_values = [waf_blocked_entry("203.0.113.50")] * 4 + [waf_blocked_entry("198.51.100.2")]
+    sub = await env.run(make_event("web_attack", service="waf", source_ip=None))
+    inc = env.incident(sub.incident_id)
+    assert env.action_types(sub.incident_id) == ["waf_blacklist_ip"]
+    assert env.runner.calls == [("waf_deny_ip.yml", {"deny_ip": "203.0.113.50", "deny_list": "permanent",
+                                                     "incident_id": sub.incident_id, "deny_until": ANY})]
+    assert inc["status"] == "closed"
+
+
+async def test_web_attack_from_an_unblockable_ip_is_closed_once_containment_is_proven(make_env):
+    # Docker Desktop sans mode IP réelle : l'attaquant a l'IP (protégée) de la passerelle. Pas de blocage
+    # possible, mais ModSecurity a bloqué (preuve Loki) et verify_tx passe -> clos, échec du blocage tracé.
+    env = make_env(verify=[True], settings=make_settings(never_block_ips=("172.30.0.0/24",)))
+    env.net.loki_values = [waf_blocked_entry("172.30.0.1")] * 5
+    sub = await env.run(make_event("web_attack", service="waf", source_ip=None))
+    inc = env.incident(sub.incident_id)
+    assert [(a["type"], a["result"]) for a in inc["actions"]] == [
+        ("waf_blacklist_ip", "failure"), ("confirm_waf_block", "success")]
+    assert "protégée" in inc["actions"][0]["detail"]
+    assert env.runner.calls == [] and inc["status"] == "closed"
+
+
+async def test_web_attack_without_any_blocked_event_escalates(make_env):
+    # Aucun blocage observé : rien ne prouve que l'attaque soit contenue -> pas de clôture.
+    env = make_env(table=make_table(cooldown=0, max_attempts=1), verify=[True])
+    env.net.loki_values = []
+    sub = await env.run(make_event("web_attack", service="waf", source_ip=None))
+    inc = env.incident(sub.incident_id)
+    assert inc["status"] == "escalated" and env.runner.calls == []
+    assert "aucun événement waf_blocked" in inc["actions"][0]["detail"]
+    assert "attaque non contenue" in inc["actions"][1]["detail"]

@@ -9,7 +9,7 @@ Le contrat §3 ne porte pas l'IP source : c'est une extension rétro-compatible
 from __future__ import annotations
 
 import ipaddress
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ConfigDict, field_validator
@@ -33,16 +33,16 @@ class IncomingEvent(AnomalyEvent):
     @property
     def detected_at(self) -> datetime:
         ts = self.ts
-        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
 
 
 def iso(dt: datetime) -> str:
     """ISO 8601 UTC avec millisecondes (format du contrat)."""
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def parse_iso(value: str) -> datetime:

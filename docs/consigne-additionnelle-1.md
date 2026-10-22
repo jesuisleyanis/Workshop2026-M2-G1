@@ -2,7 +2,7 @@
 
 **Source :** *Workshop 2026-27 / M2 — Consigne Additionnelle 1* (EPSI). Deux pages scannées, reçues le 2026-10-20.
 **Périmètre :** PC Hôte uniquement (celui qui délivre le PA `RESILIENCE-G1` et héberge la stack Docker). Données toujours fictives, Blue Team, périmètre offensif inchangé.
-**Statut :** cadrage figé — **backlog & suivi dans [`consigne-additionnelle-1-roadmap.md`](consigne-additionnelle-1-roadmap.md)**.
+**Statut :** cadrage figé, **mis à jour le 2026-10-20 pour l'intégration de bout en bout** (modèle de l'équipe, vivacité par poses, photos chiffrées, habilitations, LED MQTT réelle, listener hôte) — décisions : [ADR 0007](adr/0007-acces-hote-vivacite-poses-photos-chiffrees.md) ; design : [`superpowers/specs/2026-10-20-face-auth-integration-design.md`](superpowers/specs/2026-10-20-face-auth-integration-design.md). **Backlog & suivi dans [`consigne-additionnelle-1-roadmap.md`](consigne-additionnelle-1-roadmap.md)**.
 
 > Ce document est le **contrat de la consigne** : il reformule le besoin, trace chaque exigence vers un composant, acte les décisions d'architecture (ADR à créer), et spécifie le **delta** à appliquer à [`contracts.md`](contracts.md) (qui reste FIGÉ : la modification passe par la première tâche du backlog). Le `/avancer` et la skill `resilience-component` s'appliquent à chaque tâche.
 
@@ -36,9 +36,9 @@ Le tout tourne sur le **PC Hôte** : c'est lui qui porte la caméra, l'IA de rec
 
 ---
 
-## 3. Décisions de cadrage (ADR à créer)
+## 3. Décisions de cadrage (ADR)
 
-> À formaliser dans `docs/adr/0004…0006` (première tâche de chaque lot). Chaque décision liste l'alternative écartée.
+> Formalisées dans `docs/adr/0004…0006` ; l'intégration de bout en bout ajoute l'[ADR 0007](adr/0007-acces-hote-vivacite-poses-photos-chiffrees.md) (listener réservé à l'hôte, vivacité par poses, photos chiffrées). Chaque décision liste l'alternative écartée.
 
 ### D1 — Le « back-office » = nouvelle app `services/backoffice`, pas le front client *(ADR 0004)*
 Le `front` existant est l'**app client** de la banque fictive. La consigne vise un **back-office privilégié** (« gestion complète des habilitations »). **Décision :** créer une petite app React/Vite/TS/Tailwind `services/backoffice`, servie **derrière le WAF** sur une route/vhost dédiée, **gated par rôle** (`operator`/`admin`). Le backend (auth à étapes, face-id, LED) est **identique quel que soit l'hôte UI** : si l'équipe préfère greffer l'écran sur le `front` existant (option B), seul le lot L3 change, pas les autres.
@@ -47,6 +47,7 @@ Le `front` existant est l'**app client** de la banque fictive. La consigne vise 
 ### D2 — La caméra USB est lue **dans le navigateur de l'hôte** (`getUserMedia`), pas montée dans Docker *(ADR 0005)*
 Docker Desktop / WSL2 ne fait pas de passthrough USB fiable pour une webcam. Le back-office est **ouvert sur le PC Hôte** : `navigator.mediaDevices.getUserMedia()` accède donc à la **caméra USB de l'hôte**, satisfait l'exigence « caméra sur le PC Hôte », et envoie les **trames (JPEG base64)** au service `face-id` conteneurisé. La caméra n'est **active que pendant l'étape d'identification** et **éteinte** sitôt la phase terminée (exigence consigne + vie privée).
 *Alternative écartée :* agent de capture côté hôte (hors Docker) poussant vers face-id — composant Windows supplémentaire à maintenir, sans gain ici.
+**Complément (ADR 0007) :** pour que cette caméra soit *forcément* celle de l'hôte, `/api/v1/auth/*` et `/api/v1/admin/*` ne sont servis que par un **listener WAF dédié `127.0.0.1:9443`** (publié en loopback par Compose) ; le serveur public 80/443 répond 404 sur ces préfixes. Le back-office s'ouvre donc sur `https://localhost:9443`.
 
 ### D3 — Pilotage LED via **MQTT (Mosquitto)**, auth publie des **états sémantiques**, le firmware rend les motifs *(ADR 0006)*
 L'ESP est sur le hotspot `192.168.137.0/24` ; les conteneurs sont sur des réseaux Docker internes. Il faut **un point de rencontre réseau**. **Décision :** un broker **Mosquitto** durci, **bindé sur l'interface hotspot** (comme le WAF est le seul ingress HTTP, le broker est le seul ingress MQTT), authentifié (creds SOPS) + **ACL par topic**. `auth` **publie des états sémantiques** (`idle|recognized|auth_ok|auth_fail|not_recognized`) ; le **firmware** mappe chaque état vers son **motif + timing** (vert fixe 30 s, rouge ×10, etc.). La publication MQTT dans `auth` est **fail-open** : un broker injoignable n'empêche **jamais** la connexion (la LED est un indicateur, pas un facteur).
@@ -76,6 +77,8 @@ Le facteur visage + LED s'applique **au back-office** (accès privilégié), **e
 └───────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+> **Mise à jour (intégration) :** dans ce schéma, la route du back-office et celles de `auth` (`/api/v1/auth/*`, `/api/v1/admin/*`) passent par le **listener WAF `127.0.0.1:9443`** (hôte uniquement) et non par 80/443.
+
 **Composants nouveaux :** `services/face-id`, `services/backoffice`, `iot/esp8266-led`, broker `mosquitto`.
 **Composants modifiés :** `services/auth` (challenge à étapes, verrouillage, rôles, publication LED), `resilience_db` (table `face_enrollments` + colonne `role`), `infra/compose` + `infra/prometheus` + `security/*` + `docs/*`.
 
@@ -85,6 +88,8 @@ Le facteur visage + LED s'applique **au back-office** (accès privilégié), **e
 
 ### 5.1 Challenge d'authentification (`services/auth`)
 
+> **v2 (intégration) :** `identify` renvoie en plus `poses`, un **ordre aléatoire** des 3 poses (`face`, `gauche`, `droite`) tiré par le serveur à chaque appel ; `face` reçoit **3 frames dans cet ordre** (sinon échec). Voir [`contracts.md`](contracts.md) §5.2 pour les formes exactes.
+
 | État | Entrée | Transition | LED émise |
 |---|---|---|---|
 | `IDENTIFY` | identifiant saisi → `POST /auth/identify` | crée un `challenge_id`, caméra ON, step=`face` | `idle` (off) |
@@ -93,9 +98,18 @@ Le facteur visage + LED s'applique **au back-office** (accès privilégié), **e
 | `OK` | — | session ouverte, back-office disponible | `auth_ok` (vert fixe 30 s puis off) |
 | `LOCKED` | 2ᵉ échec d'accès dans le cycle | blocage **5 min** par `(username, source_ip)` ; `429 Retry-After` | `idle` |
 
+- **Refroidissements (v2, par poste = `client_ip`, imposés côté serveur) :**
+
+  | Cause | Délai | Effet |
+  |---|---|---|
+  | Visage refusé | **30 s** (`BACKOFFICE_REJECT_COOLDOWN`) | LED `not_recognized` (rouge fixe 30 s) ; `identify` renvoie `429 cooldown` + `Retry-After` ; la caméra du back-office **s'éteint à la fin des 30 s** ; identifiant vidé. |
+  | Mot de passe refusé | **3 s** (`BACKOFFICE_FAIL_COOLDOWN`) | LED `auth_fail` (rouge ×10 = 10 × 300 ms) ; `401` + `Retry-After: 3` ; retour à l'identification. |
+  | 2 échecs d'accès | **5 min** | verrouillage `(username, ip)` (inchangé). |
+
+  Le refroidissement est contrôlé à `identify` ; le verrouillage de 5 min reste contrôlé à chaque étape. Événements `auth_cooldown` / `auth_locked_out`.
 - **Anti-énumération :** un identifiant **inconnu** n'a **pas d'enrôlement** ⇒ `no-match`, donc chemin **identique** à « visage non reconnu ». `POST /auth/identify` renvoie **toujours** un `challenge_id` (ne révèle pas l'existence du compte).
 - **Verrouillage (CA4) :** compteur unifié d'**échecs d'accès** = `face no-match` **ou** `mot de passe erroné`. Seuil par défaut **2** (⇒ « 1 reprise »), puis **5 min**. Configurable (`BACKOFFICE_MAX_ATTEMPTS`, `BACKOFFICE_LOCKOUT_SECONDS`). Lecture littérale de la consigne (phase identification) documentée ; l'unification couvre aussi le brute-force mot de passe.
-- **Rejeu :** le `challenge_id` est **à usage unique par étape** (retiré atomiquement), TTL court (`BACKOFFICE_CHALLENGE_TTL`, défaut 60 s) — il ne peut être rejoué. La trame elle-même n'étant pas liée au challenge, une photo volée reste un risque (spoofing/liveness, §7).
+- **Rejeu :** le `challenge_id` est **à usage unique par étape** (retiré atomiquement), TTL court (`BACKOFFICE_CHALLENGE_TTL`, défaut 60 s) — il ne peut être rejoué. En v2, l'**ordre aléatoire des poses**, propre à chaque challenge, met en échec une **photo statique unique** ou une **vidéo enregistrée dans un ordre fixe** ; il **ne suffit pas** contre 3 poses capturées puis présentées (ou soumises) dans l'ordre affiché — résiduel détaillé au §7.
 - **Store :** en mémoire, par processus (cohérent avec le rate-limit auth existant — limite assumée §10 ; option Redis documentée).
 
 ### 5.2 LED bicolore (`iot/esp8266-led`) — rendu des états (CA7)
@@ -115,6 +129,8 @@ Le facteur visage + LED s'applique **au back-office** (accès privilégié), **e
 
 ## 6. Delta à appliquer à `contracts.md` (FIGÉ → via la tâche L0-1)
 
+> **Historique :** ce delta a été appliqué (L0-1) puis **remplacé par l'API v2** de [`contracts.md`](contracts.md) §5 (frames à 3 poses, enrôlement par pose, photos, admin, bootstrap, `device`). Les §6.3 à 6.6 ci-dessous décrivent la **v1** et sont conservés pour la traçabilité ; **`contracts.md` §5 fait foi**.
+
 ### 6.1 Nouveaux `event` réservés (§1) — à ajouter à `RESERVED_EVENTS`
 `auth` : `auth_identify_started`, `auth_face_recognized`, `auth_face_rejected`, `auth_locked_out`, `led_state_published`, `led_publish_failed`.
 `face-id` : `face_verify_match`, `face_verify_nomatch`, `face_verify_error`, `face_enrolled`, `face_enrollment_revoked`.
@@ -130,40 +146,41 @@ Le facteur visage + LED s'applique **au back-office** (accès privilégié), **e
 | `resilience_auth_lockouts_total` | counter | — | auth |
 | `resilience_led_publish_total` | counter | `state`, `result` (`ok`\|`error`) | auth |
 
-### 6.3 API `face-id` (interne, jamais sur `edge`)
+### 6.3 API `face-id` (interne, jamais sur `edge`) — *v1, remplacée par contracts.md §5.1*
 - `POST /api/v1/verify` — `{username, image_b64}` → `{match: bool, score: float, threshold: float, model_version: str}`. Appelé **uniquement par `auth`** (réseau `app`).
 - `POST /api/v1/enroll` — en-tête `X-Internal-Token` — `{username, images_b64: [...]}` → `{enrolled: bool, quality: float, model_version}`. Stocke **l'embedding seul**.
 - `DELETE /api/v1/enroll/{username}` — `X-Internal-Token` → `204`.
 - `GET /api/v1/enrollments` — `X-Internal-Token` → `[{username, enrolled_at, enrolled_by, model_version}]` — **aucune donnée biométrique renvoyée**.
 - `GET /health` · `GET /ready` (modèle chargé + DB) · `GET /metrics`.
 
-### 6.4 API d'authentification à étapes (`auth`, consommée par le back-office)
+### 6.4 API d'authentification à étapes (`auth`, consommée par le back-office) — *v1, remplacée par contracts.md §5.2 et §5.5*
 - `POST /api/v1/auth/identify` — `{username}` → `200 {challenge_id, step:"face", expires_in, camera:true}` ; `429 {retry_after}` si `LOCKED`. **Toujours 200** hors lockout (anti-énumération).
 - `POST /api/v1/auth/face` — `{challenge_id, image_b64}` → `200 {recognized, step:"password"|"identify", attempts_left}`.
 - `POST /api/v1/auth/password` — `{challenge_id, password}` → `200 {access_token, token_type, expires_in, role}` (si rôle privilégié) ; `401 {step:"identify"}` sinon.
 - `POST /api/v1/login` **conservé** pour comptes de service et front client (D4).
 
-### 6.5 Protocole LED (MQTT)
+### 6.5 Protocole LED (MQTT) — *toujours valable ; ajout v2 : `auth` lit aussi `resilience/led/status` (contracts.md §5.3)*
 - Broker : `mosquitto`, topics `resilience/led/cmd` (hôte→ESP, états §5.2), `resilience/led/status` (ESP→hôte, heartbeat + LWT). QoS 1.
 - Payload `cmd` : `{"state":"idle|recognized|auth_ok|auth_fail|not_recognized","ts":"<iso8601>","challenge_id":"<uuid|null>"}`.
 - Auth MQTT : user/mot de passe via SOPS ; **ACL** : `auth` publie `cmd` seul, l'ESP souscrit `cmd` + publie `status` seul ; `allow_anonymous false`.
 
-### 6.6 Modèle de données (`resilience_db`)
+### 6.6 Modèle de données (`resilience_db`) — *amendé : photos et gabarits chiffrés (contracts.md §5.4)*
 - `users.role` : `customer` (défaut) \| `operator` \| `admin`. Le back-office exige `operator`/`admin`.
-- Table `face_enrollments` : `user_id` (FK `users.id`, unique), `embedding` (BYTEA, **vecteur uniquement**), `model_version` (str), `enrolled_by` (str), `enrolled_at` (timestamptz). Migration Alembic dédiée.
+- Table `face_enrollments` : `user_id` (FK `users.id`, unique), `embedding` (BYTEA, ~~vecteur uniquement~~ **blob chiffré des 3 gabarits** depuis la migration `0009` (ex-`0003`), qui ajoute aussi `photos` chiffrées et `poses`), `model_version` (str), `enrolled_by` (str), `enrolled_at` (timestamptz). Migration Alembic dédiée.
 
 ---
 
 ## 7. Sécurité (points sondés par le jury)
 
-- **Donnée biométrique = sensible (RGPD).** On stocke **l'embedding** (vecteur), **jamais** l'image. Table sur réseau `data` interne, accès via `X-Internal-Token`, renvoi d'enrôlements **sans biométrie**. **Chiffrement au repos** de la colonne `embedding` recommandé (clé SOPS) — a minima porté en risque résiduel. Droit à l'effacement : `DELETE /enroll/{username}`.
+- **Donnée biométrique = sensible (RGPD) — règle amendée (ADR 0007).** ~~On stocke l'embedding, jamais l'image.~~ Le produit conserve, par habilité, **3 gabarits (vecteurs, un par pose) et 3 vignettes JPEG (~240 px, jamais l'image pleine résolution)**, tous **chiffrés au repos en AES-256-GCM** (clé `FACE_DATA_KEY` via SOPS, AAD = username, format versionné ; `face-id` refuse de démarrer sans clé valide). Motif : afficher les photos à l'administrateur et permettre le réenrôlement. Garde-fous : table sur réseau `data` interne, accès via `X-Internal-Token`, liste des enrôlements **sans biométrie**, consultation des photos réservée au rôle `admin` et **journalisée** (`face_photos_viewed`), aucune image/embedding/mot de passe/token dans un log, trames de vérification jamais persistées, **effacement total** (`DELETE /enroll/{username}`). **Décision à valider par l'équipe (Yanis)** ; perte de clé ⇒ réenrôlement (PCA/PRA §5.7). Résiduel : base + clé compromises ⇒ photos lisibles.
 - **Le visage n'est pas un bypass.** C'est un **facteur ajouté** : l'étape mot de passe + le **rôle privilégié** restent obligatoires. Un visage reconnu seul n'ouvre rien.
-- **Anti-spoofing / liveness.** Non exigé par la consigne mais **photo-d'une-photo** = angle d'attaque. Porté en **risque résiduel** + amélioration optionnelle (challenge de vivacité : clignement / mouvement). À documenter EBIOS.
-- **Rejeu & fraîcheur :** le `challenge_id` est à **usage unique par étape** (retiré atomiquement), TTL court — il ne peut être rejoué. En revanche, la **trame** n'étant pas liée au challenge, une photo/trame volée reste utilisable sur un nouveau challenge : c'est le **risque de spoofing** ci-dessous (absence de liveness), porté en risque résiduel EBIOS. Option : nonce/horodatage lié à la trame.
-- **Caméra :** active **uniquement** pendant l'étape identification, éteinte ensuite (consigne + vie privée).
+- **Anti-spoofing / liveness (v2).** Non exigé par la consigne, mais traité : la **vivacité par poses** (ADR 0007) impose 3 poses dans un **ordre aléatoire tiré par le serveur** à chaque `identify` ; chaque frame est validée en pose **et** en identité. Une **photo statique unique** ou une **vidéo à ordre fixe** ne passe plus. **Limite :** l'ordre est annoncé au client (réponse d'`identify`) et chaque frame porte son label de pose ; **3 photos imprimées (une par pose) montrées dans l'ordre affiché**, ou **3 trames capturées à l'avance et soumises dans cet ordre** par un client modifié sur l'hôte (listener loopback), passent la vivacité. Elle **relève le coût** de l'usurpation sans l'interdire ; le mot de passe reste exigé. **Résiduel assumé (EBIOS SO7) :** ces 3 poses rejouées dans l'ordre affiché, et le deepfake temps réel. **Pistes d'amélioration :** plus d'entropie de challenge (poses supplémentaires — haut/bas —, séquences de 4–5 étapes avec répétitions), contraintes temporelles côté serveur (délai maximal entre `identify` et `face`, intervalle minimal entre frames, frames horodatées par le serveur plutôt que par le client), détection de clignement (EAR) ou de micro-mouvements entre frames consécutives.
+- **Rejeu & fraîcheur :** le `challenge_id` est à **usage unique par étape** (retiré atomiquement), TTL court — il ne peut être rejoué. En v2, l'**ordre des poses est propre au challenge** : une séquence enregistrée telle quelle échoue dès que l'ordre tiré diffère (échec sans appel à face-id). Ce n'est **pas** une protection contre le rejeu de trames : leurs labels de pose permettent de réordonner 3 trames capturées pour coller à n'importe quel ordre (limite ci-dessus).
+- **Caméra :** active **uniquement** pendant l'étape identification, éteinte ensuite (consigne + vie privée) ; après un visage refusé, éteinte à la fin du refroidissement de 30 s.
+- **Surface d'administration.** `/api/v1/auth/*` et `/api/v1/admin/*` sont **absents du serveur public** (404 sur 80/443) et réservés au listener `127.0.0.1:9443`. Rôle `admin` revalidé en base à chaque appel ; garde-fou `last_admin` ; premier administrateur créé par un **token de bootstrap** (SOPS, temps constant, rate-limité, inactif dès qu'un admin enrôlé existe, refus d'un compte client existant).
 - **Broker MQTT = nouvelle surface.** Durci comme le WAF : `allow_anonymous false`, creds SOPS, **ACL par topic**, bind **sur l'interface hotspot seulement**, TLS (`8883`) optionnel documenté, conteneur durci (non-root, `cap_drop`, `read_only`, healthcheck). L'ESP valide la LWT.
 - **Anti-DoS d'accès légitime :** verrouillage **par `(username, ip)`** pour qu'un attaquant ne verrouille pas globalement un admin ; `/login` de service hors de ce chemin (D4).
-- **Secrets :** `MQTT_USERNAME/PASSWORD`, `FACE_INTERNAL_TOKEN`, éventuelle clé de chiffrement embedding → **SOPS**, jamais commités ; `gitleaks` couvre. Firmware : `secrets.h` depuis template, **gitignored** (SSID/PSK du PA, creds MQTT). **`FACE_INTERNAL_TOKEN` doit être identique sur `auth` ET `face-id`** (auth l'envoie à `/verify`, face-id l'exige) — sinon l'étape visage renvoie 503 ; `auth` émet un WARNING au démarrage s'il manque alors que le visage est requis.
+- **Secrets :** `MQTT_USERNAME/PASSWORD`, `FACE_INTERNAL_TOKEN`, **`FACE_DATA_KEY`** (clé AES-256 des gabarits et photos), `BACKOFFICE_BOOTSTRAP_TOKEN` → **SOPS**, jamais commités ; `gitleaks` couvre. Firmware : `secrets.h` depuis template, **gitignored** (SSID/PSK du PA, creds MQTT). **`FACE_INTERNAL_TOKEN` doit être identique sur `auth` ET `face-id`** (auth l'envoie à `/verify`, face-id l'exige) — sinon l'étape visage renvoie 503 ; `auth` émet un WARNING au démarrage s'il manque alors que le visage est requis.
 - **Signal de détection (option) :** une rafale de `auth_face_rejected` / `face_verify_nomatch` est un indice d'attaque — brancher sur la fonction SOC (règle Loki) ou une feature ML (hors vecteur figé : à discuter). Porté en opportunité, pas en exigence.
 
 ---
@@ -175,7 +192,7 @@ Ajouter un facteur biométrique dans un **chemin de connexion** crée un risque 
 1. **La boucle ZTR est indépendante** du visage/caméra/broker/ESP (D4). `verify_tx`, `seed`, détection et remédiation passent par `/login` de service. **Aucun** livrable noté (Axe 1, Clip Chrono) ne dépend de la caméra.
 2. **MQTT fail-open :** broker ou ESP injoignables ⇒ l'authentification continue (la LED n'est qu'un témoin). Événement `led_publish_failed` journalisé.
 3. **Indisponibilité du facteur visage :** si `face-id` est `down`, le back-office est inaccessible **par conception** (c'est un durcissement). Prévoir une **procédure break-glass** documentée (compte de service + `/login` + rôle, hors caméra) pour l'exploitation, tracée (PCA/PRA). Mode d'application **configurable** (`BACKOFFICE_FACE_REQUIRED`) pour les répétitions de démo.
-4. **PCA/PRA :** nouveau scénario « perte du facteur biométrique » (RTO court via break-glass), RPO biométrie = dernier enrôlement (réenrôlement possible).
+4. **PCA/PRA :** nouveau scénario « perte du facteur biométrique » (RTO court via break-glass), RPO biométrie = dernier enrôlement (réenrôlement possible) ; **perte de `FACE_DATA_KEY` ⇒ réenrôlement complet** (`docs/pca-pra.md` §5.7).
 
 ---
 
@@ -184,7 +201,7 @@ Ajouter un facteur biométrique dans un **chemin de connexion** crée un risque 
 | Élément | Choix / note |
 |---|---|
 | **Caméra USB** | Branchée sur le PC Hôte ; lue par le navigateur (D2). UVC standard. |
-| **IA reconnaissance** | « légère », CPU/WSL2. Recommandé : **InsightFace `buffalo_s` (ONNX Runtime CPU)** — embeddings 512-d, cosine ; repli **`face_recognition` (dlib, 128-d)** si l'install ONNX est pénible. Seuil calibré en recette. Modèle téléchargé au build (image épinglée, R5). |
+| **IA reconnaissance** | **Modèle de l'équipe** (notebook de Valentin, `ValentinFurcy/face_recognition`) : **`face_recognition` / dlib**, embeddings 128-d, distance euclidienne, seuil **≤ 0,6**, pose par rotation nez/mâchoire (0,10 / 0,15). Backend `team` de `face-id` (`num_jitters=5` à l'enrôlement, 1 au login) ; dlib est **compilé dans l'étage builder** de l'image Docker (non validé hors recette). `insightface` (ONNX, 512-d) reste disponible ; `stub` déterministe réservé aux tests (`ALLOW_STUB_RECOGNIZER=1`). Capture côté navigateur : marges **0,07 (face) / 0,22 (profil)** plus strictes que les seuils serveur (0,10 / 0,15), car MediaPipe et dlib mesurent le nez différemment — **à calibrer en recette**. |
 | **ESP8266** | Carte type NodeMCU/Wemos D1. **LED bicolore** rouge/vert (2 GPIO + résistances, ou LED 2 broches). WiFi sur le PA. |
 | **IDE firmware** | **JetBrains CLion + PlatformIO** (imposé). `platformio.ini` : env carte **+ env `native`** pour les tests unitaires de la machine à états (exécutables sur le poste de dev **sans matériel**). |
 | **Poste de dev** | Sans Docker/pip (venv `uv` 3.12 dans le scratchpad, cf. mémoire projet) : tout ce qui est **testable hors stack** (logique challenge, state machine firmware `native`, parseurs) doit l'être ; le reste (modèle réel, caméra, ESP physique, broker live) est validé **en recette** sur le PC Hôte. |
@@ -194,11 +211,12 @@ Ajouter un facteur biométrique dans un **chemin de connexion** crée un risque 
 ## 10. Hors périmètre / limites assumées
 
 - Store de challenge/lockout **en mémoire par processus** (comme le rate-limit actuel) — Redis = montée en charge documentée.
-- **Pas de liveness** v1 (porté en risque résiduel + option).
+- **Vivacité limitée aux poses aléatoires** (pas d'anti-deepfake, de clignement ni de détection de profondeur) : 3 poses rejouées / photos présentées dans l'ordre affiché passent — résiduel EBIOS SO7 (pistes : entropie du challenge, contraintes temporelles, clignement ; §7).
 - Reconnaissance **1:1** (vérification identifiant↔visage), **pas** d'identification 1:N.
 - Un seul ESP8266 / une seule LED (poste d'accueil du back-office).
 - Broker MQTT **en clair** acceptable en labo (TLS optionnel documenté), bindé hotspot seulement.
 - Back-office = périmètre **habilitations + login durci** ; pas de refonte des écrans métier.
+- **Non validé en recette à ce jour** : caméra réelle, build Docker de dlib et modèle réel, ESP8266 physique, broker live, calibrage des marges de capture (cf. roadmap, statuts 🟨).
 
 ---
 
@@ -211,7 +229,7 @@ Chacun est couvert par au moins un test (cf. backlog pour le mapping fin).
 | G1 | Saisie identifiant → caméra ON → étape visage, **avant** tout mot de passe | e2e back-office + test auth (ordre des étapes imposé) |
 | G2 | Visage reconnu ⇒ mot de passe débloqué ; non reconnu ⇒ identifiant vidé + caméra OFF | test auth challenge + e2e (fake recognizer) |
 | G3 | **1 reprise** puis **blocage 5 min** par `(username, ip)` | test auth lockout + anti-énumération |
-| G4 | `face-id` : match/no-match sur embedding, **jamais** d'image stockée/renvoyée | tests face-id (stub déterministe) + contrôle « no biometric leak » |
+| G4 | `face-id` : match/no-match par séquence de 3 poses ; gabarits et vignettes **chiffrés** (jamais d'image pleine résolution, jamais de biométrie dans la liste ni les logs) | tests face-id (stub déterministe, chiffrement, photos auditées) + contrôle « no biometric leak » |
 | G5 | Habilitations : enrôlement/révocation + rôles, gated back-office | tests face-id enroll + vitest back-office + test rôle auth |
 | G6 | LED : les **5 états** rendus conformément à §5.2 (timings inclus) | tests firmware `native` (machine à états) |
 | G7 | Pilotage LED de bout en bout, **fail-open** si broker down | test auth publication MQTT (mock) + recette broker live |

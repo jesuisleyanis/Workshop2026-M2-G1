@@ -36,7 +36,7 @@ Tous les services (payment-api, auth, remediation, detector, collector) émetten
 | Champ | Quand | Description |
 |---|---|---|
 | `user` | requêtes authentifiées | Identifiant de l'utilisateur (jamais le mot de passe) |
-| `client_ip` | requêtes HTTP entrantes | IP source (telle que vue derrière le WAF, via `X-Forwarded-For`) |
+| `client_ip` | requêtes HTTP entrantes | IP source (telle que vue derrière le WAF, via `X-Forwarded-For`, en-tête cru **seulement** si le pair TCP est un proxy de confiance `TRUSTED_PROXIES` ; sinon IP du pair) |
 | `http_method` | requêtes HTTP | `GET`, `POST`… |
 | `http_path` | requêtes HTTP | `/transactions` |
 | `http_status` | réponses HTTP | `200`, `401`, `500` |
@@ -63,12 +63,20 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `led_publish_failed` | auth | Publication LED impossible (broker injoignable — fail-open) |
 | `face_verify_match` | face-id | Vérification 1:1 : le visage correspond à l'identifiant |
 | `face_verify_nomatch` | face-id | Vérification 1:1 : le visage ne correspond pas |
-| `face_verify_error` | face-id | Erreur de vérification (image illisible, aucun visage détecté) |
-| `face_enrolled` | face-id | Enrôlement d'un visage (embedding stocké, jamais l'image) |
+| `face_verify_error` | face-id | Traitement impossible : vérification impossible (gabarit d'un autre modèle, gabarit ou photos illisibles), erreur interne du modèle |
+| `face_enrolled` | face-id | Enrôlement d'un visage (gabarits et vignettes stockés **chiffrés**, jamais l'image pleine résolution ni dans un log) |
 | `face_enrollment_revoked` | face-id | Révocation d'un enrôlement (droit à l'effacement) |
+| `auth_cooldown` | auth | Refroidissement actif après un refus (visage 30 s, mot de passe 3 s) |
+| `admin_user_created` | auth | Back-office : création d'un compte par un administrateur |
+| `admin_role_changed` | auth | Back-office : changement de rôle d'un compte |
+| `admin_face_enrolled` | auth | Back-office : enrôlement du visage d'un compte par un administrateur |
+| `admin_face_revoked` | auth | Back-office : révocation de l'enrôlement d'un compte par un administrateur |
+| `backoffice_bootstrap` | auth | Création du premier administrateur du back-office au démarrage |
+| `face_photos_viewed` | face-id | Consultation (par un administrateur) des photos d'enrôlement d'un compte |
+| `face_enrollment_rejected` | face-id | Enrôlement refusé (pose manquante ou incorrecte, visages multiples, aucun visage) |
 | `transaction_created` | payment-api | Virement fictif accepté |
 | `transaction_rejected` | payment-api | Virement refusé (solde, validation) |
-| `db_error` | payment-api | Erreur base de données |
+| `db_error` | payment-api, face-id | Erreur base de données (face-id : readiness KO, erreur SQL non gérée) |
 | `beneficiary_added` | payment-api | Bénéficiaire enregistré (#43) — piste d'audit d'un ajout de compte mule après vol de session |
 | `beneficiary_removed` | payment-api | Bénéficiaire supprimé (#43) |
 | `card_frozen` | payment-api | Carte gelée par son titulaire (#47) — un seul événement par changement d'état |
@@ -91,12 +99,16 @@ Ces noms sont **réservés** et alimentent les règles d'alerte Loki (fonction S
 | `remediation_action` | remediation | Action unitaire exécutée |
 | `remediation_verified` | remediation | `verify_tx` repassé OK après action |
 | `remediation_failed` | remediation | Échec / escalade |
+| `remediation_manual_action` | remediation | Action confirmée par un opérateur (`POST /manual-actions`, incident `manual_action`) |
 | `assistant_index_built` | assistant | Index RAG (re)construit |
-| `assistant_index_empty` | assistant | Aucune source trouvée : index RAG vide |
-| `assistant_store_error` | assistant | Vector store (Chroma) non chargé / en erreur |
+| `assistant_index_empty` | assistant | Indexation sans aucune source : index vide |
+| `assistant_store_error` | assistant | Chroma non chargé (volume absent/illisible) — `/ready` en 503 |
+| `assistant_http_request` | assistant | Requête HTTP traitée (hors sondes et `/metrics`) |
 | `assistant_question_answered` | assistant | Réponse fournie à une question opérateur |
+| `assistant_incident_summarized` | assistant | Résumé d'incident produit (`/summarize`) |
+| `assistant_postmortem_generated` | assistant | Post-mortem Markdown produit (`/postmortem`) |
+| `assistant_action_proposed` | assistant | Commande traduite en proposition (`/propose`) — jamais exécutée |
 | `assistant_llm_unavailable` | assistant | Ollama injoignable — mode dégradé (lecture seule) |
-| `assistant_http_request` | assistant | Trace d'une requête HTTP sortante de l'assistant |
 
 ### Exemple
 
@@ -141,9 +153,13 @@ Chaque service Python expose `/metrics` via `prometheus-fastapi-instrumentator`.
 
 Infrastructure complémentaire scrappée par Prometheus : **cAdvisor** (CPU/RAM par conteneur) et **postgres-exporter** (santé DB).
 
-### Vecteur de features consommé par le ML (fenêtre de 15 s)
+### Vecteur de features consommé par le ML (fenêtre de 5 s, un vecteur par seconde)
 
-Le `collector` interroge l'API Prometheus et construit ce vecteur ordonné (voir `ml/shared/features.py` comme source de vérité) :
+Le `collector` interroge l'API Prometheus chaque seconde (`COLLECT_INTERVAL_SECONDS=1`, `rate(...[5s])`,
+`PROM_RATE_WINDOW=5s` ; les services sont scrapés à 1 s) et construit ce vecteur ordonné. Le detector le reçoit dès
+sa collecte (attente longue `GET /api/v1/features?after=<seq>&wait=5`) et confirme une anomalie sur 2 vecteurs
+consécutifs au-dessus du seuil calibré, ou 1 seul au-dessus du seuil haut. Changer ces fenêtres impose de recapturer
+et recalibrer le modèle. Ordre (voir `ml/shared/features.py` comme source de vérité) :
 
 ```
 [ req_per_s, p95_latency_ms, ratio_4xx, ratio_5xx,
@@ -182,9 +198,18 @@ Le `detector` émet cet objet JSON vers le moteur de remédiation (HTTP `POST /e
   "evidence": {
     "prometheus_query": "rate(resilience_http_requests_total[1m])",
     "loki_query": "{service=\"payment-api\"} |= \"http_status\""
-  }
+  },
+  "source_ip": "192.168.137.42"
 }
 ```
+
+**`source_ip` (champ additif, optionnel)** : IP qui domine les logs d'accès du WAF (Loki, `client_ip`) sur les
+30 dernières secondes, filtrés selon le type (flood : toutes les requêtes ; `auth_abuse` : logins en 401/429 ;
+`web_attack` : 403). Renseignée par le detector seulement si elle pèse ≥ 60 % des lignes (et ≥ 5 lignes) ; absente
+(`null`) sinon, et toujours pour `data_corruption` / `unknown`. Une seule IP littérale validée, en forme canonique
+(IPv4-mappée `::ffff:a.b.c.d` repliée sur `a.b.c.d`), jamais de nom ni de
+réseau). Elle est la cible des actions `source: "from_event"` (`waf_block_ip`, `waf_blacklist_ip`) ; sans elle, ces
+actions échouent proprement et l'action suivante de la règle s'exécute. Rétro-compatible : `schema_version` inchangée.
 
 ### `incident_type` (énumération figée)
 
@@ -197,6 +222,8 @@ Ces valeurs font le **pont entre la détection et la table de décision**. Class
 | `web_attack` | `waf_blocked_per_s` ↑ | confirmation blocage + blacklist source |
 | `data_corruption` | `db_errors_per_s` ↑ + `verify_tx` KO | restauration dernier dump Postgres |
 | `unknown` | anomalie sans signature claire | escalade + dry-run, pas d'action destructive |
+
+> **`manual_action` (hors énumération, volontairement) :** type d'incident du **journal du moteur** (trames SSE, `GET /incidents`, export pour l'assistant) pour une action confirmée par un opérateur (`POST /manual-actions`, section « Conventions d'API REST »). Il n'est **pas** ajouté à l'énumération ci-dessus : le detector ne l'émet jamais, un `AnomalyEvent` `manual_action` reste refusé (422) et la table de décision n'a pas de règle pour lui. Les consommateurs du journal (dashboard, assistant) l'acceptent tel quel, sans le ramener à `null` ni à `unknown`.
 
 > **Distinction imposée par le sujet (§2, §3.4) :** restauration de *disponibilité* (`service_flood`) ≠ correction d'une *compromission / corruption* (`data_corruption`). Ne jamais mapper l'un sur l'autre.
 
@@ -216,6 +243,7 @@ defaults:
 
 rules:
   - incident_type: service_flood
+    verify_first: true          # disponibilité : flood déjà écrêté par le WAF -> pas de restart
     actions:
       - { type: waf_block_ip,     params: { source: "from_event" } }
       - { type: restart_service,  params: { service: "payment-api" } }
@@ -229,10 +257,10 @@ rules:
     verify: verify_tx
     escalation: notify_operator
 
-  - incident_type: web_attack
+  - incident_type: web_attack     # compromission tentée : pas de verify_first
     actions:
-      - { type: confirm_waf_block, params: {} }
-      - { type: waf_blacklist_ip,  params: { source: "from_event" } }
+      - { type: waf_blacklist_ip,  params: { source: "from_event_or_loki" } }
+      - { type: confirm_waf_block, params: { require: true } }
     verify: verify_tx
     escalation: notify_operator
 
@@ -249,16 +277,41 @@ rules:
     escalation: notify_operator
 ```
 
+**`verify_first` (booléen optionnel, défaut `false`)** : `verify_tx` est joué AVANT toute action ; s'il passe,
+l'attaque est contenue par les protections préventives (limitation de débit du WAF) et l'incident est clos sans
+action modifiante. Réservé à la **restauration de disponibilité** : activé pour `service_flood` seulement (sinon :
+redémarrages en boucle pendant un flood déjà écrêté — 12 en 20 min le 21/10). **Jamais** pour une compromission ou
+une corruption : `data_corruption` ne se « contient » pas, et pour `web_attack` ModSecurity renvoie déjà 403, donc
+`verify_tx` passerait d'emblée et l'attaquant ne serait **jamais** bloqué (décision du 22/10 ; CLAUDE.md :
+disponibilité ≠ compromission).
+
+Paramètre `source` des actions de blocage IP :
+- `from_event` : champ additif `source_ip` de l'événement (§3, IP dominante des logs WAF désignée par le detector) ;
+- `from_loki` : source la plus fréquente des événements `waf_blocked` des 120 dernières secondes (Loki
+  `{service="waf-exporter", event="waf_blocked"}`, `client_ip` = adresse client vue par ModSecurity, jamais un
+  en-tête non approuvé) ;
+- `from_event_or_loki` : `source_ip` si l'événement en porte une, sinon `from_loki` (règle `web_attack`) ;
+- une IP littérale.
+
+Dans tous les cas, garde-fou `NEVER_BLOCK_IPS` (IP **et** plages CIDR : réseaux `edge` et `app` entiers, dont la
+passerelle d'`edge` par laquelle Docker Desktop fait entrer tous les clients externes) + loopback/non
+spécifiée/multicast. Une IP non bloquable fait échouer l'action, pas la règle : l'action suivante s'exécute.
+
+Règle `web_attack` : `waf_blacklist_ip(from_event_or_loki)` puis `confirm_waf_block(require: true)`. Blocage
+réussi → `verify_tx` → clos. IP introuvable ou protégée → la preuve Loki que le WAF a bloqué (dernière action)
+déclenche `verify_tx` → clos, l'échec du blocage restant tracé. Aucun blocage observé → `confirm_waf_block` échoue
+(rien ne prouve que l'attaque soit contenue) → nouvelle tentative puis escalade.
+
 ### Catalogue d'actions (implémentées dans `remediation/actions/`)
 
 | `type` | Mécanisme | Privilège requis |
 |---|---|---|
 | `restart_service` | Docker API (via docker-socket-proxy, verbe limité) | restart conteneur |
 | `recreate_service` | Docker API depuis image saine | create/remove conteneur |
-| `waf_block_ip` / `waf_blacklist_ip` | Ansible → reload Nginx (fichier de deny) | écriture conf WAF + reload |
+| `waf_block_ip` / `waf_blacklist_ip` | Ansible → reload Nginx (fichier de deny). Ligne `<ip> 1; # until=<epoch>` : échéance `REMEDIATION_WAF_BLOCK_TTL_S` (défaut 3600 s, `0` = permanent ; ligne sans `until=` = permanente). Le moteur purge les lignes échues et recharge le WAF | écriture conf WAF + reload |
 | `tighten_rate_limit` | appel API interne du service auth | aucun (API applicative) |
 | `restore_pg_dump` | Ansible → `pg_restore` depuis backup planifié | accès réseau `data` |
-| `confirm_waf_block` | lecture logs, pas d'action | aucun |
+| `confirm_waf_block` | lecture logs Loki (`{service="waf-exporter", event="waf_blocked"}`), pas d'action ; `require: true` = échec si aucun blocage observé | lecture Loki (réseau `obs`) |
 | `dry_run_report` | journalisation seule | aucun |
 | `notify_operator` | webhook dashboard / log `remediation_failed` | aucun |
 
@@ -270,49 +323,55 @@ rules:
 
 > Cadrage complet : [`consigne-additionnelle-1.md`](consigne-additionnelle-1.md). Ces interfaces ne concernent que l'**accès privilégié** du back-office ; la boucle Zero-Touch Recovery (`verify_tx`, détection, remédiation) n'en dépend jamais.
 
-### 5.1 API `face-id` (interne, réseau `app`, jamais sur `edge`)
+### 5.1 API `face-id` v2 (interne, réseau `app`, jamais sur `edge`)
 
-Reconnaissance **1:1** (vérification identifiant ↔ visage). Stocke **l'embedding** (vecteur), **jamais l'image**.
+Reconnaissance **1:1** (vérification identifiant ↔ visage) par **séquence de 3 poses** (`face`, `gauche`, `droite` — clés exactes). Modèle de l'équipe (`face_recognition`/dlib, 128-d, distance euclidienne, seuil **≤ 0,6**), backend `team`. Pose : `|rotation| ≤ 0,10` = face, `rotation ≥ 0,15` = gauche, `rotation ≤ −0,15` = droite. Détail : [ADR 0007](adr/0007-acces-hote-vivacite-poses-photos-chiffrees.md), [`services/face-id/README.md`](../services/face-id/README.md).
 
 | Méthode & chemin | Auth | Description |
 |---|---|---|
-| `POST /api/v1/verify` | `X-Internal-Token` (réseau interne) | `{username, image_b64}` → `{match: bool, model_version: str}`. Appelé **uniquement par `auth`**. Le `score` n'est **pas** renvoyé (anti hill-climbing) ; il reste dans les logs/métriques. |
-| `POST /api/v1/enroll` | `X-Internal-Token` | `{username, images_b64: [...]}` → `{enrolled: bool, quality: float, model_version}`. |
-| `DELETE /api/v1/enroll/{username}` | `X-Internal-Token` | `204`. Droit à l'effacement. |
-| `GET /api/v1/enrollments` | `X-Internal-Token` | `[{username, enrolled_at, enrolled_by, model_version}]` — **aucune donnée biométrique**. |
-| `GET /health` · `GET /ready` · `GET /metrics` | — | `/ready` = modèle chargé + DB joignable. |
+| `POST /api/v1/verify` | `X-Internal-Token` | `{username, frames:[{pose, image_b64}]×3}` (trois poses **distinctes**) → `{match: bool, model_version}`. Match ssi **chaque** frame montre la pose annoncée **et** une distance ≤ seuil vs le gabarit enrôlé de cette pose. Ni `score` ni motif d'échec dans la réponse (anti hill-climbing, anti-oracle) : le motif reste dans les logs. Utilisateur non enrôlé ≡ no-match. Appelé **uniquement par `auth`**. |
+| `POST /api/v1/enroll` | `X-Internal-Token` | `{username, enrolled_by, poses:{face, gauche, droite}}` (images base64) → `200 {enrolled, model_version, poses}`. Une pose KO ⇒ **toute la série est refusée** : `422 {error:{code:"enrollment_rejected", details:[{pose, reason}]}}`, `reason ∈ no_face \| multiple_faces \| wrong_pose \| inconsistent \| missing \| invalid_image` ; `404 unknown_user`. |
+| `GET /api/v1/enrollments/{username}/photos?viewer=<admin>` | `X-Internal-Token` | Vignettes JPEG (~240 px) **déchiffrées** `{photos:{pose: b64}}` pour l'administrateur ; journalise `face_photos_viewed` (qui a consulté les photos de qui). `404 not_enrolled`. |
+| `DELETE /api/v1/enroll/{username}` | `X-Internal-Token` | `204`. Droit à l'effacement : suppression **complète** (gabarits + photos). |
+| `GET /api/v1/enrollments` | `X-Internal-Token` | `[{username, enrolled_at, enrolled_by, model_version, poses, usable}]` — **aucune donnée biométrique**. `usable: bool` = la ligne est vérifiable par le modèle chargé (`model_version` égal au `model_version` courant du recognizer **et** vignettes chiffrées présentes, donc format v2). `false` (changement de modèle, ligne v1) ⇒ toute vérification échoue, **réenrôlement requis** ; `auth` ne compte alors **pas** la ligne comme un enrôlement. |
+| `GET /health` · `GET /ready` · `GET /metrics` | — | `/ready` = modèle chargé + DB joignable. Le service **refuse de démarrer** si `FACE_DATA_KEY` est absente ou invalide. |
+
+Les erreurs suivent le format des conventions d'API (`{error:{code, message}}`). Un enrôlement issu d'un autre modèle (`model_version` différent, ou ligne v1 non scellée) n'est pas comparable : la vérification journalise `face_verify_error` et le **réenrôlement** est requis.
 
 ### 5.2 API d'authentification à étapes (`auth`, consommée par le back-office)
 
-Machine à états : `IDENTIFY → FACE → PASSWORD → OK` (détail et verrouillage : cadrage §5.1).
+Machine à états : `IDENTIFY → FACE → PASSWORD → OK` (détail, verrouillage et refroidissements : cadrage §5.1). **Ces routes (et §5.5) ne sont servies que par le listener hôte `127.0.0.1:9443` du WAF ; elles répondent 404 sur 80/443** (ADR 0007 ; seule `POST /api/v1/auth/step-up` du front, §6, reste publique).
 
 | Méthode & chemin | Description |
 |---|---|
-| `POST /api/v1/auth/identify` | `{username}` → `200 {challenge_id, step:"face", expires_in, camera:true}` ; `429 {retry_after}` si bloqué. **Toujours 200** hors blocage (anti-énumération). |
-| `POST /api/v1/auth/face` | `{challenge_id, image_b64}` → `200 {recognized, step:"password"\|"identify", attempts_left}`. |
-| `POST /api/v1/auth/password` | `{challenge_id, password}` → `200 {access_token, token_type, expires_in, role}` (rôle privilégié) ; `401 {step:"identify"}` sinon. |
-| `POST /api/v1/login` | **Conservé** : comptes de service (`verify_tx`, `seed`) et front client. Hors facteur visage. |
+| `POST /api/v1/auth/identify` | `{username}` → `200 {challenge_id, step:"face", expires_in, camera:true, poses:[3 poses]}`. `poses` est une **permutation aléatoire** (CSPRNG serveur) de `face`/`gauche`/`droite`, tirée à **chaque** `identify` et mémorisée dans le challenge (vivacité). `429` si bloqué (`locked_out`) ou en refroidissement (`cooldown`), toujours avec `Retry-After`. **Toujours 200** hors blocage/refroidissement (anti-énumération). Mode dégradé `BACKOFFICE_FACE_REQUIRED=false` : `step:"password"`, `poses:[]`, `camera:false`. |
+| `POST /api/v1/auth/face` | `{challenge_id, frames:[{pose, image_b64}]×3}` → `200 {recognized, step:"password"\|"identify", attempts_left, cooldown}`. **L'ordre des frames doit être celui du challenge**, sinon échec (face-id n'est alors pas appelé). Plafond 800 000 car. base64 (~600 Ko) par frame. Non reconnu ⇒ `cooldown: 30`. `503 face_service_unavailable` si face-id est injoignable. |
+| `POST /api/v1/auth/password` | `{challenge_id, password}` → `200 {access_token, token_type, expires_in, role}` (rôle privilégié) ; `401 invalid_credentials` + `Retry-After: 3` (refroidissement) ; `403 role_not_authorized` ; `409 wrong_step`. |
+| `GET /api/v1/auth/device` | → `{led_online: bool \| null}` : dernier statut MQTT (LWT/heartbeat) du module LED ; `null` si inconnu, LED simulée, ou lien `auth`↔broker perdu/refusé (un `true` d'avant la coupure n'est jamais présenté comme courant). Sans authentification (booléen seul). |
+| `POST /api/v1/login` | **Conservé** : comptes de service (`verify_tx`, `seed`) et front client. Hors facteur visage, **hors listener hôte** (sert sur 80/443). |
 
-Verrouillage (consigne CA4) : quota d'échecs d'accès par `(username, source_ip)` — défaut **2** tentatives (« 1 reprise ») puis **5 min** (`BACKOFFICE_MAX_ATTEMPTS`, `BACKOFFICE_LOCKOUT_SECONDS`). `challenge_id` à usage unique, TTL court (`BACKOFFICE_CHALLENGE_TTL`, défaut 60 s).
+Identifiant du back-office **insensible à la casse** (`louis` atteint le compte `Louis`) : `identify` résout le nom canonique stocké (transmis à face-id et à l'étape mot de passe), verrouillage et journaux sont indexés sur le nom replié en minuscules, et la création/le bootstrap refusent un doublon de casse ; `POST /api/v1/login` reste sensible à la casse.
+
+Verrouillage (consigne CA4) : quota d'échecs d'accès par `(username, source_ip)` — défaut **2** (« 1 reprise ») puis **5 min** (`BACKOFFICE_MAX_ATTEMPTS`, `BACKOFFICE_LOCKOUT_SECONDS`). Refroidissements **par poste** (`client_ip`), imposés côté serveur : visage refusé **30 s** (`BACKOFFICE_REJECT_COOLDOWN`), mot de passe refusé **3 s** (`BACKOFFICE_FAIL_COOLDOWN`) ; `identify` renvoie `429 cooldown` + `Retry-After` pendant ce délai (événement `auth_cooldown`). `challenge_id` à usage unique, TTL court (`BACKOFFICE_CHALLENGE_TTL`, défaut 60 s ; **120 s** dans le Compose : chargement à froid de MediaPipe + 3 maintiens de pose).
 
 ### 5.3 Protocole LED (MQTT)
 
-Broker **Mosquitto** durci (`allow_anonymous false`, creds SOPS, **ACL par topic**, bind interface hotspot). `auth` publie des **états sémantiques** ; le firmware ESP8266 rend les **motifs + timings**.
+Broker **Mosquitto** durci (`allow_anonymous false`, creds SOPS, **ACL par topic**, bind interface hotspot `MQTT_BIND_ADDR`, défaut `192.168.137.1` ; service Compose du profil `iot`, levé par `make up-iot`). `auth` publie des **états sémantiques** (`MqttLedNotifier`, QoS 1, `connect_async` + reconnexion automatique, publication non bloquante) ; le firmware ESP8266 rend les **motifs + timings**.
 
 | Topic | Sens | Payload |
 |---|---|---|
 | `resilience/led/cmd` | hôte → ESP | `{"state":"idle\|recognized\|auth_ok\|auth_fail\|not_recognized","ts":"<iso8601>","challenge_id":"<uuid\|null>"}` |
-| `resilience/led/status` | ESP → hôte | heartbeat + **LWT** (disponibilité de l'objet) |
+| `resilience/led/status` | ESP → hôte | heartbeat (retained) + **LWT** `{"online": false}` ; **lu par `auth`** (ACL `read`) pour `GET /api/v1/auth/device` |
 
 | État | Motif LED (rendu firmware) | Durée |
 |---|---|---|
 | `idle` | éteinte (défaut) | — |
 | `recognized` | vert clignotant | jusqu'à l'état suivant |
 | `auth_ok` | vert fixe | 30 s → éteinte |
-| `auth_fail` | rouge clignotant ×10 | → éteinte |
-| `not_recognized` | rouge fixe | 30 s → éteinte |
+| `auth_fail` | rouge clignotant ×10 (10 × 300 ms ≈ 3 s) | → éteinte |
+| `not_recognized` | rouge fixe | 30 s → éteinte (la caméra du back-office est éteinte à la fin des 30 s) |
 
-La publication MQTT est **fail-open** : un broker injoignable n'empêche jamais la connexion (événement `led_publish_failed`).
+La publication MQTT est **fail-open** : un broker injoignable n'empêche jamais la connexion (événement `led_publish_failed`, métrique `resilience_led_publish_total{state,result}`). Sans `MQTT_HOST`, `auth` retombe sur un notifieur qui journalise seulement.
 
 L'ESP8266 expose aussi trois commandes directes sur son adresse du PA. Elles exigent
 HTTP Basic (`LED_HTTP_USERNAME`/`LED_HTTP_PASSWORD` dans le firmware), ne prennent pas
@@ -327,10 +386,40 @@ de corps et répondent `204` après déclenchement :
 Ces commandes passent par la même machine à états que MQTT. Le service `auth` utilise
 le contrat MQTT ; l'API HTTP est une commande directe de l'objet sur le réseau du PA.
 
-### 5.4 Modèle de données (`resilience_db`)
+### 5.4 Modèle de données (`resilience_db`) et traitement des données biométriques
 
 - `users.role` : `customer` (défaut) | `operator` | `admin`. Le back-office exige `operator`/`admin`.
-- Table `face_enrollments` : `user_id` (FK `users.id`, **unique**), `embedding` (BYTEA — **vecteur uniquement, jamais l'image**), `model_version` (str), `enrolled_by` (str), `enrolled_at` (timestamptz).
+- Table `face_enrollments` (migrations `0002` + `0009`) : `user_id` (FK `users.id`, **unique**), `embedding` (BYTEA — **blob chiffré** des 3 gabarits, un par pose), `photos` (BYTEA, nullable — **blob chiffré** des 3 vignettes JPEG ~240 px), `poses` (str, ex. `face,gauche,droite`), `model_version`, `enrolled_by`, `enrolled_at`. Les enrôlements v1 (non chiffrés, sans photos) sont **invalidés** : réenrôlement requis, détecté par `model_version`.
+- **Chiffrement au repos** : AES-256-GCM, nonce 96 bits, format versionné `v1 | nonce | ciphertext+tag`, clé `FACE_DATA_KEY` (base64 de 32 octets, SOPS), **AAD = `username|templates` / `username|photos`** : un blob recopié sur une autre ligne ne se déchiffre pas. Seule la couche `face-id` détient la clé.
+- **Amendement de la règle « jamais d'image stockée »** (versions antérieures du contrat et du cadrage §7) : le produit conserve désormais, pour chaque habilité, les **3 gabarits et 3 vignettes (≤ 240 px, jamais l'image pleine résolution), chiffrés**, afin de permettre l'affichage administrateur (`face_photos_viewed` journalisé) et le réenrôlement. Justification, limites et **validation attendue de l'équipe (Yanis)** : ADR 0007. Aucune image, aucun embedding, aucun mot de passe ni token ne figure dans un log.
+- Perte de `FACE_DATA_KEY` ⇒ gabarits et photos **illisibles** : réenrôlement complet des agents (cf. `docs/pca-pra.md` §5.7). Droit à l'effacement : `DELETE /api/v1/enroll/{username}` (ou `DELETE /api/v1/admin/users/{u}/face`) supprime la ligne entière.
+
+### 5.5 API d'administration et d'initialisation (`auth`, listener hôte uniquement)
+
+Réservée au rôle `admin` (`Authorization: Bearer`, JWT émis par l'étape mot de passe ; le rôle est **revalidé en base** à chaque appel). Servie sur `127.0.0.1:9443` ; 404 sur 80/443.
+
+| Méthode & chemin | Description |
+|---|---|
+| `GET /api/v1/admin/users` | `[{username, role, enrolled, stale, enrolled_at, enrolled_by}]` : `enrolled` = enrôlement **utilisable** (`usable` côté face-id) ; `stale` = ligne présente mais inutilisable (« Réenrôlement requis » dans le back-office) ; `enrolled_at`/`enrolled_by` renseignés dès qu'une ligne existe. |
+| `POST /api/v1/admin/users` | `{username, password, role}` → `201 {username, role}` (compte du back-office, **sans compte bancaire**) ; `409 username_taken`. |
+| `PATCH /api/v1/admin/users/{u}` | `{role}` → `200 {username, role}` ; `404 unknown_user` ; `409 last_admin`. |
+| `PUT /api/v1/admin/users/{u}/face` | `{poses:{face, gauche, droite}}` → `200 {enrolled, model_version}` ; relai `enroll` avec `enrolled_by = sub` ; `422 enrollment_rejected` (+ `details` par pose). |
+| `DELETE /api/v1/admin/users/{u}/face` | `204` ; `404 not_enrolled` ; `409 last_admin`. |
+| `GET /api/v1/admin/users/{u}/face/photos` | `{photos:{pose: b64}}` ; consultation journalisée côté face-id (`face_photos_viewed`). |
+| `GET /api/v1/auth/bootstrap` | `{required: bool}` — vrai seulement si `BACKOFFICE_BOOTSTRAP_TOKEN` est configuré **et** qu'aucun admin n'a d'enrôlement **utilisable** (des lignes périmées après un changement de modèle ne comptent pas). |
+| `POST /api/v1/auth/bootstrap` | `{token, username, password, poses}` → `201 {username, role:"admin"}` : crée (ou met à jour un compte `operator`/`admin` existant) et enrôle le **premier administrateur**. Token comparé en temps constant, rate-limité (5/min), `403 bootstrap_denied` si non requis, token invalide, ou compte **client** existant (pas de promotion). Annulation propre si l'enrôlement échoue. |
+
+**Garde-fou `last_admin`** : on ne peut ni rétrograder ni désenrôler le **dernier administrateur enrôlé** (sinon plus personne ne franchit l'étape visage). « Enrôlé » = enrôlement **utilisable** (`usable: true` chez face-id, contrat strict : une ligne sans le champ ne compte pas) ; un admin à l'enrôlement périmé se rétrograde ou se désenrôle librement. Événements : `admin_user_created`, `admin_role_changed`, `admin_face_enrolled`, `admin_face_revoked`, `backoffice_bootstrap` (table §1). Si face-id est injoignable, ces routes répondent `503 face_service_unavailable`.
+
+### 5.6 Exposition réseau
+
+| Point d'entrée | Contenu |
+|---|---|
+| WAF `443` (public ; `80` = `/healthz` + `301` vers HTTPS) | front client, API métier, `POST /api/v1/login`, `POST /api/v1/auth/step-up` (ré-authentification du front, #51, seule exception exacte) ; tout autre `/api/v1/auth/*` et `/api/v1/admin/*` → **404**. |
+| WAF `127.0.0.1:9443` (**hôte uniquement**, jamais sur le hotspot) | back-office, `/api/v1/auth/*`, `/api/v1/admin/*`. Corps ≤ **4 MiB** (`client_max_body_size 4m` + plafonds ModSecurity relevés à 4 MiB dans ce seul bloc `server` : 3 captures JSON). Le serveur public 80/443 garde le défaut CRS de 128 KiB hors fichiers. |
+| Mosquitto `${MQTT_BIND_ADDR:-192.168.137.1}:1883` (hotspot, profil `iot` : `make up-iot`) | bus LED uniquement (ACL §5.3). |
+
+Seul un navigateur du PC Hôte joint l'étape visage : la caméra capturée est donc forcément celle de l'hôte (consigne).
 
 ---
 
@@ -373,6 +462,21 @@ Montants en **centimes entiers**. Aucune nouvelle route n'ajoute de label de mé
 
 - **Auth (API métier) :** JWT Bearer (`Authorization: Bearer <token>`), signé HS256, clé via SOPS. Durée 15 min. Concerne `auth` et `payment-api`.
 - **Auth (API interne du moteur de remédiation) :** **Bearer statique interne** — `Authorization: Bearer <REMEDIATION_TOKEN>` (token via SOPS). Ce service n'est **jamais exposé** sur `edge` ; il ne manipule pas d'identité utilisateur, donc un JWT serait superflu. Idem `INTERNAL_TOKEN` pour `auth` → `/internal/*`. Décision actée (ADR 0002).
+  - **Deux jetons distincts** (comparaison à temps constant, fail closed) :
+
+    | Jeton | Routes | Porteurs |
+    |---|---|---|
+    | service `REMEDIATION_TOKEN` | `POST /events`, `POST /events/alertmanager`, `GET /incidents`, `GET /incidents/{id}`, `GET /decision-table`, `GET /stream`, `GET /waf/blocked-ips` | detector, Alertmanager, nginx du dashboard (lectures, injecté côté serveur) |
+    | opérateur `REMEDIATION_OPERATOR_TOKEN` | `DELETE /waf/blocked-ips/{ip}`, `POST /manual-actions` (écritures déclenchées par un humain) | l'opérateur, qui le saisit dans le dashboard ; relayé par nginx, **jamais injecté** |
+
+    Sur une route opérateur : pas de jeton → `401 unauthorized` ; jeton de service → `403 operator_token_required` ; jeton opérateur non configuré, < 16 caractères ou égal au jeton de service → `503 auth_not_configured`. Le jeton opérateur n'ouvre aucune route de service. Aucun conteneur ne le détient hors du moteur : depuis le réseau `ai` (assistant, ollama) ou `app`, le nginx du dashboard ne permet donc aucune écriture.
+  - **`POST /manual-actions`** (jeton opérateur) — action confirmée par un humain depuis le dashboard (panneau « Commande opérateur », proposition de l'assistant), **hors boucle de reprise**. Corps strict (`extra` refusé) :
+
+    ```json
+    { "action": "waf_block_ip", "params": { "source": "203.0.113.9" }, "reason": "IP vue dans les logs" }
+    ```
+
+    Liste blanche : `waf_block_ip` (`params.source` = IP littérale, garde-fous `NEVER_BLOCK_IPS`, IPv6 avec zone refusée) et `restart_service` (`params.service` ∈ `RESTARTABLE_SERVICES`) ; `reason` optionnel ≤ 200 caractères. `200` `{incident_id, action, status, detail}` avec `status` ∈ `ok`, `failed`, `dry_run` ; `422 invalid_params` / `422 action_refused` sans rien exécuter ni journaliser. Exécution synchrone, mêmes garde-fous, journal et timeline qu'une remédiation, **sans** `verify_tx` ni rejeu ; log `remediation_manual_action`. Journalisée comme un incident de type **`manual_action`** (voir §3), clos `closed` / `escalated` / `dry_run`. **Aucun MTTD ni MTTR** n'est calculé (ni journal, ni jauges `resilience_mttd_seconds` / `resilience_mttr_seconds`) : il n'y a pas de détection.
 - **Health :** chaque service expose `GET /health` (liveness, 200 si process up) et `GET /ready` (readiness, 200 si dépendances OK — DB joignable, etc.).
 - **Erreurs :** corps JSON `{ "error": { "code": "string", "message": "string", "request_id": "..." } }`.
 - **Codes retour scripts :** `verify_tx` et les scripts de démo renvoient `0` (succès) / `1` (échec) — contrat réutilisé par la boucle de remédiation et la CI future.

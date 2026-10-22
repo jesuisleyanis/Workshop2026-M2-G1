@@ -37,6 +37,17 @@ class LoadedModel:
         return float(self.stats["threshold"])
 
     @property
+    def threshold_high(self) -> float | None:
+        """Seuil « haut » calibré : au-dessus, une seule fenêtre suffit (pas de confirmation)."""
+        value = (self.stats.get("calibration") or {}).get("threshold_high")
+        return float(value) if value is not None else None
+
+    @property
+    def confirm_windows(self) -> int:
+        """Fenêtres consécutives au-dessus du seuil exigées (calibration ; 1 = sans confirmation)."""
+        return int((self.stats.get("calibration") or {}).get("confirm_windows", 1))
+
+    @property
     def guardrail_z(self) -> float:
         return float(self.stats["guardrail_z"])
 

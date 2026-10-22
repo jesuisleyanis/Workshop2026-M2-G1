@@ -7,8 +7,11 @@ Service FastAPI (port interne **8004**, réseau `app`) qui construit le vecteur 
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `PROMETHEUS_URL` | `http://prometheus:9090` | API Prometheus |
-| `COLLECT_INTERVAL_SECONDS` | `15` | période de collecte |
-| `PROM_RATE_WINDOW` | `30s` | fenêtre des `rate()` — doit contenir >= 2 scrapes (scrape 15 s -> 30 s) |
+| `COLLECT_INTERVAL_SECONDS` | `15` (compose : `1`) | période de collecte ; chaque collecte a un numéro `seq` |
+| `PROM_RATE_WINDOW` | `30s` (compose : `5s`) | fenêtre des `rate()` — >= 4 scrapes (scrape 1 s des services -> 5 s) |
+
+`GET /api/v1/features?after=<seq>&wait=<s>` (attente longue, `wait` <= 10 s) répond dès qu'une collecte plus récente
+que `seq` existe : le detector n'attend plus de période de relève (détection < 5 s, docs/plan-amelioration-detection.md).
 
 ## Requêtes PromQL (`collector.build_queries`)
 

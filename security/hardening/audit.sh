@@ -52,11 +52,13 @@ fi
 echo "[3] Secrets en clair"
 # Le filtre d'exclusion s'applique au CONTENU seul (on retire le préfixe `chemin:ligne:` via awk),
 # sinon un fichier dont le CHEMIN contient « test »/« latest »/« contest » échapperait au scan.
-# Les répertoires de tests sont exclus explicitement ; on couvre aussi .sh/.conf/.json.
+# Les répertoires de tests et les fichiers de test Vitest (*.test.ts[x]) sont exclus explicitement ;
+# on couvre aussi .sh/.conf/.json.
 secret_hits="$(grep -RInE '(password|secret|token|api[_-]?key)[[:space:]]*[:=][[:space:]]*["'\''][^"'\'' ]{8,}' \
      --include='*.py' --include='*.ts' --include='*.tsx' --include='*.yml' --include='*.yaml' \
      --include='*.sh' --include='*.conf' --include='*.json' \
      --exclude-dir='tests' --exclude-dir='node_modules' --exclude-dir='__pycache__' \
+     --exclude='*.test.ts' --exclude='*.test.tsx' \
      services/ ml/ remediation/ dashboard/ assistant/ infra/ scripts/ security/ 2>/dev/null \
      | awk -F: '{ c=$0; sub(/^[^:]*:[^:]*:/,"",c); if (c !~ /(change-me|example|fake|dummy|test|os\.environ|getenv|process\.env|VITE_|env\()/) print }')"
 if [[ -n "${secret_hits}" ]]; then
@@ -74,8 +76,9 @@ else
   pass "aucune clé age dans le dépôt"
 fi
 
-# 5. Exposition réseau : WAF HTTP, et Mosquitto sur l'IP du PA si le profil iot est actif.
-echo "[5] Exposition réseau (WAF HTTP + MQTT sur le PA)"
+# 5. Exposition réseau : WAF HTTP (+ listener hôte 9443 du back-office sur loopback uniquement),
+#    et Mosquitto sur l'IP du PA si le profil iot est actif (R11/R19, point dur jury).
+echo "[5] Exposition réseau (WAF HTTP + 9443 loopback + MQTT sur le PA)"
 COMPOSE="infra/compose/docker-compose.yml"
 if [[ -f "${COMPOSE}" ]]; then
   # Repère les services (indent 2) du bloc `services:` qui déclarent une clé `ports:` (indent 4).
@@ -90,8 +93,11 @@ if [[ -f "${COMPOSE}" ]]; then
     fail "Mosquitto doit être lié uniquement à 192.168.137.1:1883 (surchargeable par MQTT_BIND_ADDR)"
   elif [[ "${MQTT_BIND_ADDR:-192.168.137.1}" == "0.0.0.0" ]]; then
     fail "MQTT_BIND_ADDR=0.0.0.0 exposerait le broker sur toutes les interfaces"
+  elif ! grep -Fq -- '- "127.0.0.1:9443:9443"' "${COMPOSE}" \
+       || grep -Eq '^[[:space:]]*-[[:space:]]*"?(0\.0\.0\.0:)?9443:' "${COMPOSE}"; then
+    fail "le listener hôte 9443 (back-office, /api/v1/auth/, /api/v1/admin/) doit être publié sur 127.0.0.1 uniquement"
   else
-    pass "WAF HTTP et Mosquitto lié au PA ; DB/API/obs internes"
+    pass "WAF HTTP, 9443 sur loopback et Mosquitto lié au PA ; DB/API/obs internes"
   fi
 else
   fail "docker-compose.yml introuvable"

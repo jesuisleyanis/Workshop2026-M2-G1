@@ -17,7 +17,7 @@ class TightenRateLimit(Action):
         if params.get("service", "auth") != "auth":
             raise ActionParamError("tighten_rate_limit ne supporte que le service 'auth'")
         factor = params.get("factor")
-        if isinstance(factor, bool) or not isinstance(factor, (int, float)) or not 0 < factor < 1:
+        if isinstance(factor, bool) or not isinstance(factor, int | float) or not 0 < factor < 1:
             raise ActionParamError("param 'factor' requis, 0 < factor < 1")
 
     async def plan(self, ctx: ActionContext) -> str:

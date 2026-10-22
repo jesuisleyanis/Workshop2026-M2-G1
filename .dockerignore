@@ -1,0 +1,56 @@
+# Contexte de build des images construites depuis la RACINE du dépôt
+# (payment-api, auth, face-id, collector, detector, remediation, waf-exporter, assistant).
+# Rôle : contrôle anti-fuite — aucun secret déchiffré ni clé ne peut entrer dans une image, même par
+# un COPY trop large (voir security/hardening/hardening.md) ; et pas de caches/artefacts locaux
+# (__pycache__, ml/training/artifacts) dans les couches. (BuildKit ne transfère déjà que les chemins
+# cités par les COPY : le gain de vitesse est marginal, ce n'est pas le but.)
+# front et dashboard ont leur propre contexte et leur propre .dockerignore (waf : contexte security/waf).
+# NE PAS exclure : libs/, services/*/src, ml/ (dont ml/training/data : baseline réelle + calibration
+# embarquées par le build du detector), remediation/, infra/ansible/playbooks/, scripts/verify_tx.
+
+# Secrets et clés
+.env
+**/.env
+**/*.env.dec
+**/*.decrypted.env
+security/sops/secrets.env
+**/age.key
+**/keys.txt
+**/*.age
+.remediation_token
+
+# VCS, environnements, caches
+.git
+.gitattributes
+.venv
+.venv-cyber
+venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/*.egg-info
+**/node_modules
+**/dist
+**/.vite
+**/coverage
+
+# Sorties locales et documentation (jamais copiées par un Dockerfile)
+graphify-out
+docs
+iot
+.claude
+.impeccable
+infra/ansible/backups
+remediation/incidents.db
+**/*.sqlite3
+ml/training/artifacts
+ml/training/data/*.tmp
+Workshop2026-M2-G1-*
+Workshop2026-M2-G1/
+**/*.mkv
+**/*.mp4
+**/*.mov
+attacks/.runlog
+attacks/.run.pid

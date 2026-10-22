@@ -15,8 +15,8 @@ ISO_TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 TX = "/api/v1/transactions"
 
 
-def test_transaction_created_log_matches_contract_format(client, alice, log_lines):
-    r = client.post(
+def test_transaction_created_log_matches_contract_format(waf_client, alice, log_lines):
+    r = waf_client.post(
         TX,
         headers={**alice, "X-Forwarded-For": "192.168.137.50"},
         json={"src_account": 1, "dst_account": 3, "amount_cents": 100},
@@ -29,6 +29,15 @@ def test_transaction_created_log_matches_contract_format(client, alice, log_line
     assert (e["http_method"], e["http_path"], e["http_status"]) == ("POST", TX, 201)
     assert isinstance(e["duration_ms"], int)
     assert "Authorization" not in str(e) and alice["Authorization"][7:] not in str(e)
+
+
+def test_xff_is_only_trusted_from_the_waf(client, waf_client, alice, log_lines):
+    # Un conteneur du réseau app qui joint payment-api en direct ne choisit pas son IP (logs -> ML).
+    body = {"src_account": 1, "dst_account": 3, "amount_cents": 100}
+    client.post(TX, headers={**alice, "X-Forwarded-For": "198.51.100.7"}, json=body)
+    waf_client.post(TX, headers={**alice, "X-Forwarded-For": "198.51.100.8"}, json=body)
+    ips = [e["client_ip"] for e in log_lines("transaction_created")]
+    assert ips == ["testclient", "198.51.100.8"]
 
 
 def test_transaction_rejected_log_is_warning_with_reason(client, alice, log_lines):

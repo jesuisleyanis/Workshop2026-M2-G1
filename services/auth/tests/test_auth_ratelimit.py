@@ -1,7 +1,7 @@
 """Rate-limit /login, resserrage par la remédiation, API interne protégée."""
 
 import pytest
-from authkit import INTERNAL_TOKEN, sample
+from authkit import INTERNAL_TOKEN, WAF_IP, WAF_PEER, sample
 
 LOGIN = "/api/v1/login"
 BAD = {"username": "alice", "password": "wrong-wrong"}
@@ -30,17 +30,17 @@ def test_rate_limit_emits_event_log_and_metric_and_contract_error(client, regist
     assert entry["service"] == "auth" and entry["request_id"] == r.headers["X-Request-ID"]
 
 
-def test_rate_limit_is_per_client_ip(client, registered):
-    assert _hammer(client, 4, headers={"X-Forwarded-For": "10.0.0.1"})[-1] == 429
-    assert _hammer(client, 1, headers={"X-Forwarded-For": "10.0.0.2"}) == [
+def test_rate_limit_is_per_client_ip(waf_client, registered):
+    assert _hammer(waf_client, 4, headers={"X-Forwarded-For": "10.0.0.1"})[-1] == 429
+    assert _hammer(waf_client, 1, headers={"X-Forwarded-For": "10.0.0.2"}) == [
         401
     ]  # autre IP : intacte
 
 
-def test_spoofed_leftmost_xff_cannot_evade_rate_limit(client, registered):
+def test_spoofed_leftmost_xff_cannot_evade_rate_limit(waf_client, registered):
     """Seule l'entrée ajoutée par le proxy de confiance (la plus à droite) compte."""
     codes = [
-        client.post(
+        waf_client.post(
             LOGIN, json=BAD, headers={"X-Forwarded-For": f"6.6.6.{i}, 10.9.9.9"}
         ).status_code
         for i in range(4)
@@ -101,6 +101,70 @@ def test_register_is_rate_limited_after_threshold(client):
     assert codes[10] == 429 and codes[11] == 429
     r = client.post("/api/v1/register", json={"username": "u99", "password": PASSWORD})
     assert r.json()["error"]["code"] == "rate_limited"
+
+
+def test_verification_ip_is_exempt_but_attackers_are_not(engine, registered):
+    # verify_tx de la remédiation (IP interne fixe) : jamais bloqué, même après durcissement.
+    # Constaté le 21/10 : tighten_rate_limit x5 -> la preuve de reprise échouait au login (escalades).
+    from fastapi.testclient import TestClient
+
+    from auth_service.config import Settings
+    from auth_service.main import create_app
+    from authkit import JWT_SECRET
+
+    settings = Settings(jwt_secret=JWT_SECRET, internal_token=INTERNAL_TOKEN, login_rate_limit="3/minute",
+                        run_migrations=False, rate_limit_exempt_ips=("172.31.0.20",),
+                        trusted_proxies=(WAF_IP,))
+    app = create_app(settings, engine)
+    client = TestClient(app, client=WAF_PEER)  # verify_tx passe par le WAF
+    client.post("/internal/tighten-rate-limit", json={"factor": 0.1}, headers=HDR)
+    assert 429 not in _hammer(client, 6, headers={"X-Forwarded-For": "172.31.0.20"})
+    # l'attaquant (passerelle Docker, ou spoof de l'IP exemptée à gauche de X-Forwarded-For) reste limité
+    assert _hammer(client, 3, headers={"X-Forwarded-For": "172.31.0.1"})[-1] == 429
+    assert _hammer(client, 3, headers={"X-Forwarded-For": "172.31.0.20, 172.31.0.1"})[-1] == 429
+    # un conteneur du réseau app qui joint auth EN DIRECT et usurpe l'IP exemptée : XFF ignoré
+    rogue = TestClient(app, client=("172.31.0.66", 50000))
+    assert _hammer(rogue, 3, headers={"X-Forwarded-For": "172.31.0.20"})[-1] == 429
+    assert _hammer(rogue, 1, headers={"X-Forwarded-For": "172.31.0.99"}) == [429]  # même pair
+
+
+def test_xff_from_an_untrusted_peer_is_ignored(client, waf_client, registered, log_lines):
+    _hammer(client, 1, headers={"X-Forwarded-For": "198.51.100.7"})
+    _hammer(waf_client, 1, headers={"X-Forwarded-For": "198.51.100.8"})
+    ips = [e["client_ip"] for e in log_lines("auth_login_failed")]
+    assert ips == ["testclient", "198.51.100.8"]  # pair direct non fiable -> son IP ; WAF -> XFF
+
+
+def test_trusted_proxies_accept_cidr_and_reject_garbage():
+    from starlette.datastructures import Headers
+
+    from auth_service.config import Settings
+    from auth_service.observability import client_ip_from, parse_trusted_proxies
+    from authkit import JWT_SECRET
+
+    trusted = parse_trusted_proxies("172.31.0.10, 10.0.0.0/8")
+    xff = Headers({"x-forwarded-for": "1.2.3.4"})
+    assert client_ip_from(xff, "10.4.5.6", 1, trusted) == "1.2.3.4"
+    assert client_ip_from(xff, "172.31.0.11", 1, trusted) == "172.31.0.11"
+    assert client_ip_from(xff, "172.31.0.10", 1, ()) == "172.31.0.10"  # défaut : aucune confiance
+    with pytest.raises(RuntimeError, match="TRUSTED_PROXIES"):
+        Settings(jwt_secret=JWT_SECRET, internal_token=INTERNAL_TOKEN, trusted_proxies=("waf",))
+
+
+def test_tightened_limit_restores_itself_after_the_attack():
+    from auth_service.ratelimit import DynamicRateLimit
+
+    now = [0.0]
+    rate = DynamicRateLimit("10/minute", restore_after_s=300, clock=lambda: now[0])
+    rate.tighten(0.5)
+    rate.tighten(0.5)
+    assert rate.value == "2/minute"
+    now[0] = 299
+    assert rate.value == "2/minute"
+    now[0] = 300  # plus de durcissement depuis 5 min : retour à la limite de base, sans humain
+    assert rate.value == "10/minute"
+    assert rate.cost() == DynamicRateLimit("10/minute").cost(), "coût slowapi restauré aussi"
+    assert DynamicRateLimit("10/minute", restore_after_s=0).tighten(0.5)[1] == "5/minute"  # 0 = jamais
 
 
 def test_tightening_keeps_attempts_already_spent(client, registered):

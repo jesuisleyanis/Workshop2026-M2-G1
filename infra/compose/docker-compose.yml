@@ -2,8 +2,8 @@
 # Profils : (défaut=demo) chemin critique | full=observabilité complète | iot=broker MQTT | attack=banc d'essai | ai=assistant RAG
 # Secrets injectés depuis ../../.env (produit par scripts/decrypt-secrets.sh à partir de SOPS).
 # Durcissement : non-root (Dockerfiles), cap_drop ALL, no-new-privileges, limites ressources,
-# seul le WAF publie des ports HTTP ; le profil iot publie MQTT sur le hotspot.
-# Voir ../../security/hardening/hardening.md.
+# seul le WAF publie des ports HTTP (80/443, plus le listener hôte-seulement 127.0.0.1:9443 du
+# back-office) ; le profil iot publie MQTT sur le hotspot. Voir ../../security/hardening/hardening.md.
 # Reproductibilité (R5) : toutes les images tierces sont épinglées à une version précise (aucun
 # `:latest`) — un rebuild ultérieur ne doit pas tirer un major différent (Grafana/Loki/Prometheus…).
 
@@ -21,12 +21,29 @@ x-pylimits: &pylimits
   cpus: 0.75
 
 networks:
+  # Sous-réseaux FIXES pour les réseaux du WAF (edge, app) : sous Docker Desktop (Windows/WSL2), le WAF
+  # voit tous les clients externes avec l'IP d'une passerelle Docker (constaté : celle d'`app`) — l'IP
+  # réelle du PC attaquant est masquée. Passerelles connues = protégées par NEVER_BLOCK_IPS de la
+  # remédiation : bloquer une passerelle couperait TOUS les clients.
   edge:
-  app:   # non `internal` : seul réseau avec sortie (pull d'images, modèles Ollama). Aucun `ports:`.
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1
+  app:   # non `internal` : sortie (pull d'images). Aucun `ports:`.
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+          gateway: 172.31.0.1
+          # Allocation dynamique limitée à la moitié haute : les IP FIXES (WAF .10, remédiation .20)
+          # ne peuvent jamais être prises par un autre conteneur démarré avant elles.
+          ip_range: 172.31.0.128/25
   data:
     internal: true
   obs:
     internal: true   # observabilité : aucun besoin de sortie Internet (P4S-02)
+  ai:    # assistant + ollama (+ dashboard pour le proxy /assistant/) : isolés du moteur de remédiation.
+         # Non `internal` : Ollama tire ses modèles, OLLAMA_BASE_URL peut viser un PC IA externe.
 
 # Secret Compose alimenté depuis .env (SOPS) : monté en fichier dans Alertmanager (credentials_file),
 # jamais écrit dans alertmanager.yml (fichier versionné).
@@ -45,6 +62,7 @@ volumes:
   loki-data:
   chroma-data:
   ollama-models:
+  incidents-export:      # remediation (rw, export_journal.py) -> assistant (ro)
 
 services:
 
@@ -52,13 +70,32 @@ services:
   waf:
     <<: *hardening
     build: { context: ../../security/waf }
-    networks: [edge, app]
-    # Image non-root (nginx unprivileged) : écoute 8080/8443 ; seuls 80/443 sont publiés côté hôte.
+    # IP FIXE sur app : seul pair dont auth et payment-api croient X-Forwarded-For (TRUSTED_PROXIES).
+    networks:
+      edge: {}
+      app:
+        ipv4_address: 172.31.0.10
+    # Image non-root (nginx unprivileged) : écoute 8080/8443/9443 ; 80/443 publiés côté hôte.
+    # 9443 = listener HÔTE (back-office + /api/v1/auth/ + /api/v1/admin/) : loopback uniquement.
     ports:
       - "80:8080"
       - "443:8443"
+      - "127.0.0.1:9443:9443"
     environment:
+      # Confiance X-Forwarded-For : VIDE par défaut (un client ne choisit jamais son IP). Renseignée par
+      # la surcouche docker-compose.realip.yml (REAL_IP=1), où seul le proxy natif Caddy joint le WAF.
+      WAF_TRUST_FORWARDED_FROM: ""
       # Audit ModSecurity (blocages 4xx/5xx, JSON Serial) écrit dans le volume partagé lu par waf-exporter (#12).
+      # Plafond de corps ModSecurity GLOBAL = défaut de l'image CRS (128 Kio hors fichiers, 413 au-delà) :
+      # il s'applique au serveur public 80/443. Seul le listener hôte 9443 le relève à 4 Mo
+      # (`modsecurity_rules` dans son bloc server de nginx.conf, aligné sur `client_max_body_size 4m`)
+      # pour les images de capture faciale en base64 JSON.
+      MODSEC_REQ_BODY_NOFILES_LIMIT: "131072"
+      # Méthodes HTTP admises par le CRS (règle 911100). Le défaut de l'image (GET HEAD POST OPTIONS)
+      # bloquerait l'API d'administration du back-office (PATCH rôle, PUT/DELETE visage) sur 9443.
+      # Le serveur public 80/443 ne proxifie que ses routes nommées (404 ailleurs) : élargir la liste
+      # n'y ouvre aucune route. Test : security/waf/tests (méthodes de services/backoffice/src/api).
+      ALLOWED_METHODS: "GET HEAD POST OPTIONS PUT PATCH DELETE"
       MODSEC_AUDIT_ENGINE: RelevantOnly
       MODSEC_AUDIT_LOG_FORMAT: JSON
       MODSEC_AUDIT_LOG_TYPE: Serial
@@ -66,10 +103,19 @@ services:
       # Parties journalisées : en-tête (A), requête sans corps (B), réponse (F), règles (H), fin (Z).
       # Jamais les corps (C/I/J) : un /login bloqué y laisserait le mot de passe en clair.
       MODSEC_AUDIT_LOG_PARTS: ABFHZ
+      # Borne du journal d'audit (sinon non borné) : au-delà, copie dans audit.json.1 puis troncature
+      # (waf-exporter repart du début). 0 = pas de borne. Disque : au plus ~2 x cette valeur.
+      WAF_AUDIT_MAX_BYTES: "52428800"
     volumes:
       - waf-deny:/etc/nginx/deny:rw
       - waf-logs:/var/log/modsec:rw
-    depends_on: [front, payment-api, auth]
+    depends_on:
+      front: { condition: service_started }
+      payment-api: { condition: service_healthy }
+      auth: { condition: service_healthy }
+      # Démarré suffit (nom DNS résolu au chargement de nginx.conf) : un back-office lent ou en échec
+      # (face-id, MQTT…) ne doit jamais empêcher le WAF, donc tout le paiement, de démarrer.
+      backoffice: { condition: service_started }
     mem_limit: 256m
     healthcheck:
       # /healthz est servi par le WAF lui-même (sans upstream) ; cert auto-signé -> -k.
@@ -88,7 +134,8 @@ services:
     volumes:
       - waf-logs:/var/log/modsec:ro
     group_add: ["101"]         # groupe nginx : lecture garantie même si l'audit log est créé en 0640
-    depends_on: [waf]
+    depends_on:
+      waf: { condition: service_healthy }
     read_only: true
     mem_limit: 64m
     healthcheck:
@@ -110,9 +157,30 @@ services:
     tmpfs: ["/tmp"]
     mem_limit: 128m
 
+  backoffice:
+    # Back-office (React/Vite, nginx non-root :8080) : joignable uniquement via le listener hôte du WAF (9443).
+    # Le build exécute `npm run prepare:vision` (modèle de pose + runtime wasm) : accès réseau requis au build.
+    <<: *hardening
+    build: { context: ../../services/backoffice }
+    networks: [app]
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
   payment-api:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: services/payment-api/Dockerfile }
+    # Service SANS ÉTAT (tout est en base) : N répliques derrière le répartiteur du WAF (least_conn,
+    # retrait d'une réplique en panne). 3 = tient une panne pendant un redémarrage progressif ; au-delà,
+    # le goulot est Postgres (pool 10/réplique, max_connections 100) et le CPU de l'hôte.
+    # Prometheus découvre chaque réplique par DNS (sinon le ML ne verrait qu'1/N du trafic).
+    deploy:
+      replicas: ${PAYMENT_API_REPLICAS:-3}
     networks: [app, data]
     environment:
       POSTGRES_HOST: postgres
@@ -120,7 +188,10 @@ services:
       POSTGRES_USER: resilience
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
-    depends_on: [postgres]
+      # X-Forwarded-For cru UNIQUEMENT s'il vient du WAF (IP fixe) : sinon IP du pair TCP.
+      TRUSTED_PROXIES: "172.31.0.10"
+    depends_on:
+      postgres: { condition: service_healthy }
     read_only: true
     tmpfs: ["/tmp"]
     healthcheck:
@@ -140,7 +211,31 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
-    depends_on: [postgres]
+      # X-Forwarded-For cru UNIQUEMENT s'il vient du WAF (IP fixe) : un conteneur du réseau app qui
+      # joint auth:8002 en direct ne peut pas se faire passer pour l'IP exemptée ci-dessous.
+      TRUSTED_PROXIES: "172.31.0.10"
+      # verify_tx de la remédiation (IP fixe) : jamais limité, sinon tighten_rate_limit fait échouer
+      # la preuve de reprise. Durcissement levé automatiquement 5 min après le dernier tighten.
+      RATE_LIMIT_EXEMPT_IPS: "172.31.0.20"
+      RATE_LIMIT_RESTORE_SECONDS: "300"
+      # Authentification v2 : visage (face-id) + jumeau/pilotage LED (MQTT) + initialisation du premier admin.
+      FACE_ID_URL: http://face-id:8006
+      FACE_INTERNAL_TOKEN: ${FACE_INTERNAL_TOKEN:?FACE_INTERNAL_TOKEN requis (même valeur sur auth et face-id, voir security/sops/secrets.example.env)}
+      MQTT_HOST: mosquitto
+      MQTT_AUTH_PASSWORD: ${MQTT_AUTH_PASSWORD}
+      BACKOFFICE_BOOTSTRAP_TOKEN: ${BACKOFFICE_BOOTSTRAP_TOKEN}
+      # dlib (backend team) analyse 3 images 640 px par vérification : plusieurs secondes sur le CPU de
+      # l'hôte. Le défaut du code (2 s, borne du threadpool d'auth) couperait l'étape visage du back-office.
+      BACKOFFICE_FACE_TIMEOUT: "8"
+      # Durée de vie d'un challenge de poses : chargement à froid de MediaPipe + 3 maintiens de pose.
+      BACKOFFICE_CHALLENGE_TTL: "120"
+    # mosquitto NON requis : hors profil iot (make up), ou si l'IP du hotspot (MQTT_BIND_ADDR) est absente,
+    # le broker ne démarre pas ; auth (donc le WAF) doit démarrer quand même — la LED est fail-open (ADR 0006).
+    # `required: false` exige Docker Compose >= 2.20. Postgres `healthy` : auth applique les migrations au démarrage.
+    depends_on:
+      postgres: { condition: service_healthy }
+      face-id: { condition: service_started }
+      mosquitto: { condition: service_started, required: false }
     read_only: true
     tmpfs: ["/tmp"]
     healthcheck:
@@ -148,6 +243,34 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+
+  face-id:
+    # Reconnaissance faciale (gabarits chiffrés AES-256 en base, backend « team » = dlib). Jamais exposé :
+    # appelé par auth seul (token interne), réseau app + data (Postgres). Aucun ports:.
+    <<: *hardening
+    build: { context: ../.., dockerfile: services/face-id/Dockerfile }
+    networks: [app, data]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: resilience
+      POSTGRES_USER: resilience
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      FACE_INTERNAL_TOKEN: ${FACE_INTERNAL_TOKEN:?FACE_INTERNAL_TOKEN requis (même valeur sur auth et face-id, voir security/sops/secrets.example.env)}
+      # base64 de 32 octets (AES-256) — voir security/sops/secrets.example.env
+      FACE_DATA_KEY: ${FACE_DATA_KEY:?FACE_DATA_KEY requis (base64 de 32 octets, voir security/sops/secrets.example.env)}
+      RECOGNIZER_BACKEND: team
+    depends_on:
+      postgres: { condition: service_healthy }
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 1g
+    cpus: 1.5
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8006/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   mosquitto:
     <<: *hardening
@@ -208,6 +331,11 @@ services:
     networks: [app, obs]
     environment:
       PROMETHEUS_URL: http://prometheus:9090
+      # Détection < 5 s (docs/plan-amelioration-detection.md) : une collecte par seconde, features en
+      # rate()[5s]. Ces deux valeurs DÉFINISSENT les fenêtres du modèle : les changer impose de
+      # recapturer la baseline et de recalibrer (ml/training/README.md §6) — les captures les relisent ici.
+      PROM_RATE_WINDOW: 5s
+      COLLECT_INTERVAL_SECONDS: "1"
     depends_on: [prometheus]
     read_only: true
     tmpfs: ["/tmp"]
@@ -221,7 +349,18 @@ services:
       # URL COMPLÈTE de l'endpoint (le detector POSTe tel quel, cf. ml/detector/core.py)
       REMEDIATION_URL: http://remediation:8005/events
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
-    depends_on: [collector, remediation]
+      # Attente longue sur le collector : chaque collecte est scorée dès qu'elle existe.
+      FEATURES_WAIT_SECONDS: "5"
+      # Réseaux Docker du WAF : jamais désignés comme IP source (trafic interne, passerelle).
+      SOURCE_IP_EXCLUDE: "172.30.0.0/24,172.31.0.0/24"
+      # Seuil imposé (décision équipe 21/10) au lieu du seuil calibré (0,708 sur le poste de dev) :
+      # plus sensible aux attaques à faible débit du PC attaquant, au prix de rares faux positifs
+      # (~2/h mesurés sur la baseline de dev). Vide = seuil de la calibration : ANOMALY_THRESHOLD= make up
+      ANOMALY_THRESHOLD: ${ANOMALY_THRESHOLD-0.65}
+      POLL_INTERVAL_SECONDS: "1"
+    depends_on:
+      collector: { condition: service_started }
+      remediation: { condition: service_healthy }
     read_only: true
     tmpfs: ["/tmp"]
     profiles: [ml]
@@ -246,21 +385,34 @@ services:
       # de la liste blanche haproxy (5 couples). Ce montage sert cette médiation ; le moteur
       # de remédiation, lui, ne monte jamais le socket et parle HTTP au proxy.
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    # HAProxy tourne en utilisateur `haproxy` (non-root) ; le socket est root:root 0660. Sans le groupe
+    # propriétaire, chaque appel échouait (503, statut SC--) : AUCUN restart_service ne pouvait réussir.
+    # Groupe seulement (pas d'uid 0) : la restriction effective reste la liste blanche haproxy (5 couples).
+    group_add: ["0"]
     mem_limit: 64m
 
   remediation:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: remediation/Dockerfile }
-    # app : API + proxy Docker + WAF (verify_tx) ; data : pg_restore (correction de corruption).
-    # Jamais sur edge, aucun `ports:`.
-    networks: [app, data]
+    # app : API + proxy Docker + WAF (verify_tx) ; data : pg_restore (correction de corruption) ;
+    # obs : lecture de Loki (confirm_waf_block, repli `from_loki` de waf_blacklist_ip) — Loki n'écoute
+    # que sur ce réseau interne. Jamais sur edge, aucun `ports:`. IP FIXE sur app : seule source exemptée
+    # du rate-limit de /login (verify_tx), cf. RATE_LIMIT_EXEMPT_IPS d'auth.
+    networks:
+      app:
+        ipv4_address: 172.31.0.20
+      data: {}
+      obs: {}
     environment:
       DOCKER_PROXY_URL: http://docker-socket-proxy:2375
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
+      # Jeton OPÉRATEUR (écritures humaines depuis le dashboard : déblocage d'IP) : connu du SEUL moteur.
+      # Jamais transmis au dashboard (son nginx relaie celui que l'opérateur saisit), ni à l'assistant.
+      REMEDIATION_OPERATOR_TOKEN: ${REMEDIATION_OPERATOR_TOKEN}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       AUTH_URL: http://auth:8002
       # verify_tx : rejoué à travers le WAF (réseau app, cert auto-signé) avec le jeu fictif seedé
-      BASE_URL: https://waf
+      BASE_URL: https://waf:8443   # WAF non-root : écoute 8443 dans le conteneur (443 = port publié côté hôte)
       VERIFY_PASSWORD: ${SEED_PASSWORD}
       # restore_pg_dump : playbook pg_restore.yml dans ce conteneur (client PG 16, réseau data)
       POSTGRES_HOST: postgres
@@ -269,13 +421,22 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       # waf_block_ip : deny-list partagée + SIGHUP du service `waf` via le proxy
       WAF_SERVICE: waf
+      # Durée de vie d'un blocage WAF (s) ; 0 = permanent. Un faux positif CRS ne bannit pas indéfiniment.
+      REMEDIATION_WAF_BLOCK_TTL_S: "3600"
+      # Jamais bloquées : boucle locale, PC hôte (hotspot) et réseaux du WAF ENTIERS (cf. networks) :
+      # passerelle par laquelle Docker Desktop fait entrer tous les clients, et services internes
+      # (dont la remédiation elle-même, via verify_tx).
+      NEVER_BLOCK_IPS: "127.0.0.1,::1,192.168.137.1,172.30.0.0/24,172.31.0.0/24"
     volumes:
       - waf-deny:/etc/resilience/waf-deny:rw                 # écrite par waf_deny_ip.yml
       - ../../infra/ansible/backups:/opt/backups:ro          # dumps sains (pg_backup.yml côté hôte)
       - remediation-journal:/var/lib/remediation:rw          # journal d'incidents SQLite (persistant, survit au redémarrage)
+      - incidents-export:/var/lib/remediation/export         # copie JSON du journal pour l'assistant (export_journal.py)
     group_add: ["101"]         # groupe nginx du WAF : droit d'écrire dans le volume waf-deny
-    depends_on: [docker-socket-proxy, postgres]
-    # Racine en lecture seule (CDC §5.4) : seuls points inscriptibles = volume journal, volume
+    depends_on:
+      docker-socket-proxy: { condition: service_started }
+      postgres: { condition: service_healthy }
+    # Racine en lecture seule (CDC §5.4) : seuls points inscriptibles = volume journal (+ export), volume
     # waf-deny partagé, et /tmp (tmpfs) pour les artefacts ansible-runner (ANSIBLE_HOME/LOCAL_TEMP/PRIVATE_DATA_DIR).
     read_only: true
     tmpfs: ["/tmp"]            # artefacts ansible-runner
@@ -290,15 +451,19 @@ services:
     <<: *hardening
     build: { context: ../../dashboard }
     # Le navigateur ne parle qu'au nginx du dashboard (same-origin, CSP connect-src 'self') :
-    # /remediation/stream -> remediation:8005/stream (Bearer injecté côté serveur),
+    # /remediation/stream -> remediation:8005/stream (Bearer de SERVICE injecté côté serveur, lectures) ;
+    # écritures (déblocage d'IP) : jeton OPÉRATEUR saisi par l'humain, relayé, jamais connu de ce conteneur.
     # /prometheus/api/v1/query -> prometheus:9090 (score ML + santé, GET lecture seule).
     # VITE_* sont des build-args Vite, pas des variables runtime : la base /remediation est le défaut du build.
-    networks: [app]
+    networks: [app, ai]   # ai : proxy /assistant/ (l'assistant n'est pas sur `app`)
     environment:
       REMEDIATION_UPSTREAM: remediation:8005
       REMEDIATION_AUTH_HEADER: "Bearer ${REMEDIATION_TOKEN}"
       PROMETHEUS_UPSTREAM: prometheus:9090
-    depends_on: [remediation, prometheus]
+      ASSISTANT_UPSTREAM: assistant:8006   # profil ai ; sans lui, /assistant/* répond 502
+    depends_on:
+      remediation: { condition: service_healthy }
+      prometheus: { condition: service_started }
     read_only: true
     tmpfs: ["/tmp"]
     mem_limit: 128m
@@ -371,7 +536,9 @@ services:
 
   cadvisor:
     <<: *hardening
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    # 0.52 : cAdvisor 0.49 parlait l'API Docker 1.41, refusée par Docker Engine >= 29 (« client
+    # version 1.41 is too old ») -> plus aucun label de conteneur, features cpu_pct_max / mem_pct_max vides.
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
     profiles: [full]
     networks: [obs]
     volumes:
@@ -388,7 +555,8 @@ services:
     networks: [data, obs]
     environment:
       DATA_SOURCE_NAME: "postgresql://resilience:${POSTGRES_PASSWORD}@postgres:5432/resilience?sslmode=disable"
-    depends_on: [postgres]
+    depends_on:
+      postgres: { condition: service_healthy }
     mem_limit: 64m
 
   # ---------------------------------------------------------------- assistant RAG (profil ai)
@@ -398,7 +566,7 @@ services:
     <<: *hardening
     image: ollama/ollama:0.3.14
     profiles: [ai]
-    networks: [app]
+    networks: [ai]
     volumes:
       - ollama-models:/root/.ollama
     mem_limit: 8g          # lourd — déporter sur le PC IA si la RAM est serrée
@@ -407,15 +575,26 @@ services:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: assistant/Dockerfile }
     profiles: [ai]
-    networks: [app]
+    # Réseau `ai` seul : aucune route vers remediation:8005 (app) ni postgres (data) ni obs.
+    networks: [ai]
     environment:
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}   # ou http://<IP-PC-IA>:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      FRAME_ANCESTORS: ${DASHBOARD_ORIGIN:-}                      # inutile via /assistant/ (same-origin)
     volumes:
-      - chroma-data:/app/chroma
-      - ../../docs:/app/docs:ro
+      - chroma-data:/data/chroma                                  # seul volume en écriture
+      - ../../docs:/data/docs:ro
+      - ../../remediation/decision_table.yml:/data/remediation/decision_table.yml:ro
+      - incidents-export:/data/incidents:ro                       # produit par `remediation: python export_journal.py`
     depends_on: [ollama]
+    mem_limit: 1g          # chromadb + onnxruntime : 512m insuffisant
+    read_only: true
     tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8006/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
   # ---------------------------------------------------------------- banc d'essai (profil attack)
   attacker:

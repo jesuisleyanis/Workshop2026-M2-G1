@@ -29,6 +29,12 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: (path: string) => path.replace(/^\/prometheus/, ''),
         },
+        // UI de l'assistant RAG (onglet iframe) : /assistant/* -> ASSISTANT_PROXY_TARGET/*.
+        '/assistant': {
+          target: env.ASSISTANT_PROXY_TARGET || 'http://localhost:8006',
+          changeOrigin: true,
+          rewrite: (path: string) => path.replace(/^\/assistant/, ''),
+        },
       },
     },
     preview: { host: '0.0.0.0', port: 5174 },

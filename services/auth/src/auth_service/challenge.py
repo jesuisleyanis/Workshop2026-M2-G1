@@ -1,6 +1,6 @@
 """État serveur de l'authentification à étapes du back-office (consigne additionnelle 1).
 
-Deux stores en mémoire, par processus (cohérent avec le rate-limit auth — limite assumée,
+Trois stores en mémoire, par processus (cohérent avec le rate-limit auth — limite assumée,
 cf. README ; option Redis documentée) :
 
 - `ChallengeStore` : le fil identifiant → visage → mot de passe. Un `challenge_id` est **retiré
@@ -10,6 +10,8 @@ cf. README ; option Redis documentée) :
 - `LockoutStore` : le verrouillage « 1 reprise puis 5 min » par couple (username, ip). Un échec
   d'accès = visage non reconnu OU mot de passe erroné (compteur unifié), avec **fenêtre glissante**
   (un échec isolé et ancien ne verrouille pas). Protégé par un verrou ; purge des entrées expirées.
+- `CooldownStore` : refroidissement par IP après un refus (visage 30 s, mot de passe 3 s), vérifié à
+  `identify` ; indépendant du verrouillage.
 
 L'horloge est injectable (`clock`) pour des tests déterministes (TTL, expiration du blocage).
 """
@@ -27,6 +29,10 @@ from uuid import uuid4
 MAX_CHALLENGES = 10_000
 #: Plafond de sécurité sur le nombre d'entrées de verrouillage suivies.
 MAX_LOCKS = 10_000
+#: Plafond de sécurité sur le nombre d'IP en refroidissement suivies.
+MAX_COOLDOWNS = 10_000
+#: Poses demandées à l'étape visage (clés exactes, partagées avec face-id sans import croisé).
+POSES = ("face", "gauche", "droite")
 
 
 class ChallengeStep(str, Enum):
@@ -40,6 +46,8 @@ class Challenge:
     username: str
     step: ChallengeStep
     expires_at: float
+    #: Ordre des 3 poses tiré à l'identification (vide en mode dégradé sans visage).
+    poses: tuple[str, ...] = ()
 
 
 class ChallengeStore:
@@ -55,10 +63,20 @@ class ChallengeStore:
         for cid in expired:
             del self._items[cid]
 
-    def create(self, username: str, *, step: ChallengeStep = ChallengeStep.FACE) -> Challenge:
+    def create(
+        self,
+        username: str,
+        *,
+        step: ChallengeStep = ChallengeStep.FACE,
+        poses: tuple[str, ...] = (),
+    ) -> Challenge:
         now = self._clock()
         challenge = Challenge(
-            challenge_id=uuid4().hex, username=username, step=step, expires_at=now + self._ttl
+            challenge_id=uuid4().hex,
+            username=username,
+            step=step,
+            expires_at=now + self._ttl,
+            poses=poses,
         )
         with self._lock:
             self._purge(now)
@@ -187,3 +205,53 @@ class LockoutStore:
     def reset(self, username: str, ip: str | None) -> None:
         with self._lock:
             self._locks.pop(self._key(username, ip), None)
+
+
+class CooldownStore:
+    """Refroidissement par IP cliente après un refus (visage 30 s, mot de passe 3 s).
+
+    Distinct du verrouillage : il n'est pas lié à l'identifiant, ne se cumule pas et ne dure
+    que quelques secondes — il ralentit l'essai-erreur (et rend un rejeu de photo coûteux)
+    sans bloquer durablement. Un refroidissement plus long n'est jamais raccourci par un plus
+    court. Entrées expirées purgées, plafond de taille (anti-DoS mémoire).
+    """
+
+    def __init__(self, clock=time.monotonic, max_size: int = MAX_COOLDOWNS) -> None:
+        self._clock = clock
+        self._max_size = max_size
+        self._until: dict[str, tuple[float, str]] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(ip: str | None) -> str:
+        return ip or "unknown"
+
+    def start(self, ip: str | None, seconds: float, reason: str) -> None:
+        key = self._key(ip)
+        now = self._clock()
+        until = now + seconds
+        with self._lock:
+            stale = [k for k, (u, _) in self._until.items() if now >= u]
+            for k in stale:
+                del self._until[k]
+            current = self._until.get(key)
+            if current is not None and current[0] >= until:
+                return
+            if key not in self._until and len(self._until) >= self._max_size:
+                oldest = min(self._until, key=lambda k: self._until[k][0])
+                del self._until[oldest]
+            self._until[key] = (until, reason)
+
+    def remaining(self, ip: str | None) -> tuple[int, str | None]:
+        """(secondes restantes arrondies au supérieur, cause) ; (0, None) si aucun refroidissement."""
+        key = self._key(ip)
+        now = self._clock()
+        with self._lock:
+            entry = self._until.get(key)
+            if entry is None:
+                return 0, None
+            until, reason = entry
+            if now >= until:
+                del self._until[key]
+                return 0, None
+            return ceil(until - now), reason

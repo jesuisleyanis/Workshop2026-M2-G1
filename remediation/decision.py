@@ -42,6 +42,10 @@ class Rule(_Strict):
     actions: list[ActionSpec] = Field(min_length=1)
     verify: Literal["verify_tx"]
     escalation: str
+    # Contrôle AVANT d'agir : si le service répond déjà (attaque contenue par les protections
+    # préventives — limitation de débit et ModSecurity du WAF), l'incident est clos sans action
+    # modifiante. Évite p. ex. de redémarrer payment-api en boucle pendant un flood déjà écrêté.
+    verify_first: bool = False
 
 
 class Defaults(_Strict):
@@ -56,7 +60,7 @@ class DecisionTable(_Strict):
     rules: list[Rule]
 
     @model_validator(mode="after")
-    def _check(self) -> "DecisionTable":
+    def _check(self) -> DecisionTable:
         if self.version not in SUPPORTED_VERSIONS:
             raise ValueError(f"version de table non supportée : {self.version!r}")
         seen: set[IncidentType] = set()

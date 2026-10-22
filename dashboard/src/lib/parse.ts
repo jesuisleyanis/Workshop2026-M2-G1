@@ -1,5 +1,6 @@
 import {
   INCIDENT_TYPES,
+  JOURNAL_INCIDENT_TYPES,
   STREAM_EVENT_NAMES,
   TIMELINE_EVENT_NAME,
   TIMELINE_PHASES,
@@ -8,6 +9,7 @@ import {
   type AnomalyEvent,
   type FeatureContribution,
   type IncidentType,
+  type JournalIncidentType,
   type PlannedAction,
   type ServiceHealth,
   type ServiceStatus,
@@ -29,6 +31,8 @@ const isStr = (v: unknown): v is string => typeof v === 'string' && v !== ''
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 const isIso = (v: unknown): v is string => isStr(v) && !Number.isNaN(Date.parse(v))
 const isIncidentType = (v: unknown): v is IncidentType => (INCIDENT_TYPES as readonly unknown[]).includes(v)
+/** Journal du moteur : §3 + `manual_action` (action opérateur), jamais ramené à null. */
+const isJournalIncidentType = (v: unknown): v is JournalIncidentType => (JOURNAL_INCIDENT_TYPES as readonly unknown[]).includes(v)
 
 function parseFeature(v: unknown, i: number): Result<FeatureContribution> {
   if (!isObj(v)) return fail(`features_top[${i}] n'est pas un objet`)
@@ -107,7 +111,7 @@ const isStatus = (v: unknown): v is TimelineStatus => (TIMELINE_STATUSES as read
 export function parseTimelineFrame(raw: unknown): Result<TimelineFrame> {
   if (!isObj(raw)) return fail('timeline : trame non objet')
   if (!isStr(raw.incident_id)) return fail('timeline : incident_id manquant')
-  if (!isIncidentType(raw.incident_type)) return fail(`timeline : incident_type inconnu : ${String(raw.incident_type)}`)
+  if (!isJournalIncidentType(raw.incident_type)) return fail(`timeline : incident_type inconnu : ${String(raw.incident_type)}`)
   if (!isIso(raw.ts)) return fail('timeline : ts invalide')
   if (!isPhase(raw.phase)) return fail(`timeline : phase inconnue : ${String(raw.phase)}`)
   if (!isStatus(raw.status)) return fail(`timeline : status inconnu : ${String(raw.status)}`)
@@ -251,7 +255,7 @@ export function parseStreamMessage(eventName: string, data: string): Result<Stre
         kind: 'remediation_started',
         ts,
         incidentId: json.incident_id,
-        incidentType: isIncidentType(json.incident_type) ? json.incident_type : null,
+        incidentType: isJournalIncidentType(json.incident_type) ? json.incident_type : null,
         service: isStr(json.service) ? json.service : null,
         actions: parsePlannedActions(json.actions),
         dryRun: json.dry_run === true,

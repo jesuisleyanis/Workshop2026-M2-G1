@@ -31,12 +31,23 @@ interface dans `include/` et son implémentation dans `src/` :
 | Module | Responsabilité |
 |---|---|
 | `led_device` | Broches D1/D2 et rendu de la machine à états |
-| `wifi_connection` | Connexion au point d'accès et tentatives de reconnexion espacées de 5 s |
+| `buzzer` | Sons non bloquants sur D5 selon l'état de la LED |
+| `wifi_connection` | Connexion au point d'accès, reconnexion automatique et reprise après échec |
 | `http_api` | Trois commandes HTTP et authentification Basic |
 | `mqtt_bridge` | Abonnement aux états, statut/LWT et heartbeat |
 
 La connexion Wi-Fi ne contient pas de boucle d'attente : la LED continue de s'actualiser
 pendant une perte de réseau. L'adresse IP est affichée sur le moniteur série après connexion.
+Une tentative en cours dispose de 30 s avant d'être relancée ; les échecs explicites
+peuvent être retentés après 5 s.
+Tant que le Wi-Fi n'a pas d'adresse IP, la LED alterne **rouge/vert** toutes les 400 ms.
+Après connexion, elle reprend l'état d'authentification en cours.
+
+Brancher le **+** du buzzer passif sur **D5** et le **−** sur **GND**. Le vert clignotant
+joue une mélodie d'attente en boucle ; le vert fixe joue la fanfare du drapeau de Mario ;
+le rouge clignotant (`auth_fail`) répète la mélodie de mort de Mario pendant 12 s ;
+le rouge fixe (`not_recognized`) joue une mélodie de cirque en boucle pendant 30 s.
+Le buzzer reste muet au repos.
 
 ## Flasher la carte
 

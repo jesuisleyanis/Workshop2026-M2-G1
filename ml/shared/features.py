@@ -43,8 +43,9 @@ FEATURE_NAMES: tuple[str, ...] = (
 N_FEATURES: int = len(FEATURE_NAMES)
 FEATURE_INDEX: dict[str, int] = {name: i for i, name in enumerate(FEATURE_NAMES)}
 
-#: Fenêtre d'agrégation du vecteur côté contrat (secondes).
-WINDOW_SECONDS: int = 15
+#: Fenêtre d'agrégation du vecteur côté contrat (secondes) = PROM_RATE_WINDOW du collector ;
+#: un vecteur par seconde (COLLECT_INTERVAL_SECONDS). Détection < 5 s : docs/plan-amelioration-detection.md.
+WINDOW_SECONDS: int = 5
 
 # Plancher de l'écart-type utilisé pour le z-score. Sans lui, une feature quasi
 # constante en baseline (ex. db_errors_per_s ~ 0) produirait des z astronomiques
@@ -72,14 +73,14 @@ def vector_from_dict(values: Mapping[str, float]) -> list[float]:
 def vector_to_dict(vector: Sequence[float]) -> dict[str, float]:
     """Inverse de `vector_from_dict` ; valide la longueur."""
     validate_vector(vector)
-    return {name: float(v) for name, v in zip(FEATURE_NAMES, vector)}
+    return {name: float(v) for name, v in zip(FEATURE_NAMES, vector, strict=False)}
 
 
 def validate_vector(vector: Sequence[float]) -> None:
     """Lève ValueError si la longueur est incorrecte ou si une valeur n'est pas finie."""
     if len(vector) != N_FEATURES:
         raise ValueError(f"vecteur de {len(vector)} features, {N_FEATURES} attendues")
-    for name, v in zip(FEATURE_NAMES, vector):
+    for name, v in zip(FEATURE_NAMES, vector, strict=False):
         if not math.isfinite(v):
             raise ValueError(f"feature {name} non finie: {v!r}")
 
@@ -95,7 +96,7 @@ def zscores(
     """Z-score signé de chaque feature vs la baseline (écart-type planché par STD_FLOOR)."""
     validate_vector(vector)
     out: dict[str, float] = {}
-    for name, v in zip(FEATURE_NAMES, vector):
+    for name, v in zip(FEATURE_NAMES, vector, strict=False):
         std = max(float(stds[name]), STD_FLOOR[name])
         out[name] = (float(v) - float(means[name])) / std
     return out
@@ -139,7 +140,9 @@ def classify_incident(z: Mapping[str, float]) -> IncidentType:
       * web_attack      : waf_blocked_per_s ↑
       * service_flood   : req_per_s ↑, ou (p95_latency_ms ↑ ET ratio_5xx ↑ sans
                           erreurs DB dominantes — sinon c'est de la corruption,
-                          pas un problème de disponibilité)
+                          pas un problème de disponibilité), ou ratio_4xx ↑ SANS échecs
+                          de login ni blocages WAF (flood non authentifié : requêtes
+                          rejetées en 401 avant la base — vu en démo le 21/10)
       * unknown         : aucun groupe n'atteint le seuil (anomalie sans signature claire)
 
     Limite assumée : un attaquant qui combine plusieurs vecteurs est étiqueté par
@@ -152,6 +155,10 @@ def classify_incident(z: Mapping[str, float]) -> IncidentType:
     flood = pos["req_per_s"]
     if pos["db_errors_per_s"] < SIGNAL_Z_MIN:
         flood = max(flood, min(pos["p95_latency_ms"], pos["ratio_5xx"]))
+    # Rafale de 4xx sans signature auth/WAF : flood non authentifié (disponibilité). Si les échecs de
+    # login ou les blocages WAF montent aussi, ce sont eux qui expliquent les 4xx (auth_abuse, web_attack).
+    if pos["auth_failed_per_s"] < SIGNAL_Z_MIN and pos["waf_blocked_per_s"] < SIGNAL_Z_MIN:
+        flood = max(flood, pos["ratio_4xx"])
 
     scores: dict[IncidentType, float] = {
         IncidentType.DATA_CORRUPTION: pos["db_errors_per_s"],

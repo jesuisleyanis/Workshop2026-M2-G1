@@ -1,260 +1,321 @@
-// Génère Workshop2026-M2-G1-Pres.pptx (livrable §7.2) : pitch court (~5 min, 10 slides) devant le jury.
+// Génère Workshop2026-M2-G1-Pres.pptx (sujet §7.2) : support d'un oral de 10 minutes, centré sur la présentation
+// de l'équipe (une slide par membre) avec deux schémas (architecture, démo en 5 temps).
+// Direction artistique : nuit profonde, code couleur de l'incident (menthe = sain/rétabli, corail = attaque,
+// ambre = détection, bleu = infrastructure), ligne de pouls en motif, transitions Morph et apparitions en cascade.
+// Pipeline : pptxgenjs -> applyTheme (couleurs du thème) -> animate (Morph + animations d'entrée).
 // Usage : cd docs/dossier/slides && npm install && node build.js   (sortie : racine du dépôt)
-// Contenu aligné sur docs/dossier/dossier.md ; les valeurs [M] sont à remplacer par les mesures de recette.
-"use strict";
 const path = require("path");
 const pptxgen = require("pptxgenjs");
-const { applyTheme } = require(process.env.PPTX_SKILL_DIR
-  ? path.join(process.env.PPTX_SKILL_DIR, "scripts/apply_theme.js")
-  : "./apply_theme.js");
+const { applyTheme } = require("./apply_theme");
+const { animate } = require("./animate");
+const A = require("./assets");
 
 const OUT = path.resolve(__dirname, "../../../Workshop2026-M2-G1-Pres.pptx");
 
-// ---------------------------------------------------------------- thème : nuit (SOC) + vert « reprise » + rouge « incident »
+// L'équipe, dans l'ordre de passage. Chaque membre : 3 réalisations (icône Lucide, couleur, titre, détail).
+const TEAM = [
+  {
+    name: "Yanis Capelle", initials: "YC", role: "DÉVELOPPEUR", tone: "mint",
+    tagline: "La plateforme, le moteur de reprise, et le fil qui relie tout.",
+    items: [
+      ["LuServer", "blue", "Plateforme bancaire", "payment-api, auth et front : comptes, virements, cartes, relevés"],
+      ["LuWrench", "mint", "Moteur de remédiation", "table de décision, privilèges bornés, contrats d'interfaces"],
+      ["LuFileCheck", "amber", "Intégration et gouvernance", "revues et fusions, EBIOS RM, PCA/PRA, NIS2/DORA, dossier"],
+    ],
+  },
+  {
+    name: "Louis Nectoux", initials: "LN", role: "DÉVELOPPEUR", tone: "coral",
+    tagline: "Celui qui attaque la plateforme, et celui qui la verrouille.",
+    items: [
+      ["LuSkull", "coral", "Red Team bornée", "scénarios d'attaque, console et runbook du PC Attaquant, chaos"],
+      ["LuScanFace", "amber", "Back-office facial", "identifiant, visage, mot de passe ; habilitations de bout en bout"],
+      ["LuShieldCheck", "mint", "Durcissement et SOC", "audit de sécurité, règles SOC, tests de bout en bout"],
+    ],
+  },
+  {
+    name: "Valentin Furcy", initials: "VF", role: "DÉVELOPPEUR IA", tone: "amber",
+    tagline: "Faire voir l'attaque au modèle, en quelques secondes.",
+    items: [
+      ["LuBrainCircuit", "amber", "Détection sur séries réelles", "captures, calibration : de 37 s à 2 s pour voir un flood"],
+      ["LuRadar", "coral", "L'attaquant désigné", "IP source retrouvée dans les journaux du WAF, puis bloquée"],
+      ["LuServerCog", "blue", "Une stack qui tient", "lancement fiable, 3 répliques de payment-api, modèle facial"],
+    ],
+  },
+  {
+    name: "Aurélien Serre", initials: "AS", role: "DÉVELOPPEUR IA", tone: "blue",
+    tagline: "Un assistant qui explique l'incident, sans jamais agir.",
+    items: [
+      ["LuBot", "blue", "Assistant RAG", "modèle local ≤ 8B, LangChain, Chroma, dans le dashboard"],
+      ["LuFileCheck", "mint", "Résumé DSI et post-mortem", "rédigés à partir du journal d'incident"],
+      ["LuLock", "amber", "Isolé de l'automate", "réseau séparé ; toute commande proposée exige une confirmation"],
+    ],
+  },
+  {
+    name: "Enzo Palermo", initials: "EP", role: "DÉVELOPPEUR", tone: "mint",
+    tagline: "Le témoin physique de l'authentification.",
+    items: [
+      ["LuRadio", "mint", "Firmware ESP8266", "LED bicolore, machine à états, Wi-Fi, HTTP et MQTT"],
+      ["LuServerCog", "blue", "Broker MQTT durci", "Mosquitto authentifié, ACL par topic, profil iot"],
+      ["LuKeyRound", "amber", "Secrets chiffrés", "SOPS et age : aucun secret en clair dans le dépôt"],
+    ],
+  },
+  {
+    name: "Léo Solana", initials: "LS", role: "DÉVELOPPEUR", tone: "amber",
+    tagline: "Ce qui fait démarrer la stack, et ce qui entre dans main.",
+    items: [
+      ["LuFileCog", "amber", "Configuration de l'environnement", "rédaction du .env : les variables dont chaque service a besoin"],
+      ["LuTerminal", "mint", "Makefile", "écriture minutieuse des commandes de lancement, de test et de démo"],
+      ["LuGitPullRequest", "blue", "Revue des branches", "relecture avant fusion dans main"],
+    ],
+  },
+];
+
 const THEME = {
-  name: "Resilience G1",
-  headFontFace: "Cambria",
+  name: "Resilience Nuit",
+  headFontFace: "Calibri",
   bodyFontFace: "Calibri",
   colors: {
-    dk1: "0F1B2D", lt1: "FFFFFF", dk2: "3B4A5E", lt2: "EEF2F7",
-    accent1: "13A47B", // reprise / OK
-    accent2: "D9482B", // incident / attaque
-    accent3: "2F6DB5", // détection / ML
-    accent4: "E8B13D", // avertissement
-    accent5: "7A8CA3", accent6: "C7D2E0",
-    hlink: "2F6DB5", folHlink: "7A8CA3",
+    dk1: "0B1220", lt1: "FFFFFF", dk2: "1A2438", lt2: "E8EDF5",
+    accent1: "2EE6A6", accent2: "FF5A5F", accent3: "FFB547", accent4: "5B8CFF", accent5: "8A97AE", accent6: "2A3854",
+    hlink: "5B8CFF", folHlink: "8A97AE",
   },
 };
+const HEX = THEME.colors;
+const MONO = "Consolas";
 
-const pres = new pptxgen();
-pres.layout = "LAYOUT_16x9"; // 10" x 5.625"
-pres.theme = { headFontFace: THEME.headFontFace, bodyFontFace: THEME.bodyFontFace };
-pres.author = "Consortium G1";
-pres.title = "PROJECT RESILIENCE-ALPHA — pitch";
-const C = pres.SchemeColor;
-
-// ---------------------------------------------------------------- layouts
-const FOOT = { x: 0.5, y: 5.2, w: 6, h: 0.3, fontSize: 9, color: C.accent5, margin: 0 };
-pres.defineSlideMaster({
-  title: "DARK",
-  background: { color: THEME.colors.dk1 },
-  objects: [
-    { placeholder: { options: { name: "title", type: "title", x: 0.6, y: 1.5, w: 8.8, h: 1.2, fontSize: 40, bold: true, color: C.background1, margin: 0 } } },
-    { placeholder: { options: { name: "body", type: "body", x: 0.6, y: 2.75, w: 8.8, h: 1.7, fontSize: 16, color: C.accent6, margin: 0 } } },
-    { text: { text: "Workshop National EPSI 2026 · PROJECT RESILIENCE-ALPHA · Consortium G1", options: { ...FOOT, color: C.accent5 } } },
-  ],
-});
-pres.defineSlideMaster({
-  title: "CONTENT",
-  background: { color: THEME.colors.lt1 },
-  objects: [
-    { placeholder: { options: { name: "title", type: "title", x: 0.5, y: 0.35, w: 9, h: 0.7, fontSize: 28, bold: true, color: C.text1, margin: 0 } } },
-    { text: { text: "PROJECT RESILIENCE-ALPHA · Consortium G1", options: { ...FOOT } } },
-  ],
-  slideNumber: { x: 9.2, y: 5.2, w: 0.4, h: 0.3, fontSize: 9, color: C.accent5 },
-});
-
-// ---------------------------------------------------------------- helpers
-const T = (slide, text, o) => slide.addText(text, { isTextBox: true, margin: 0, fontSize: 14, color: C.text1, valign: "top", ...o });
-function card(slide, x, y, w, h, title, body, accent, opts = {}) {
-  slide.addShape(pres.ShapeType.roundRect, { x, y, w, h, rectRadius: 0.08, fill: { color: C.background2 }, line: { color: C.background2 }, objectName: `card ${title}` });
-  slide.addShape(pres.ShapeType.ellipse, { x: x + 0.18, y: y + 0.18, w: 0.3, h: 0.3, fill: { color: accent }, line: { color: accent }, objectName: `dot ${title}` });
-  T(slide, title, { x: x + 0.6, y: y + 0.15, w: w - 0.75, h: 0.4, fontSize: opts.titleSize || 15, bold: true });
-  T(slide, body, { x: x + 0.18, y: y + 0.62, w: w - 0.36, h: h - 0.75, fontSize: opts.bodySize || 12, color: C.text2 });
-}
-function stat(slide, x, y, w, big, label, color) {
-  T(slide, big, { x, y, w, h: 0.9, fontSize: 44, bold: true, color, align: "center", valign: "middle" });
-  T(slide, label, { x, y: y + 0.95, w, h: 0.8, fontSize: 12, color: C.text2, align: "center" });
-}
-function box(slide, x, y, w, h, text, fill, color = C.background1, size = 11) {
-  slide.addShape(pres.ShapeType.roundRect, { x, y, w, h, rectRadius: 0.06, fill: { color: fill }, line: { color: fill }, objectName: `box ${text}` });
-  T(slide, text, { x: x + 0.05, y, w: w - 0.1, h, fontSize: size, bold: true, color, align: "center", valign: "middle" });
-}
-function arrow(slide, x1, y1, x2, y2, color = C.accent5) {
-  slide.addShape(pres.ShapeType.line, { x: x1, y: y1, w: x2 - x1, h: y2 - y1, line: { color, width: 1.5, endArrowType: "triangle" }, objectName: "arrow" });
-}
-
-// ================================================================ 1. Titre
-pres.addSection({ title: "Ouverture" });
-let s = pres.addSlide({ masterName: "DARK", sectionTitle: "Ouverture" });
-T(s, "DÉMONSTRATEUR DE CYBER-RÉSILIENCE · ZERO-TOUCH RECOVERY", { x: 0.6, y: 0.9, w: 8.8, h: 0.4, fontSize: 12, color: C.accent1, charSpacing: 2 });
-s.addText("PROJECT RESILIENCE-ALPHA", { placeholder: "title" });
-s.addText([
-  { text: "Une plateforme de paiement fictive encaisse une attaque, détecte l'anomalie par ML, se répare seule et le prouve par une transaction.", options: { breakLine: true } },
-  { text: "Consortium G1 — pitch de 5 minutes, puis démonstration en direct.", options: { color: C.accent5 } },
-], { placeholder: "body" });
-s.addNotes("1 min : mission et démarche. Insister : pas de promesse d'infaillibilité, une reprise automatique conçue, observée et vérifiée sur un périmètre maîtrisé.");
-
-// ================================================================ 2. Mission / critère unique
-pres.addSection({ title: "Démarche" });
-s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Démarche" });
-s.addText("Un seul critère de réussite", { placeholder: "title" });
-stat(s, 0.5, 1.3, 2.9, "heures", "reprise manuelle aujourd'hui : de minutes à heures, peu reproductible", C.accent2);
-stat(s, 3.55, 1.3, 2.9, "≤ 60 s", "cible : attaque → détection → remédiation → nouvelle transaction OK", C.accent1);
-stat(s, 6.6, 1.3, 2.9, "0", "intervention humaine dans la boucle de reprise (sanction ND/0)", C.accent3);
-s.addShape(pres.ShapeType.roundRect, { x: 0.5, y: 3.25, w: 9, h: 1.7, rectRadius: 0.08, fill: { color: C.background2 }, line: { color: C.background2 }, objectName: "principes" });
-T(s, [
-  { text: "Deux principes codés dans le démonstrateur, pas seulement écrits", options: { bold: true, breakLine: true, paraSpaceAfter: 6 } },
-  { text: "Un conteneur qui redémarre n'est pas une preuve : la reprise n'est déclarée que quand une transaction fictive traverse toute la chaîne (verify_tx, code 0).", options: { bullet: true, breakLine: true, paraSpaceAfter: 4 } },
-  { text: "Restaurer la disponibilité ≠ corriger une corruption : la table de décision refuse de se charger si les deux familles sont mélangées.", options: { bullet: true } },
-], { x: 0.75, y: 3.4, w: 8.5, h: 1.45, fontSize: 13, color: C.text1 });
-s.addNotes("Les trois chiffres : l'écart entre aujourd'hui et la cible, et la contrainte du jury. Les deux principes différencient le projet : vérification métier et distinction disponibilité/intégrité, tous deux vérifiés par des tests.");
-
-// ================================================================ 3. Architecture
-s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Démarche" });
-s.addText("Architecture : une seule porte exposée", { placeholder: "title" });
-// Colonne gauche : chemin métier
-box(s, 0.5, 1.3, 1.5, 0.55, "PC Attaquant", C.accent2);
-arrow(s, 2.0, 1.575, 2.55, 1.575, C.accent2);
-box(s, 2.55, 1.3, 1.9, 0.55, "WAF · ModSecurity + CRS\n[edge — seul exposé]", C.text1, C.background1, 10);
-arrow(s, 3.5, 1.85, 3.5, 2.2);
-box(s, 2.3, 2.2, 0.75, 0.5, "front", C.accent5);
-box(s, 3.1, 2.2, 1.0, 0.5, "payment-api", C.accent5);
-box(s, 4.15, 2.2, 0.75, 0.5, "auth", C.accent5);
-arrow(s, 3.6, 2.7, 3.6, 3.05);
-box(s, 2.7, 3.05, 1.8, 0.5, "PostgreSQL [data interne]", C.text2, C.background1, 10);
-// Colonne droite : chaîne de reprise
-box(s, 5.6, 1.3, 1.85, 0.55, "Prometheus · Loki · Grafana\n[obs]", C.accent5, C.background1, 10);
-arrow(s, 6.525, 1.85, 6.525, 2.2, C.accent3);
-box(s, 5.6, 2.2, 1.85, 0.55, "collector → detector\nIsolationForest (ML)", C.accent3, C.background1, 10);
-arrow(s, 6.525, 2.75, 6.525, 3.05, C.accent3);
-box(s, 5.6, 3.05, 1.85, 0.55, "Moteur de remédiation\n[app, jamais exposé]", C.accent1, C.background1, 10);
-arrow(s, 7.45, 3.325, 7.9, 3.325, C.accent1);
-box(s, 7.9, 3.05, 1.6, 0.55, "docker-socket-proxy\n· Ansible · verify_tx", C.accent1, C.background1, 9);
-arrow(s, 6.525, 3.6, 6.525, 3.95, C.accent1);
-box(s, 5.6, 3.95, 1.85, 0.5, "Dashboard (SSE, MTTD/MTTR)", C.text1, C.background1, 10);
-arrow(s, 5.6, 3.325, 4.5, 3.325, C.accent1); // moteur -> plateforme (actions)
-T(s, "actions : blocage IP, redémarrage, restauration", { x: 4.35, y: 3.6, w: 1.6, h: 0.5, fontSize: 9, color: C.text2, align: "center" });
-T(s, [
-  { text: "4 réseaux Compose (edge / app / data interne / obs) ; audit.sh échoue si un autre service que le WAF publie un port.", options: { bullet: true, breakLine: true, paraSpaceAfter: 3 } },
-  { text: "Contrats d'interfaces figés en J1 (logs JSON, métriques, AnomalyEvent, table de décision) et vérifiés par des tests.", options: { bullet: true, breakLine: true, paraSpaceAfter: 3 } },
-  { text: "Assistant RAG (Ollama ≤ 8B) séparé de l'automate ; chemin SOC (Alertmanager) secondaire, authentifié.", options: { bullet: true } },
-], { x: 0.5, y: 4.0, w: 4.9, h: 1.1, fontSize: 11, color: C.text2 });
-s.addNotes("Lire de gauche à droite : le chemin métier (attaquant, WAF, services, base interne) et la chaîne de reprise (observabilité, ML, moteur, actions, dashboard). Python/FastAPI partout, React/Tailwind pour les fronts.");
-
-// ================================================================ 4. Démo en 5 temps
-pres.addSection({ title: "Démonstration" });
-s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Démonstration" });
-s.addText("La démo en cinq temps, d'une seule commande", { placeholder: "title" });
-const steps = [
-  ["1", "Avant", "verify_tx : une transaction fictive traverse WAF → API → base (code 0).", C.accent1],
-  ["2", "Attaque", "service_flood depuis le PC Attaquant : rafale bornée (≤ 80 req/s, 30 s), kill-switch.", C.accent2],
-  ["3", "Détection", "vecteur de 9 features toutes les 15 s, score IsolationForest > seuil → AnomalyEvent.", C.accent3],
-  ["4", "Remédiation", "table de décision : blocage IP (WAF) → redémarrage payment-api via le proxy ; verify_tx après chaque action.", C.accent1],
-  ["5", "Après", "verify_tx OK → incident clos ; timeline, MTTD et MTTR affichés sur le dashboard.", C.accent1],
-];
-steps.forEach(([n, title, body, color], i) => {
-  const x = 0.5 + i * 1.84;
-  s.addShape(pres.ShapeType.ellipse, { x: x + 0.55, y: 1.35, w: 0.6, h: 0.6, fill: { color }, line: { color }, objectName: `step ${n}` });
-  T(s, n, { x: x + 0.55, y: 1.35, w: 0.6, h: 0.6, fontSize: 20, bold: true, color: C.background1, align: "center", valign: "middle" });
-  if (i < steps.length - 1) arrow(s, x + 1.2, 1.65, x + 1.84 + 0.5, 1.65);
-  T(s, title, { x, y: 2.1, w: 1.7, h: 0.4, fontSize: 16, bold: true, align: "center" });
-  T(s, body, { x, y: 2.5, w: 1.7, h: 1.3, fontSize: 11, color: C.text2, align: "center" });
-});
-s.addShape(pres.ShapeType.roundRect, { x: 0.5, y: 3.95, w: 9, h: 1.05, rectRadius: 0.08, fill: { color: C.background2 }, line: { color: C.background2 }, objectName: "demo note" });
-T(s, [
-  { text: "make demo", options: { bold: true, color: C.accent1 } },
-  { text: " enchaîne les cinq temps et n'exécute aucune action corrective : il observe et prouve. Le même scénario rejoué pour data_corruption montre la réponse d'intégrité (restauration du dump) et non un redémarrage. Clip Chrono ≤ 60 s sans coupe sur cette séquence.", options: {} },
-], { x: 0.75, y: 4.1, w: 8.5, h: 0.8, fontSize: 12, color: C.text1 });
-s.addNotes("C'est la séquence du Clip Chrono et de la démo live. Annoncer que personne ne touche au clavier entre l'étape 2 et l'étape 5.");
-
-// ================================================================ 5. Détection ML
-pres.addSection({ title: "Technique" });
-s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Technique" });
-s.addText("Détection : un modèle décide, pas des if", { placeholder: "title" });
-card(s, 0.5, 1.3, 4.3, 1.8, "Données et modèle", "Prometheus → 9 features / 15 s (req/s, latence p95, 4xx, 5xx, échecs de login, blocages WAF, CPU, RAM, erreurs DB). IsolationForest, 200 arbres ; seuil 0,6296 = quantile 99,9 % de la baseline ; artefact v1.0.0, SHA-256 vérifié au chargement.", C.accent3);
-card(s, 0.5, 3.25, 4.3, 1.8, "Limites assumées", "Baseline et attaques synthétiques : avant production, 2–4 semaines de trafic réel et revue du seuil. Le type d'incident est une heuristique de routage : le modèle décide qu'il y a anomalie, la table décide quoi faire. Faux positif = un redémarrage inutile, borné par le cooldown.", C.accent4, { bodySize: 11 });
-s.addTable([
-  [{ text: "Scénario", options: { bold: true, fill: { color: THEME.colors.lt2 } } }, { text: "Détection (modèle seul)", options: { bold: true, fill: { color: THEME.colors.lt2 } } }],
-  ["service_flood", "100 %"], ["auth_abuse", "98,6 %"], ["web_attack", "95,7 %"], ["data_corruption", "100 %"],
-  [{ text: "Faux positifs (2 000 fenêtres normales)", options: { bold: true } }, { text: "0", options: { bold: true, color: THEME.colors.accent1 } }],
-], { x: 5.1, y: 1.3, w: 4.4, colW: [2.6, 1.8], fontSize: 12, color: THEME.colors.dk1, border: { type: "solid", color: THEME.colors.accent6, pt: 0.75 }, rowH: 0.36, margin: 0.05 });
-T(s, "Jeu d'évaluation synthétique (ml/training/artifacts/v1.0.0/baseline_stats.json). 100 % avec le garde-fou statistique (z ≥ 12,97), documenté comme filet, pas comme décideur.", { x: 5.1, y: 3.6, w: 4.4, h: 0.9, fontSize: 11, color: C.text2, italic: true });
-s.addNotes("Répondre au §3.3 du sujet : données, préparation (z-score avec plancher), modèle, résultats, limites. Le seuil n'est pas une constante : il est dérivé de la distribution des scores.");
-
-// ================================================================ 6. Remédiation et privilèges
-s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Technique" });
-s.addText("Remédiation autonome, privilèges bornés", { placeholder: "title" });
-const hdr = (t) => ({ text: t, options: { bold: true, fill: { color: THEME.colors.lt2 } } });
-s.addTable([
-  [hdr("incident_type"), hdr("Actions (dans l'ordre)"), hdr("Famille")],
-  ["service_flood", "waf_block_ip → restart_service(payment-api)", "Disponibilité"],
-  ["auth_abuse", "waf_block_ip → tighten_rate_limit(auth, ×0,5)", "Accès"],
-  ["web_attack", "confirm_waf_block (Loki) → waf_blacklist_ip", "Confinement"],
-  [{ text: "data_corruption", options: { bold: true } }, { text: "restore_pg_dump(latest) — seul", options: { bold: true } }, { text: "Intégrité", options: { bold: true, color: THEME.colors.accent2 } }],
-  ["unknown", "dry_run_report puis escalade", "Aucune action destructive"],
-], { x: 0.5, y: 1.3, w: 5.6, colW: [1.45, 2.95, 1.2], fontSize: 11, color: THEME.colors.dk1, border: { type: "solid", color: THEME.colors.accent6, pt: 0.75 }, rowH: 0.34, margin: 0.05 });
-T(s, "Chaque action modifiante est suivie de verify_tx (5 essais / 3 s) ; cooldown 60 s, 3 tentatives, puis escalade notify_operator. Idempotence, incident actif dédoublonné, dry_run forçable.", { x: 0.5, y: 3.55, w: 5.6, h: 0.75, fontSize: 11, color: C.text2 });
-card(s, 6.4, 1.3, 3.1, 3.7, "Privilèges (point jury)", "• Socket Docker en lecture seule dans un proxy HAProxy : 5 couples méthode/chemin autorisés (ping, list, inspect, restart, HUP), jamais exec/create.\n• Bearer interne (SOPS, fail closed), aucun port publié, jamais sur edge.\n• Playbooks nommés, exécutés dans le conteneur ; listes blanches ; IP de l'hôte jamais bloquée.\n• Non-root, cap_drop ALL, no-new-privileges.\n• Token volé = au pire 3 redémarrages tracés.", C.accent1, { bodySize: 11 });
-s.addNotes("La table YAML est la seule source de vérité ; le moteur ne contient que des invariants de sécurité. Expliquer pourquoi le socket brut serait root sur l'hôte et pourquoi les variables des proxys génériques sont trop larges.");
-
-// ================================================================ 7. Sécurité & Red Team
-s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Technique" });
-s.addText("Red Team bornée, défense en profondeur", { placeholder: "title" });
-const sc = [
-  ["service_flood", "saturation applicative (T1499.002)", C.accent2],
-  ["auth_abuse", "credential stuffing (T1110.004)", C.accent2],
-  ["web_attack", "SQLi / traversée, bloquées par le CRS (T1190)", C.accent2],
-  ["data_corruption", "altération réversible de données fictives (T1565.001)", C.accent4],
-];
-T(s, "4 scénarios = contrats Red ↔ Blue (signal, incident_type, remédiation attendue, critère)", { x: 0.5, y: 1.25, w: 4.4, h: 0.5, fontSize: 13, bold: true });
-sc.forEach(([n, d, color], i) => {
-  const y = 1.8 + i * 0.78;
-  s.addShape(pres.ShapeType.ellipse, { x: 0.5, y: y + 0.12, w: 0.28, h: 0.28, fill: { color }, line: { color }, objectName: `sc ${n}` });
-  T(s, n, { x: 0.95, y, w: 3.9, h: 0.3, fontSize: 13, bold: true });
-  T(s, d, { x: 0.95, y: y + 0.3, w: 3.9, h: 0.4, fontSize: 11, color: C.text2 });
-});
-T(s, "Périmètre strict : cible = la stack du projet sur RESILIENCE-G1, ≤ 100 req/s, ≤ 60 s, arrêt automatique, kill-switch, reset. Pannes non malveillantes (chaos) en complément.", { x: 0.5, y: 4.4, w: 4.4, h: 0.7, fontSize: 10, color: C.text2, italic: true });
-card(s, 5.2, 1.25, 4.3, 3.75, "Mesures défensives", "• WAF Nginx + ModSecurity + OWASP CRS, image officielle épinglée, non-root, seul point exposé, deny-list IP rechargeable à chaud.\n• Secrets : SOPS + age, clé privée hors git, gitleaks en pre-commit, archive re-scannée (noms et contenu).\n• Durcissement : non-root, cap_drop ALL, no-new-privileges, read_only, limites CPU/RAM, healthchecks ; Postgres non-root sans capability.\n• Fonction SOC : logs JSON normalisés → Loki ; 4 règles Grafana + miroir Prometheus → Alertmanager → moteur (authentifié).\n• Écarts assumés : pas de MFA, JWT symétrique partagé, TLS auto-signé, sauvegardes sur le même hôte.", C.accent1, { bodySize: 11 });
-s.addNotes("Le WAF est la seule porte ; le reste est interne. Dire les écarts avant que le jury ne les trouve.");
-
-// ================================================================ 8. Résultats des essais
-pres.addSection({ title: "Résultats" });
-s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Résultats" });
-s.addText("Résultats : prouvé, et encore à mesurer", { placeholder: "title" });
-s.addChart(pres.ChartType.bar, [{
-  name: "Tests automatisés verts (19 oct. 2026)",
-  labels: ["dashboard", "remediation", "assistant", "payment-api", "ml", "front", "auth", "attacks", "waf", "scripts", "infra", "libs"],
-  values: [121, 105, 97, 54, 50, 44, 35, 30, 25, 16, 11, 10],
-}], {
-  x: 0.5, y: 1.25, w: 5.3, h: 3.8, barDir: "bar", chartColors: [THEME.colors.accent3],
-  showTitle: true, title: "Tests automatisés verts par composant (598 au total)", titleFontSize: 12, titleColor: THEME.colors.dk1, titleFontFace: "+mn-lt",
-  showValue: true, dataLabelPosition: "outEnd", dataLabelFontSize: 10, dataLabelColor: THEME.colors.dk2, dataLabelFontFace: "+mn-lt",
-  catAxisLabelFontSize: 10, catAxisLabelColor: THEME.colors.dk2, catAxisLabelFontFace: "+mn-lt", catGridLine: { style: "none" },
-  valAxisLabelFontSize: 9, valAxisLabelColor: THEME.colors.accent5, valAxisLabelFontFace: "+mn-lt", valGridLine: { color: THEME.colors.accent6, size: 0.5 },
-  valAxisMaxVal: 140, showLegend: false, catAxisOrientation: "maxMin",
-});
-s.addTable([
-  [hdr("Scénario"), hdr("RTO perçu p95"), hdr("Cible")],
-  ["service_flood", "[M]", "≤ 60 s"], ["auth_abuse", "[M]", "≤ 60 s"], ["web_attack", "[M]", "immédiat"], ["data_corruption", "[M]", "≤ 2 min"],
-], { x: 6.1, y: 1.25, w: 3.4, colW: [1.4, 1.1, 0.9], fontSize: 11, color: THEME.colors.dk1, border: { type: "solid", color: THEME.colors.accent6, pt: 0.75 }, rowH: 0.34, margin: 0.05 });
-T(s, "[M] = mesuré en recette J4 (≥ 10 rejeux par scénario). RTO perçu = délai de détection + MTTR. Règle : si la cible n'est pas tenue, on révise la cible, pas la mesure.", { x: 6.1, y: 3.05, w: 3.4, h: 0.95, fontSize: 10, color: C.text2, italic: true });
-T(s, "Tests e2e (7) rejouent les 5 temps contre la stack réelle, dont data_corruption KO → OK. Chaque maillon du plan d'exécution est testé isolément (y compris l'exécution réelle du playbook WAF).", { x: 6.1, y: 4.05, w: 3.4, h: 1.0, fontSize: 10, color: C.text2 });
-s.addNotes("Honnêteté : les tests prouvent les contrats et la logique ; les MTTR viennent de la recette sur la machine hôte. Remplacer les [M] avant la soutenance.");
-
-// ================================================================ 9. Gouvernance
-pres.addSection({ title: "Gouvernance" });
-s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Gouvernance" });
-s.addText("Gouvernance reliée au démonstrateur", { placeholder: "title" });
-card(s, 0.5, 1.25, 2.9, 3.75, "EBIOS RM", "6 scénarios opérationnels = les 4 attaques + secret exposé + abus de l'automate.\n\nRisque initial : 5 Élevés (12). Résiduel : 0 Élevé ; 5 Moyens proposés à l'acceptation de la direction avec un indicateur chacun ; abus de l'automate ramené à Faible (3) par le proxy restreint.\n\nCoût d'arrêt : ~60 €/min direct, mais les coûts réglementaires croissent par seuils de durée — l'automatisation change la classe de l'incident.", C.accent4, { bodySize: 11 });
-card(s, 3.55, 1.25, 2.9, 3.75, "PCA / PRA", "Paiement : RTO ≤ 60 s, RPO 0 (redémarrage, pas de restauration).\nDonnées : RTO ≤ 2 min, RPO ≤ 5 min (dump périodique) — perte bornée, à accepter explicitement.\nSinistre majeur : reconstruction manuelle ≤ 60 min, RPO ≤ 1 h — plus zero-touch.\n\nL'humain décide avant (table versionnée, RTO/RPO), l'automate exécute pendant, l'humain analyse après (RACI).", C.accent1, { bodySize: 11 });
-card(s, 6.6, 1.25, 2.9, 3.75, "NIS2 / DORA", "DORA = référentiel principal (entité financière) ; NIS2 art. 21 en grille croisée. Aucune conformité revendiquée : démontré / partiel / non démontrable en 4 jours.\n\nArbitrages : reprise hybride (validation humaine avant restauration destructive en production) ; WAL + réplica pour un RPO ~0 ; ré-entraîner sur trafic réel ; Vault + JWT asymétrique ; SIEM avec rétention.\n\nFeuille de route 30 / 90 / 180 jours.", C.accent3, { bodySize: 11 });
-s.addNotes("Axe 4 : chaque recommandation s'appuie sur un élément vérifiable du dépôt (invariants, journal, métriques). Insister sur la distinction classe d'incident / coût direct.");
-
-// ================================================================ 10. Limites, contributions, conclusion
-pres.addSection({ title: "Conclusion" });
-s = pres.addSlide({ masterName: "DARK", sectionTitle: "Conclusion" });
-s.addText("En contexte industriel", { placeholder: "title" });
-s.addText([
-  { text: "Réplication et second site · modèle entraîné sur trafic réel, dérive surveillée · validation humaine avant restauration destructive · expiration des mesures · CI, SIEM, MFA, rotation des secrets.", options: { breakLine: true, paraSpaceAfter: 6 } },
-  { text: "Contributions : commits « type(scope) » + ROADMAP.md (propriétaire et preuve par tâche). Dév/Infra/Transformation : Yanis · Cyber : Louis · autres piliers : à compléter.", options: { color: C.accent5 } },
-], { placeholder: "body" });
-T(s, "Place à la démonstration.", { x: 0.6, y: 4.5, w: 8.8, h: 0.5, fontSize: 20, bold: true, color: C.accent1 });
-s.addNotes("Clôturer sur les limites (crédibilité) puis enchaîner sur la démo live : 3 minutes, attaque depuis le PC Attaquant, personne ne touche au clavier côté hôte.");
-
-// ---------------------------------------------------------------- écriture + thème
 (async () => {
+  const pres = new pptxgen();
+  pres.layout = "LAYOUT_WIDE"; // 13,333 × 7,5 in
+  pres.author = "Consortium G1";
+  pres.company = "EPSI — Workshop 2026";
+  pres.title = "PROJECT RESILIENCE-ALPHA — Zero-Touch Recovery";
+  pres.theme = { headFontFace: THEME.headFontFace, bodyFontFace: THEME.bodyFontFace };
+  const C = pres.SchemeColor;
+  const SH = pres.ShapeType;
+
+  // ---------------------------------------------------------------- visuels
+  const BG = { hero: await A.background("hero"), content: await A.background("content") };
+  const PULSE = await A.pulse();
+  const ICOLORS = { mint: HEX.accent1, coral: HEX.accent2, amber: HEX.accent3, blue: HEX.accent4, white: "FFFFFF" };
+  const ICON = {};
+  const iconNames = new Set(["LuSkull", "LuShieldCheck", "LuServer", "LuDatabase", "LuActivity", "LuBrainCircuit", "LuWrench", "LuCircleCheck"]);
+  TEAM.forEach((m) => m.items.forEach(([ic]) => iconNames.add(ic)));
+  for (const n of iconNames) for (const [k, hex] of Object.entries(ICOLORS)) ICON[`${n}:${k}`] = await A.icon(n, hex);
+  const DOT = {};
+  for (const [k, hex] of Object.entries(ICOLORS)) DOT[k] = await A.glowDot(hex);
+  const SCHEME = { mint: C.accent1, coral: C.accent2, amber: C.accent3, blue: C.accent4, white: C.background1 };
+
+  // ---------------------------------------------------------------- layouts
+  pres.defineSlideMaster({
+    title: "CONTENU",
+    background: { data: BG.content },
+    objects: [
+      { placeholder: { options: { name: "kicker", type: "body", x: 0.7, y: 0.5, w: 9, h: 0.32, fontFace: MONO, fontSize: 12, color: C.accent1, charSpacing: 3, margin: 0, valign: "bottom" }, text: "" } },
+      { placeholder: { options: { name: "title", type: "title", x: 0.7, y: 0.86, w: 11.93, h: 0.8, fontSize: 34, bold: true, color: C.background1, margin: 0, valign: "top", align: "left" }, text: "" } },
+      { text: { text: "RESILIENCE-ALPHA   ·   Consortium G1", options: { x: 0.7, y: 6.98, w: 6, h: 0.28, fontSize: 10, color: C.accent5, margin: 0, charSpacing: 1 } } },
+    ],
+    slideNumber: { x: 12.13, y: 6.98, w: 0.5, h: 0.28, fontSize: 10, color: HEX.accent5, align: "right" },
+  });
+  pres.defineSlideMaster({ title: "HEROS", background: { data: BG.hero }, objects: [] });
+
+  // ---------------------------------------------------------------- outils de composition
+  const SPEC = {};
+  let s, cur, uid = 0;
+  const newSlide = (master, section, transition = "morph") => {
+    s = pres.addSlide({ masterName: master, sectionTitle: section });
+    cur = { transition, groups: [] };
+    SPEC[pres.slides.length] = cur;
+    return s;
+  };
+  const group = (trigger) => {
+    const g = { trigger, items: [] };
+    cur.groups.push(g);
+    return (names, effect = "fade", delay = 0, dur) => [].concat(names).forEach((name) => g.items.push({ name, effect, delay, dur }));
+  };
+  const nm = (label) => `${label} ${++uid}`;
+  const T = (text, o) => {
+    const name = o.name || nm("texte");
+    s.addText(text, { isTextBox: true, margin: 0, color: C.background1, fontSize: 14, valign: "top", ...o, objectName: name });
+    return name;
+  };
+  const card = (x, y, w, h, o = {}) => {
+    const name = o.name || nm("carte");
+    s.addShape(SH.roundRect, {
+      x, y, w, h, rectRadius: o.radius ?? 0.12,
+      fill: { color: o.fill || C.text2, transparency: o.transparency ?? 12 },
+      line: { color: o.line || C.accent6, width: o.lineWidth ?? 1, transparency: o.lineTransparency ?? 0 },
+      shadow: { type: "outer", color: "000000", blur: 14, offset: 4, angle: 90, opacity: 0.35 },
+      objectName: name,
+    });
+    return name;
+  };
+  // Pastille : cercle teinté + icône (le motif d'icône du deck).
+  const badge = (x, y, d, iconName, tone) => {
+    const c = nm("pastille");
+    s.addShape(SH.ellipse, { x, y, w: d, h: d, fill: { color: SCHEME[tone], transparency: 84 }, line: { color: SCHEME[tone], width: 1.25, transparency: 45 }, objectName: c });
+    const i = nm("icône");
+    s.addImage({ data: ICON[`${iconName}:${tone}`], x: x + d * 0.24, y: y + d * 0.24, w: d * 0.52, h: d * 0.52, objectName: i });
+    return [c, i];
+  };
+  // Avatar : halo lumineux + disque teinté + initiales. `key` stable pour que Morph relie la slide équipe et la slide du membre.
+  const avatar = (x, y, d, m, key, fontSize) => {
+    const halo = `!!halo ${key}`, disc = `!!avatar ${key}`, ini = `!!initiales ${key}`;
+    s.addImage({ data: DOT[m.tone], x: x - d * 0.35, y: y - d * 0.35, w: d * 1.7, h: d * 1.7, transparency: 35, objectName: halo });
+    s.addShape(SH.ellipse, { x, y, w: d, h: d, fill: { color: C.text1, transparency: 0 }, line: { color: SCHEME[m.tone], width: 2 }, objectName: disc });
+    s.addText(m.initials, { isTextBox: true, x, y, w: d, h: d, margin: 0, align: "center", valign: "middle", fontSize, bold: true, color: SCHEME[m.tone], objectName: ini });
+    return [halo, disc, ini];
+  };
+  const arrow = (x, y, w, h, o = {}) => {
+    const name = nm("flèche");
+    s.addShape(SH.line, { x, y, w, h, line: { color: o.color || C.accent5, width: o.width || 1.75, endArrowType: o.begin ? undefined : "triangle", beginArrowType: o.begin ? "triangle" : undefined }, objectName: name });
+    return name;
+  };
+  const pulse = (x, y, w, h) => {
+    s.addImage({ data: PULSE, x, y, w, h, objectName: "!!pouls" });
+    return "!!pouls";
+  };
+  const kickTitle = (kicker, title) => {
+    s.addText(kicker, { placeholder: "kicker" });
+    s.addText(title, { placeholder: "title" });
+  };
+
+  // ================================================================ 1. Titre
+  pres.addSection({ title: "Ouverture" });
+  newSlide("HEROS", "Ouverture", "fade");
+  const a1 = group("auto");
+  a1(T("PROJECT RESILIENCE-ALPHA   ·   WORKSHOP EPSI 2026", { x: 0.9, y: 1.45, w: 9, h: 0.35, fontFace: MONO, fontSize: 14, color: C.accent1, charSpacing: 4 }), "fade");
+  a1(T("Consortium G1", { x: 8.9, y: 0.6, w: 3.55, h: 0.3, fontFace: MONO, fontSize: 11, color: C.accent5, align: "right" }), "fade");
+  a1(T([{ text: "Zero-Touch", options: { breakLine: true } }, { text: "Recovery", options: { color: C.accent1 } }],
+    { x: 0.9, y: 1.95, w: 10, h: 2.2, fontSize: 72, bold: true, lineSpacingMultiple: 0.9 }), "float", 150, 800);
+  a1(T("Une plateforme de paiement qui détecte l'attaque, se répare seule et le prouve par une vraie transaction.",
+    { x: 0.9, y: 4.2, w: 8.2, h: 0.9, fontSize: 20, color: C.background2 }), "float", 450, 800);
+  a1(pulse(0, 5.15, 13.333, 1.1), "wipe", 800, 1600);
+  a1(T(TEAM.map((m) => m.name).join("   ·   "), { x: 0.9, y: 6.6, w: 11.5, h: 0.35, fontSize: 13, color: C.accent5 }), "fade", 1600);
+  s.addNotes("[0:00 – 0:30] Une phrase : nous avons construit une plateforme de paiement fictive qui, attaquée, se répare seule et prouve son retour à la normale par une vraie transaction. La ligne de pouls est le fil du deck : sain, attaque, détection, reprise.");
+
+  // ================================================================ 2. L'équipe
+  pres.addSection({ title: "L'équipe" });
+  newSlide("CONTENU", "L'équipe");
+  kickTitle("L'ÉQUIPE", "Six développeurs, une plateforme qui se répare seule");
+  const a2 = group("auto");
+  TEAM.forEach((m, i) => {
+    const col = i % 3, row = Math.floor(i / 3);
+    const x = 0.7 + col * 4.07, y = 1.95 + row * 2.42, t = i * 170;
+    a2(card(x, y, 3.79, 2.15), "float", t);
+    a2(avatar(x + 0.4, y + 0.55, 1.05, m, i, 24), "zoom", t + 120, 500);
+    a2(T(m.name, { x: x + 1.75, y: y + 0.62, w: 1.95, h: 0.75, fontSize: 19, bold: true }), "fade", t + 200);
+    a2(T(m.role, { x: x + 1.75, y: y + 1.38, w: 1.95, h: 0.3, fontFace: MONO, fontSize: 11, color: SCHEME[m.tone], charSpacing: 2 }), "fade", t + 260);
+  });
+  s.addNotes("[0:30 – 1:15] Nous sommes six, tous développeurs, dont deux orientés IA. Chacun présentera en une minute ce qu'il a construit, dans l'ordre de la chaîne : plateforme, attaque, détection, assistant, objet connecté.");
+
+  // ================================================================ 3. Architecture
+  pres.addSection({ title: "Le projet" });
+  newSlide("CONTENU", "Le projet");
+  kickTitle("LE PROJET · ARCHITECTURE", "Une seule porte, une boucle qui se referme");
+  const a3 = group("auto"), b3 = group("click"), c3 = group("click");
+  const XS = [0.7, 3.86, 7.02, 10.18], NW = 2.45, NH = 1.3, TOP = 2.2, BOT = 4.62;
+  const node = (x, y, ic, tone, title, sub, highlight) => {
+    const out = [card(x, y, NW, NH, highlight ? { line: C.accent1, lineWidth: 1.5 } : {})];
+    out.push(...badge(x + 0.2, y + 0.33, 0.62, ic, tone));
+    out.push(T(title, { x: x + 0.95, y: y + 0.24, w: NW - 1.05, h: 0.38, fontSize: 16, bold: true }));
+    out.push(T(sub, { x: x + 0.95, y: y + 0.62, w: NW - 1.05, h: 0.6, fontSize: 11.5, color: C.accent5 }));
+    return out;
+  };
+  a3(T("CHEMIN MÉTIER", { x: 0.7, y: 1.85, w: 4, h: 0.28, fontFace: MONO, fontSize: 11, color: C.accent5, charSpacing: 2 }), "fade");
+  [
+    ["LuSkull", "coral", "PC Attaquant", "hotspot du projet, 4 scénarios bornés"],
+    ["LuShieldCheck", "mint", "WAF", "ModSecurity + CRS, seul exposé", true],
+    ["LuServer", "blue", "Services", "front · auth · payment-api ×3"],
+    ["LuDatabase", "blue", "PostgreSQL 16", "réseau data interne"],
+  ].forEach(([ic, tone, t, sub, hl], i) => {
+    a3(node(XS[i], TOP, ic, tone, t, sub, hl), "float", 150 + i * 220);
+    if (i < 3) a3(arrow(XS[i] + NW + 0.06, TOP + NH / 2, XS[i + 1] - XS[i] - NW - 0.12, 0), "fade", 300 + i * 220);
+  });
+  b3(arrow(11.405, TOP + NH + 0.06, 0, BOT - TOP - NH - 0.12, { color: C.accent3 }), "wipe", 0, 500);
+  b3(T("métriques · journaux", { x: 8.9, y: 3.83, w: 2.35, h: 0.3, fontSize: 11.5, color: C.accent3, align: "right" }), "fade", 100);
+  b3(T("BOUCLE DE REPRISE", { x: 0.7, y: 4.27, w: 4, h: 0.28, fontFace: MONO, fontSize: 11, color: C.accent5, charSpacing: 2 }), "fade", 100);
+  [
+    [3, "LuActivity", "amber", "Observabilité", "Prometheus · Loki, chaque seconde"],
+    [2, "LuBrainCircuit", "amber", "Détection ML", "IsolationForest → AnomalyEvent"],
+    [1, "LuWrench", "mint", "Remédiation", "table de décision, jamais exposée"],
+    [0, "LuCircleCheck", "mint", "Preuve", "verify_tx + timeline au dashboard"],
+  ].forEach(([col, ic, tone, t, sub], i) => {
+    b3(node(XS[col], BOT, ic, tone, t, sub), "float", 250 + i * 230);
+    if (col > 0) b3(arrow(XS[col - 1] + NW + 0.06, BOT + NH / 2, XS[col] - XS[col - 1] - NW - 0.12, 0, { begin: true }), "fade", 400 + i * 230);
+  });
+  c3(arrow(XS[1] + NW / 2, TOP + NH + 0.06, 0, BOT - TOP - NH - 0.12, { color: C.accent1, begin: true }), "wipe", 0, 500);
+  c3(T("bloque l'IP · redémarre · restaure", { x: XS[1] + NW / 2 + 0.15, y: 3.83, w: 3.2, h: 0.3, fontSize: 11.5, color: C.accent1 }), "fade", 100);
+  c3(T("Seuls 80/443 publiés   ·   réseaux data et obs internes   ·   Docker via un proxy : 5 appels autorisés",
+    { x: 0.7, y: 6.2, w: 11.93, h: 0.3, fontSize: 12.5, color: C.accent5 }), "fade", 300);
+  s.addNotes("[1:15 – 2:30] En haut, le chemin métier : un seul composant exposé, le WAF. Clic : la plateforme émet métriques et journaux, le modèle les lit chaque seconde, le moteur décide, la preuve est rejouée. Clic : le moteur agit sur la porte d'entrée et les services — la boucle se referme.");
+
+  // ================================================================ 4. Démo en 5 temps
+  newSlide("CONTENU", "Le projet");
+  kickTitle("LE PROJET · LA DÉMO", "Cinq temps, une seule commande");
+  const a4 = group("auto");
+  const CX = [1.6, 4.13, 6.67, 9.2, 11.73], LINE_Y = 3.0;
+  const frise = nm("frise");
+  s.addShape(SH.line, { x: 1.6, y: LINE_Y, w: 10.13, h: 0, line: { color: C.accent6, width: 2 }, objectName: frise });
+  a4(frise, "wipe", 0, 1400);
+  [
+    ["mint", "Avant", "verify_tx passe : un virement fictif traverse WAF, API et base."],
+    ["coral", "Attaque", "service_flood depuis le PC Attaquant, intensité et durée bornées."],
+    ["amber", "Détection", "le modèle voit l'anomalie en secondes et désigne l'IP source."],
+    ["blue", "Remédiation", "le moteur bloque l'IP, relance si besoin, rejoue verify_tx."],
+    ["mint", "Après", "transaction OK : incident clos, MTTD et MTTR affichés."],
+  ].forEach(([tone, title, body], i) => {
+    const d = 1.1, cx = CX[i], t = 250 + i * 300;
+    const dot = nm("nœud");
+    s.addImage({ data: DOT[tone], x: cx - d / 2, y: LINE_Y - d / 2, w: d, h: d, objectName: dot });
+    a4(dot, "zoom", t, 500);
+    a4(T(String(i + 1), { x: cx - 0.25, y: LINE_Y - 0.2, w: 0.5, h: 0.4, fontSize: 15, bold: true, color: C.text1, align: "center", valign: "middle" }), "fade", t + 150);
+    a4(T(title, { x: cx - 1.15, y: LINE_Y + 0.75, w: 2.3, h: 0.45, fontSize: 21, bold: true, color: SCHEME[tone], align: "center" }), "float", t + 100);
+    a4(T(body, { x: cx - 1.15, y: LINE_Y + 1.25, w: 2.3, h: 1.0, fontSize: 13.5, color: C.background2, align: "center" }), "fade", t + 200);
+  });
+  a4(pulse(0.7, 5.5, 11.93, 0.75), "wipe", 1900, 1500);
+  a4(T("make demo   ·   aucune main sur le clavier entre ② et ⑤   ·   Clip Chrono ≤ 60 s, sans coupe",
+    { x: 0.7, y: 6.4, w: 11.93, h: 0.3, fontSize: 12.5, color: C.accent5 }), "fade", 2600);
+  s.addNotes("[2:30 – 3:30] C'est exactement ce que vous verrez en direct. make demo observe et prouve, il n'exécute aucune action corrective. Personne ne touche au clavier côté hôte entre l'attaque et la preuve.");
+
+  // ================================================================ 5 à 10. Un membre par slide
+  pres.addSection({ title: "Qui a fait quoi" });
+  TEAM.forEach((m, i) => {
+    newSlide("CONTENU", "Qui a fait quoi");
+    kickTitle(`L'ÉQUIPE · ${i + 1} / ${TEAM.length}`, m.name);
+    const a = group("auto");
+    a(avatar(1.35, 2.35, 2.3, m, i, 54), "zoom", 0, 700);
+    a(T(m.role, { x: 0.7, y: 5.25, w: 4.2, h: 0.35, fontFace: MONO, fontSize: 14, color: SCHEME[m.tone], charSpacing: 3 }), "fade", 300);
+    a(T(m.tagline, { x: 0.7, y: 5.68, w: 4.2, h: 1.0, fontSize: 17, italic: true, color: C.background2 }), "float", 450);
+    m.items.forEach(([ic, tone, title, body], k) => {
+      const y = 1.95 + k * 1.6, t = 600 + k * 260;
+      a(card(5.6, y, 7.03, 1.4), "float", t);
+      a(badge(5.95, y + 0.33, 0.74, ic, tone), "zoom", t + 120);
+      a(T(title, { x: 6.98, y: y + 0.25, w: 5.4, h: 0.42, fontSize: 19, bold: true }), "fade", t + 160);
+      a(T(body, { x: 6.98, y: y + 0.7, w: 5.4, h: 0.55, fontSize: 14.5, color: C.accent5 }), "fade", t + 160);
+    });
+    const start = 3.5 + i;
+    s.addNotes(`[${Math.floor(start)}:${start % 1 ? "30" : "00"} – ${Math.floor(start + 1)}:${(start + 1) % 1 ? "30" : "00"}] ${m.name} se présente : son rôle, puis ses trois réalisations, en une minute.`);
+  });
+
+  // ================================================================ 11. Clôture
+  pres.addSection({ title: "Démonstration" });
+  newSlide("HEROS", "Démonstration");
+  const a11 = group("auto");
+  a11(T("À VOUS DE JUGER", { x: 0.9, y: 1.1, w: 9, h: 0.35, fontFace: MONO, fontSize: 14, color: C.accent1, charSpacing: 4 }), "fade");
+  a11(T("Place à la démo", { x: 0.9, y: 1.55, w: 11.5, h: 1.25, fontSize: 66, bold: true }), "float", 150, 800);
+  a11(T("Attaque depuis le PC Attaquant, détection, reprise, preuve — sans toucher au clavier.",
+    { x: 0.9, y: 2.85, w: 11, h: 0.5, fontSize: 20, color: C.background2 }), "float", 400, 800);
+  a11(pulse(0, 3.6, 13.333, 1.1), "wipe", 700, 1600);
+  TEAM.forEach((m, i) => {
+    const x = 0.9 + i * 1.95;
+    a11(avatar(x + 0.55, 5.05, 0.7, m, i, 16), "zoom", 1500 + i * 120, 450);
+    a11(T(m.name, { x, y: 5.95, w: 1.8, h: 0.35, fontSize: 13, bold: true, align: "center" }), "fade", 1600 + i * 120);
+  });
+  s.addNotes("[9:30 – 10:00] Remercier, puis basculer sur la démo live : attaque depuis le PC Attaquant, personne ne touche au clavier côté hôte.");
+
+  // ---------------------------------------------------------------- écriture, thème, animations
   await pres.writeFile({ fileName: OUT });
   await applyTheme(OUT, THEME);
-  console.log(`PPTX : ${OUT}`);
+  await animate(OUT, SPEC);
+  console.log(`PPTX : ${OUT} (${pres.slides.length} slides)`);
 })().catch((e) => { console.error(e); process.exit(1); });

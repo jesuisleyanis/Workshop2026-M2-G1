@@ -51,6 +51,7 @@ Service FastAPI, port interne **8005**. Détail des endpoints dans le [`README.m
 | Endpoint | Auth | Rôle |
 |---|---|---|
 | `POST /events` | Bearer | Admission d'un `AnomalyEvent` → `202` `{incident_id, decision, dry_run, detail}` ; la remédiation tourne en tâche de fond. |
+| `POST /manual-actions` | Bearer | Action **confirmée par un opérateur** depuis le dashboard : liste blanche stricte `waf_block_ip` (`params.source` = IP littérale) / `restart_service` (`params.service`), `reason` optionnel ≤ 200 car. → `200` `{incident_id, action, status, detail}`. Mêmes garde-fous que le moteur (`NEVER_BLOCK_IPS`, `RESTARTABLE_SERVICES`, dry-run) ; refus → `422` sans exécution. Journalisée comme incident `incident_type = manual_action` (timeline SSE + export). **Justification** : laisser l'humain agir vite sur une IP/un service identifié sans ouvrir d'accès générique au catalogue ni contourner les garde-fous et la traçabilité. Jamais appelée par l'assistant. |
 | `POST /events/alertmanager` | Bearer | Webhook Alertmanager → adaptateur → mêmes admissions que `/events` ; `202` `{accepted[], skipped[]}`. |
 | `GET /incidents`, `GET /incidents/{id}` | Bearer | Journal des incidents (actions, vérifications, timeline). |
 | `GET /decision-table` | Bearer | Table de décision chargée. |
@@ -59,7 +60,7 @@ Service FastAPI, port interne **8005**. Détail des endpoints dans le [`README.m
 
 Erreurs : corps `{"error": {"code", "message", "request_id"}}` (contrat « Conventions d'API REST ») ; header `X-Request-ID` propagé.
 
-Logs JSON conformes au contrat §1 (événements `remediation_started`, `remediation_action`, `remediation_verified`, `remediation_failed`) et métriques conformes au contrat §2 : `resilience_remediation_actions_total{action,result}` (`result` ∈ `success|failure|dry_run`), `resilience_mttd_seconds{incident_id}`, `resilience_mttr_seconds{incident_id}`, `resilience_http_requests_total`, `resilience_http_request_duration_seconds`. Les gauges MTTD/MTTR sont bornées aux 20 derniers incidents (cardinalité).
+Logs JSON conformes au contrat §1 (événements `remediation_started`, `remediation_action`, `remediation_verified`, `remediation_failed`, `remediation_manual_action`) et métriques conformes au contrat §2 : `resilience_remediation_actions_total{action,result}` (`result` ∈ `success|failure|dry_run`), `resilience_mttd_seconds{incident_id}`, `resilience_mttr_seconds{incident_id}`, `resilience_http_requests_total`, `resilience_http_request_duration_seconds`. Les gauges MTTD/MTTR sont bornées aux 20 derniers incidents (cardinalité).
 
 ## 4. Table de décision appliquée (contrat §4)
 
@@ -69,11 +70,11 @@ La sélection de règle est **exacte par type** (pas de repli implicite d'un typ
 |---|---|---|
 | `service_flood` | `waf_block_ip(source=from_event)` → `restart_service(service=payment-api)` | `notify_operator` |
 | `auth_abuse` | `waf_block_ip(source=from_event)` → `tighten_rate_limit(service=auth, factor=0.5)` | `notify_operator` |
-| `web_attack` | `confirm_waf_block` → `waf_blacklist_ip(source=from_event)` | `notify_operator` |
+| `web_attack` | `waf_blacklist_ip(source=from_event_or_loki)` → `confirm_waf_block(require=true)` ; **pas de `verify_first`** | `notify_operator` |
 | `data_corruption` | `restore_pg_dump(backup=latest)` | `notify_operator` |
 | `unknown` | `dry_run_report` | `notify_operator` |
 
-Chaque règle porte `verify: verify_tx` (seule valeur acceptée par le schéma). Les `params` viennent **uniquement de la table**, jamais de l'événement (l'événement ne fournit que l'IP source via `source: from_event`).
+Chaque règle porte `verify: verify_tx` (seule valeur acceptée par le schéma). Les `params` viennent **uniquement de la table**, jamais de l'événement (l'événement ne fournit que l'IP source via `source: from_event`). Pour `web_attack`, `source: from_event_or_loki` prend la `source_ip` du detector si elle existe, sinon lit l'IP dans Loki : la source la plus fréquente des `waf_blocked` des 120 dernières secondes (`client_ip` = adresse vue par ModSecurity, jamais un en-tête non approuvé), soumise aux mêmes garde-fous. `web_attack` est une compromission **tentée** : ModSecurity renvoie déjà 403, donc un `verify_first` clôturerait sans jamais bloquer l'attaquant — il est réservé à `service_flood` (disponibilité). `confirm_waf_block(require=true)` en dernière action : si l'IP n'est pas bloquable (passerelle Docker protégée), la preuve que le WAF a bloqué déclenche `verify_tx` et clôt l'incident ; sans aucun blocage observé, la tentative échoue (escalade).
 
 Catalogue d'actions (registre `actions.REGISTRY`) : `restart_service`, `recreate_service`, `waf_block_ip`, `waf_blacklist_ip`, `tighten_rate_limit`, `restore_pg_dump`, `confirm_waf_block`, `dry_run_report`, `notify_operator`. Trois actions sont **non mutantes** (`mutating = False` : `confirm_waf_block`, `dry_run_report`, `notify_operator`) ; les six autres sont mutantes (bloquées en dry-run, suivies d'une vérification).
 
@@ -92,9 +93,10 @@ Principe : le moteur est un composant **puissant par nature** (il redémarre des
 - **Liste blanche de services** : `restart_service` / `recreate_service` n'agissent que sur `RESTARTABLE_SERVICES` (défaut `payment-api, auth, front`). Le moteur ne touche ni `postgres`, ni le proxy, ni lui-même, même si la table le demandait (`ActionError`).
 - Le nom de service et l'image sont validés par regex ; les conteneurs sont résolus par label Compose `com.docker.compose.service`.
 
-### 5.2 API authentifiée (`REMEDIATION_TOKEN`)
+### 5.2 API authentifiée (`REMEDIATION_TOKEN` + `REMEDIATION_OPERATOR_TOKEN`)
 
-- Toutes les routes métier (`POST /events`, `GET /incidents`, `GET /incidents/{id}`, `GET /decision-table`, `GET /stream`) exigent `Authorization: Bearer <REMEDIATION_TOKEN>`.
+- Les routes machine-à-machine et de lecture (`POST /events`, `POST /events/alertmanager`, `GET /incidents`, `GET /incidents/{id}`, `GET /decision-table`, `GET /stream`, `GET /waf/blocked-ips`) exigent le jeton de **service** `Authorization: Bearer <REMEDIATION_TOKEN>`.
+- Les **écritures déclenchées par un humain** (`DELETE /waf/blocked-ips/{ip}`, déblocage depuis le dashboard ; `POST /manual-actions`, commande opérateur confirmée) exigent le jeton **opérateur** `Bearer <REMEDIATION_OPERATOR_TOKEN>`, distinct : le jeton de service y est refusé (`403 operator_token_required`), car le nginx du dashboard le détient pour ses lectures — sinon tout conteneur des réseaux `app` / `ai` (assistant, ollama) ou processus local parlant à ce nginx écrirait sans secret. Le jeton opérateur n'ouvre aucune autre route (moindre privilège). Absent, < 16 caractères ou égal au jeton de service : routes opérateur en `503 auth_not_configured` (fail closed), le reste de l'API fonctionne.
 - Comparaison à **temps constant** (`hmac.compare_digest`). Token en query string **refusé** (seul le header est lu).
 - **Fail closed** : si `REMEDIATION_TOKEN` est absent ou plus court que 16 caractères, toutes les routes protégées répondent `503 auth_not_configured` ; `/ready` passe à 503 ; une erreur est loguée au démarrage. Il n'y a **aucune valeur par défaut** pour les secrets.
 - Échec d'authentification : `401 unauthorized` + `WWW-Authenticate: Bearer`, et log `warning` (request_id, IP cliente, méthode, chemin) — sans jamais journaliser le token.
@@ -104,7 +106,7 @@ Principe : le moteur est un composant **puissant par nature** (il redémarre des
 ### 5.3 Jamais exposé sur le réseau `edge`
 
 - Le service est rattaché au **seul réseau `app`** (interne) et n'a **aucun `ports:`**. Seul le WAF est exposé (80/443). Le conteneur écoute sur `0.0.0.0:8005` *à l'intérieur de son namespace réseau* (nécessaire aux autres services du réseau `app`) ; l'exposition réelle est décidée par Compose, pas par le code.
-- Le navigateur ne parle jamais directement au moteur : le dashboard le joint via un reverse-proxy nginx qui n'expose que `GET /remediation/stream` (lecture seule) et injecte lui-même l'en-tête `Authorization` (`REMEDIATION_AUTH_HEADER`). Le token n'est donc jamais embarqué dans le bundle front.
+- Le navigateur ne parle jamais directement au moteur : le dashboard le joint via un reverse-proxy nginx qui n'expose que `GET /remediation/stream` et `GET /remediation/waf/blocked-ips` (lectures : jeton de service injecté par nginx, `REMEDIATION_AUTH_HEADER`, jamais dans le bundle) et les écritures `DELETE /remediation/waf/blocked-ips/<ip>` et `POST /remediation/manual-actions` (`Content-Type: application/json` exigé, liste blanche côté moteur) : nginx n'y injecte **rien** et relaie le jeton opérateur saisi par l'humain.
 
 ### 5.4 Durcissement du conteneur
 
@@ -113,7 +115,7 @@ Image `python:3.12-slim` multi-stage (aucun outil de build dans l'image finale),
 ### 5.5 Autres bornes de privilège
 
 - **Ansible** : seuls les playbooks `waf_deny_ip.yml` et `pg_restore.yml` (`ALLOWED_PLAYBOOKS`) peuvent être lancés ; ni le nom du playbook ni ses variables ne viennent de l'événement (autre playbook → refus, `rc=-1`). Ils s'exécutent **dans le conteneur du moteur** (`hosts: localhost`), jamais sur l'hôte ni via `docker exec` : le moteur n'obtient que les accès strictement nécessaires (volume `waf-deny` partagé avec le WAF, réseau `data` + client Postgres pour la restauration, dumps en lecture seule).
-- **Blocage IP** : l'IP vient de `source_ip` (validée comme IP littérale unique : ni réseau, ni nom, ni texte libre, car elle finit dans une configuration Nginx). Refus de bloquer `NEVER_BLOCK_IPS` (défaut : `127.0.0.1`, `::1`, `192.168.137.1`, l'hôte du réseau `RESILIENCE-G1`), ni boucle locale / non spécifiée / multicast.
+- **Blocage IP** : l'IP vient de `source_ip` ou, pour `from_loki` / `from_event_or_loki`, du champ `client_ip` des `waf_blocked` récents (validée comme IP littérale unique : ni réseau, ni nom, ni texte libre, car elle finit dans une configuration Nginx). Refus de bloquer `NEVER_BLOCK_IPS` (défaut : `127.0.0.1`, `::1`, `192.168.137.1`, l'hôte du réseau `RESILIENCE-G1`), ni boucle locale / non spécifiée / multicast.
 - **Restauration** : `backup` = `latest` ou un nom simple (regex, pas de `/`, pas de `..` : pas de path traversal).
 - **`verify_tx`** : lancé sans shell (`create_subprocess_exec`), groupe de processus dédié, timeout qui tue aussi les enfants.
 - **Sérialisation** : un verrou (`_action_lock`) interdit deux actions mutantes simultanées.
@@ -168,6 +170,9 @@ Pourquoi : redémarrer un service après une corruption de données **ne corrige
 | A1 | Le moteur démarre avec la table livrée ; une table invalide (action inconnue, type manquant, doublon, clé inconnue, paramètre dangereux) l'empêche de démarrer. | `tests/test_decision_table.py` |
 | A2 | Pour chacun des 5 `incident_type`, la séquence d'actions exécutée est celle de la table, avec les paramètres de la table. | `test_decision_table.py`, `test_engine.py` |
 | A3 | `service_flood` ne restaure jamais de dump ; `data_corruption` ne redémarre/recrée jamais de service ; `restore_pg_dump` refusé hors `data_corruption` ; `unknown` sans action destructive. | `test_decision_table.py`, `test_engine.py` |
+| A4c | `restart_service` **progressif** : une réplique à la fois, la suivante quand la précédente est `healthy` (`GET /containers/{id}/json`, déjà autorisé par le proxy) ; arrêt si une réplique ne revient pas (les autres restent en service). | `test_actions.py` |
+| A4b | Règle `verify_first` (`service_flood` seulement) : `verify_tx` joué avant toute action ; OK = attaque contenue par le WAF, incident clos sans action (pas de redémarrage en boucle). Jamais pour `web_attack` / `data_corruption` / `auth_abuse`. | `test_engine.py`, `test_decision_table.py` |
+| A4c | `web_attack` : IP du detector mise en liste noire même si le WAF contient déjà l'attaque ; repli Loki sans `source_ip` ; IP protégée (passerelle `edge`) jamais bloquée mais incident clos sur preuve de blocage WAF ; aucun blocage observé → escalade. | `test_engine.py`, `test_actions.py` |
 | A4 | `verify_tx` OK clôt l'incident et calcule MTTD/MTTR ; KO passe à l'action suivante ; OK après la 1re action saute les suivantes ; la vérification est retentée tant que la plateforme n'est pas saine. | `test_engine.py` |
 | A5 | Cooldown : pas de ré-action sur la même clé avant `cooldown_seconds`, et le cooldown est par clé. | `test_engine.py` |
 | A6 | `max_attempts` atteint ou toutes actions en échec → escalade (`notify_operator`, log `remediation_failed`). | `test_engine.py` |
@@ -177,6 +182,7 @@ Pourquoi : redémarrer un service après une corruption de données **ne corrige
 | A10 | Le client Docker n'émet que les verbes du profil restart par défaut ; `recreate` refusé sans profil élargi ; rollback si la recréation échoue. | `test_actions.py` |
 | A11 | Playbook non listé refusé ; paramètres dangereux rejetés ; contrat de sortie de `verify_tx` respecté. | `test_actions.py` |
 | A12 | Toute route métier sans token ou avec mauvais token → 401 ; token en query refusé ; sans `REMEDIATION_TOKEN` configuré → fail closed (503). | `test_api.py` |
+| A12b | Route opérateur (déblocage) : sans jeton → 401 ; jeton de service → 403 ; jeton opérateur → 200 ; jeton opérateur absent/court/égal au jeton de service → 503 ; le jeton opérateur n'ouvre pas les routes de service. Le nginx du dashboard n'injecte aucun jeton sur une route d'écriture. | `test_unblock.py`, `infra/tests/test_dashboard_proxy.py` |
 | A13 | `/ready` passe à 503 si le docker-socket-proxy est injoignable ; `/health` et `/ready` sans authentification. | `test_api.py` |
 | A14 | La timeline SSE rejoue l'historique, supporte `Last-Event-ID`, diffuse en temps réel et envoie un keepalive. | `test_api.py`, `test_sse.py` |
 | A15 | Logs et métriques conformes aux contrats §1 et §2. | `test_engine.py`, `test_api.py` |
@@ -191,7 +197,8 @@ Pourquoi : redémarrer un service après une corruption de données **ne corrige
 
 - **Validation live** : le plan d'exécution (SIGHUP du WAF via le proxy, `pg_restore` sur le réseau `data`) est testé unitairement et par exécution réelle du playbook WAF, mais la boucle complète KO → action → OK reste à rejouer stack levée (`tests/e2e`).
 - **Dump sain** : `restore_pg_dump` suppose un dump produit au préalable par `playbooks/pg_backup.yml` (opérateur, côté hôte) ; pas encore de job de sauvegarde planifié.
-- **Champ `source_ip`** : extension additive du contrat §3 (absente du schéma contractuel), à émettre par le detector (ou en label `source_ip` d'une alerte SOC) pour que `source: from_event` fonctionne ; sans lui, `waf_block_ip` / `waf_blacklist_ip` échouent proprement (« aucune IP source »). Les règles SOC Prometheus livrées n'ont pas d'IP source (agrégats) : par le chemin SOC, les actions de blocage IP échouent proprement et la règle poursuit (restart / rate-limit / restore).
+- **Champ `source_ip`** : extension additive du contrat §3 (absente du schéma contractuel), à émettre par le detector (ou en label `source_ip` d'une alerte SOC) pour que `source: from_event` fonctionne ; sans lui, `waf_block_ip` (`service_flood`, `auth_abuse`) échoue proprement (« aucune IP source ») et la règle poursuit. `web_attack` n'en dépend plus (`from_event_or_loki` : repli Loki).
+- **IP vue par le WAF (Docker Desktop / requête depuis l'hôte)** : une connexion relayée par le proxy de ports Docker apparaît sous l'IP de passerelle du réseau `edge` ; la bloquer couperait **tous** les clients (jury compris) alors que `verify_tx`, qui passe par `app`, resterait vert. Le sous-réseau `edge` est figé (`172.30.0.0/24`, passerelle `172.30.0.1`) et protégé en entier par `NEVER_BLOCK_IPS` (test `test_from_event_or_loki_never_blocks_the_edge_gateway`). Sans le mode IP réelle (Caddy, `REAL_IP=1`), un `web_attack` est donc clos sans blocage d'IP (preuve WAF) ; à valider depuis le PC Attaquant. Les règles SOC Prometheus livrées n'ont pas d'IP source (agrégats) : par le chemin SOC, les actions de blocage IP échouent proprement et la règle poursuit (restart / rate-limit / restore).
 - **Authentification** : bearer statique partagé (`REMEDIATION_TOKEN`), et non le JWT HS256 décrit dans « Conventions d'API REST » ; pas de préfixe `/api/v1` sur les routes. Choix volontaire pour une API service-à-service interne.
 - **Idempotence de `tighten_rate_limit`** : repose sur le service `auth`, qui doit dédoublonner sur `Idempotency-Key`.
 - **`GET /stream`** est protégé par le Bearer ; un `EventSource` navigateur ne pouvant pas poser de header, le dashboard passe par son reverse-proxy nginx qui l'injecte.

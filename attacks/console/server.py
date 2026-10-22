@@ -283,7 +283,7 @@ def create_app() -> FastAPI:
         try:
             data = _blue_get("/incidents?limit=20")
         except Exception as e:  # moteur injoignable (réseau interne, service down…)
-            raise HTTPException(502, f"Moteur de remédiation injoignable : {e}")
+            raise HTTPException(502, f"Moteur de remédiation injoignable : {e}") from e
         return {"connected": True, "incidents": data.get("incidents", [])}
 
     @app.get("/api/verify")

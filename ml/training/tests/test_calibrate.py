@@ -35,33 +35,57 @@ def setup(tmp_path_factory):
     return d, normal_csv, attacks_csv, model, stats
 
 
-def test_threshold_sits_between_normal_and_weakest_attack(setup):
-    _, normal_csv, attacks_csv, model, _ = setup
+def test_threshold_sits_between_normal_held_level_and_weakest_model_separable_attack(setup):
+    _, normal_csv, attacks_csv, model, stats = setup
     normal, attacks = load_csv(normal_csv), load_csv(attacks_csv, min_rows=1)
-    rep = calibrate(model, normal, attacks, margin=0.5)
-    assert rep["separable"]
-    weakest = min(r["peak_min"] for r in rep["attacks"].values())
-    floor = max(MIN_THRESHOLD, rep["normal"]["score_p999"])
-    assert floor < rep["threshold"] < weakest
+    rep = calibrate(model, normal, attacks, margin=0.5, confirm=2, stats=stats)
+    floor = rep["normal"]["held_level"]
+    by_model = [r for r in rep["attacks"].values() if r["separable"]]
+    assert by_model, "au moins un scénario séparable par le modèle"
+    weakest = min(r["held_min"] for r in by_model)
+    assert max(MIN_THRESHOLD, floor) < rep["threshold"] < weakest
     assert rep["threshold"] == pytest.approx((floor + weakest) / 2, abs=1e-4)
-    assert rep["normal"]["false_positive_rate"] <= 0.002
+    # le seuil haut (une fenêtre) reste au-dessus du PIC du normal : jamais de faux positif
+    if rep["threshold_high"] is not None:
+        assert rep["threshold_high"] > rep["normal"]["score_max"]
+    assert rep["normal"]["false_positive_rate"] == 0.0
+    assert rep["separable"] == all(r["detected_all_runs"] for r in rep["attacks"].values())
     assert rep["model_fingerprint"] == model_fingerprint(model)
 
 
 def test_mttd_counts_the_ramp_up_windows(setup):
-    _, normal_csv, attacks_csv, model, _ = setup
+    from ml.training.calibrate import fires, max_z
+
+    _, normal_csv, attacks_csv, model, stats = setup
     attacks = load_csv(attacks_csv, min_rows=1)
-    rep = calibrate(model, load_csv(normal_csv), attacks)
+    rep = calibrate(model, load_csv(normal_csv), attacks, confirm=2, stats=stats)
     for kind, r in rep["attacks"].items():
         assert r["runs"] == 1 and r["windows"] == 12
-        scores = anomaly_scores(model, attacks.select(kind).data)
-        first = int(np.flatnonzero(scores >= rep["threshold"])[0])
-        # les 2 fenêtres de montée en charge (normales) ne déclenchent pas : MTTD >= 30 s
+        data = attacks.select(kind).data
+        hits = fires(anomaly_scores(model, data), rep["threshold"], rep["threshold_high"], 2,
+                     max_z(data, stats), stats["guardrail_z"])
+        first = int(np.flatnonzero(hits)[0])
+        # les 2 fenêtres de montée en charge (normales) ne déclenchent pas
         assert first >= 2, kind
         assert r["mttd_s_worst"] == 15.0 * first, kind
     worst = max(r["mttd_s_worst"] for r in rep["attacks"].values())
-    assert rep["mttd_ok"] is False  # >= 30 s > budget par défaut de 20 s
-    assert calibrate(model, load_csv(normal_csv), attacks, max_mttd_s=worst)["mttd_ok"] is True
+    assert calibrate(model, load_csv(normal_csv), attacks, max_mttd_s=worst - 1, confirm=2,
+                     stats=stats)["mttd_ok"] is False
+    assert calibrate(model, load_csv(normal_csv), attacks, max_mttd_s=worst, confirm=2,
+                     stats=stats)["mttd_ok"] is True
+
+
+def test_guardrail_covers_attacks_the_model_cannot_see(setup):
+    # Sans garde-fou, un scénario sous le niveau tenu du normal n'est pas détecté ; avec, il l'est
+    # si son signal dépasse guardrail_z (cas réel : db_errors_per_s / waf_blocked_per_s nuls au normal).
+    _, normal_csv, attacks_csv, model, stats = setup
+    normal, attacks = load_csv(normal_csv), load_csv(attacks_csv, min_rows=1)
+    alone = calibrate(model, normal, attacks, confirm=6)
+    guarded = calibrate(model, normal, attacks, confirm=6, stats=stats)
+    for kind, r in guarded["attacks"].items():
+        if not r["separable"]:
+            assert alone["attacks"][kind]["detected_all_runs"] is False
+            assert r["detected_all_runs"] is True, kind
 
 
 def test_split_runs_and_mttd_helpers(setup):
@@ -148,3 +172,22 @@ def test_stale_calibration_raises_in_python_api(setup):
     with pytest.raises(StaleCalibrationError):
         train(real=load_csv(normal_csv), n_estimators=50,
               calibration={"threshold": 0.6, "model_fingerprint": "autre"})
+
+
+def test_confirmation_rule_matches_the_detector():
+    from ml.training.calibrate import fires
+
+    scores = np.array([0.5, 0.75, 0.6, 0.75, 0.76, 0.95, 0.5])
+    # 2 fenêtres consécutives >= 0.7, ou une seule >= 0.9 (seuil haut)
+    assert fires(scores, 0.7, 0.9, confirm=2).tolist() == [False, False, False, False, True, True, False]
+    assert fires(scores, 0.7, None, confirm=1).tolist() == (scores >= 0.7).tolist()
+
+
+def test_report_carries_high_threshold_and_confirmation(setup):
+    _, normal_csv, attacks_csv, model, _ = setup
+    rep = calibrate(model, load_csv(normal_csv), load_csv(attacks_csv, min_rows=1), confirm=2)
+    weakest = min(r["peak_min"] for r in rep["attacks"].values())
+    assert rep["confirm_windows"] == 2
+    assert rep["threshold"] < rep["threshold_high"] < weakest
+    with pytest.raises(ValueError, match="confirm"):
+        calibrate(model, load_csv(normal_csv), load_csv(attacks_csv, min_rows=1), confirm=0)

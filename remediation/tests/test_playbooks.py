@@ -24,7 +24,7 @@ HOST_PLAYBOOKS = ROOT / "infra" / "ansible" / "playbooks"
 
 # Extravars réellement passées par les actions (actions/waf.py, actions/postgres.py).
 EXTRAVARS = {
-    PLAYBOOK_WAF_DENY: {"deny_ip", "deny_list", "incident_id"},
+    PLAYBOOK_WAF_DENY: {"deny_ip", "deny_list", "incident_id", "deny_until"},
     PLAYBOOK_PG_RESTORE: {"backup", "incident_id"},
 }
 
@@ -88,3 +88,14 @@ async def test_waf_deny_ip_playbook_really_writes_deny_list_idempotently(tmp_pat
 
     bad = await runner.run_playbook(PLAYBOOK_WAF_DENY, {**extravars, "deny_ip": "1.2.3.4; evil"}, timeout=120)
     assert not bad.ok  # assert du playbook : IP non conforme refusée
+
+    # Échéance (TTL) : commentaire `until=` ignoré par nginx ; un nouveau blocage REMPLACE la ligne
+    # (échéance prolongée, jamais de doublon) ; même échéance rejouée = idempotent.
+    timed = {**extravars, "deny_until": 1800000000}
+    third = await runner.run_playbook(PLAYBOOK_WAF_DENY, timed, timeout=120)
+    assert third.ok and third.changed is True, third
+    assert deny.read_text(encoding="utf-8").splitlines() == ["203.0.113.77 1; # until=1800000000"]
+    again = await runner.run_playbook(PLAYBOOK_WAF_DENY, timed, timeout=120)
+    assert again.ok and again.changed is False, again
+    evil = await runner.run_playbook(PLAYBOOK_WAF_DENY, {**extravars, "deny_until": "1; evil"}, timeout=120)
+    assert not evil.ok  # échéance non numérique refusée

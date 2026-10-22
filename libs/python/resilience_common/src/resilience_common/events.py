@@ -6,11 +6,12 @@ Le détecteur ML émet un AnomalyEvent vers le moteur de remédiation
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import ipaddress
+from datetime import UTC, datetime
 from enum import Enum
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 SCHEMA_VERSION = "1.0"
 
@@ -32,12 +33,21 @@ RESERVED_EVENTS: frozenset[str] = frozenset(
         "auth_locked_out",
         "led_state_published",
         "led_publish_failed",
+        # auth — back-office : refroidissement et administration
+        "auth_cooldown",
+        "admin_user_created",
+        "admin_role_changed",
+        "admin_face_enrolled",
+        "admin_face_revoked",
+        "backoffice_bootstrap",
         # face-id — consigne additionnelle 1 (reconnaissance de visage 1:1)
         "face_verify_match",
         "face_verify_nomatch",
         "face_verify_error",
         "face_enrolled",
         "face_enrollment_revoked",
+        "face_photos_viewed",
+        "face_enrollment_rejected",
         # payment-api
         "transaction_created",
         "transaction_rejected",
@@ -67,11 +77,15 @@ RESERVED_EVENTS: frozenset[str] = frozenset(
         "remediation_action",
         "remediation_verified",
         "remediation_failed",
+        "remediation_manual_action",
         # assistant
         "assistant_index_built",
         "assistant_index_empty",
         "assistant_store_error",
         "assistant_question_answered",
+        "assistant_incident_summarized",
+        "assistant_postmortem_generated",
+        "assistant_action_proposed",
         "assistant_llm_unavailable",
         "assistant_http_request",
     }
@@ -113,7 +127,7 @@ class AnomalyEvent(BaseModel):
 
     schema_version: str = SCHEMA_VERSION
     event_id: str = Field(default_factory=lambda: str(uuid4()))
-    ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
     source: str = "detector"
     service: str
     anomaly_score: float
@@ -121,3 +135,13 @@ class AnomalyEvent(BaseModel):
     incident_type: IncidentType
     features_top: list[FeatureTop] = Field(default_factory=list)
     evidence: Evidence | None = None
+    #: IP source dominante de l'incident (champ ADDITIF, optionnel — contrat §3) : renseignée par le
+    #: detector quand une IP domine les logs WAF de la fenêtre, sinon absente. Elle alimente les
+    #: actions de blocage (`source: from_event`) : une seule IP littérale, jamais de nom ni de réseau
+    #: (la valeur finit dans une conf Nginx -> aucune injection possible).
+    source_ip: str | None = None
+
+    @field_validator("source_ip")
+    @classmethod
+    def _single_ip_literal(cls, v: str | None) -> str | None:
+        return None if v is None else str(ipaddress.ip_address(v.strip()))

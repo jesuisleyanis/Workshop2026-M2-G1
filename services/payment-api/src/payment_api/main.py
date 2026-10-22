@@ -42,6 +42,7 @@ from payment_api.observability import (
     attach_context,
     error_response,
     log_event,
+    parse_trusted_proxies,
     request_id_var,
 )
 from payment_api.schemas import (
@@ -132,7 +133,11 @@ def create_app(
         openapi_url="/openapi.json" if settings.enable_docs else None,
     )
     app.state.session_factory = session_factory
-    app.add_middleware(RequestContextMiddleware, trusted_proxy_hops=settings.trusted_proxy_hops)
+    app.add_middleware(
+        RequestContextMiddleware,
+        trusted_proxy_hops=settings.trusted_proxy_hops,
+        trusted_proxies=parse_trusted_proxies(settings.trusted_proxies),
+    )
     instrument(app, SERVICE_NAME)
 
     # ---------------------------------------------------------------- dépendances

@@ -21,8 +21,8 @@ def _login(client, password, headers=None):
     )
 
 
-def test_login_success_log_matches_contract_format(client, registered, log_lines):
-    r = _login(client, PASSWORD, {"X-Forwarded-For": "192.168.137.50"})
+def test_login_success_log_matches_contract_format(waf_client, registered, log_lines):
+    r = _login(waf_client, PASSWORD, {"X-Forwarded-For": "192.168.137.50"})
     (e,) = log_lines("auth_login_success")
     assert MANDATORY <= set(e)
     assert ISO_TS.match(e["ts"]) and e["level"] == "INFO" and e["service"] == "auth"

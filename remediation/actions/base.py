@@ -41,12 +41,12 @@ class ActionResult:
 
 @dataclass
 class ActionContext:
-    settings: "Settings"
-    http: "httpx.AsyncClient"
-    docker: "DockerProxy"
-    runner: "AnsibleRunnerPort"
+    settings: Settings
+    http: httpx.AsyncClient
+    docker: DockerProxy
+    runner: AnsibleRunnerPort
     log: logging.Logger
-    event: "IncomingEvent | None"
+    event: IncomingEvent | None
     incident_id: str
     dry_run: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
@@ -61,7 +61,7 @@ class Action(ABC):
         self.params: dict[str, Any] = dict(params or {})
         self.check_params(self.params)
 
-    @classmethod
+    @classmethod  # noqa: B027 — crochet facultatif : aucune validation par défaut
     def check_params(cls, params: dict[str, Any]) -> None:
         """Valide les paramètres (appelé au chargement de la table ET à l'exécution)."""
 

@@ -24,7 +24,7 @@ import math
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -47,11 +47,11 @@ def parse_duration(text: str) -> timedelta:
 def parse_time(text: str) -> datetime:
     """ISO 8601 ('2026-10-19T10:00:00Z') -> datetime UTC."""
     t = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+    return t if t.tzinfo else t.replace(tzinfo=UTC)
 
 
 def _iso(ts: float) -> str:
-    return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.fromtimestamp(ts, UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def query_range(client: httpx.Client, promql: str, start: datetime, end: datetime,
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None, transport: httpx.BaseTransport | None = 
     p.add_argument("--no-header", action="store_true", help="pour concaténer (>>) à un CSV existant")
     args = p.parse_args(argv)
 
-    end = parse_time(args.end) if args.end else datetime.now(timezone.utc)
+    end = parse_time(args.end) if args.end else datetime.now(UTC)
     start = end - parse_duration(args.last) if args.last else parse_time(args.start)
     if start >= end:
         p.error("début >= fin")

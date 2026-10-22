@@ -1,0 +1,17 @@
+# Surcouche « IP réelle » (REAL_IP=1) — à utiliser AVEC le proxy natif Windows infra/caddy/Caddyfile.
+#
+# Sous Docker Desktop (Windows), tout le trafic publié entre par une passerelle Docker : le WAF voit le
+# même client pour tout le monde, le blocage d'IP est impossible. Caddy, natif Windows, voit la vraie IP
+# et la transmet dans X-Forwarded-For. Pour que cet en-tête soit DIGNE DE CONFIANCE :
+#   1. le WAF n'est plus publié que sur la boucle locale (seul Caddy, sur le même poste, peut le joindre) ;
+#   2. il ne croit X-Forwarded-For que venant des passerelles Docker (= ce trafic publié en local).
+# Un client du hotspot ne peut donc ni contourner Caddy, ni forger son IP.
+services:
+  waf:
+    # HTTPS seulement : Caddy fait la redirection HTTP -> HTTPS. (Le 8080 de l'hôte est souvent pris.)
+    # 9443 = listener HÔTE du back-office (loopback, inchangé) : ouvert dans le navigateur de ce poste.
+    ports: !override
+      - "127.0.0.1:8443:8443"
+      - "127.0.0.1:9443:9443"
+    environment:
+      WAF_TRUST_FORWARDED_FROM: "172.31.0.1,172.30.0.1"

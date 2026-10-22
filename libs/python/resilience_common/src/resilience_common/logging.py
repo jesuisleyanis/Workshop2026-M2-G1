@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 # Événements normalisés réservés (docs/contracts.md §1). Tenus ici comme garde-fou
@@ -45,6 +45,7 @@ NORMALIZED_EVENTS = frozenset(
         "remediation_action",
         "remediation_verified",
         "remediation_failed",
+        "remediation_manual_action",
     }
 )
 
@@ -70,7 +71,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
-            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.")
+            "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.")
             + f"{int(record.created % 1 * 1000):03d}Z",
             "level": record.levelname,
             "service": self.service,

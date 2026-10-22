@@ -1,23 +1,33 @@
 """API du moteur de remédiation (FastAPI, port interne 8005, réseau `app` UNIQUEMENT).
 
-Authentification : `Authorization: Bearer <REMEDIATION_TOKEN>` sur tout sauf les sondes
-(/health, /ready, /metrics — joignables seulement depuis les réseaux internes).
+Authentification (deux jetons distincts, comparaison à temps constant, fail closed) :
+- jeton de SERVICE `REMEDIATION_TOKEN` : POST /events, POST /events/alertmanager et toutes les lectures
+  (GET /incidents*, /stream, /decision-table, /waf/blocked-ips) — detector, Alertmanager, nginx du dashboard ;
+- jeton OPÉRATEUR `REMEDIATION_OPERATOR_TOKEN` : écritures déclenchées par un humain
+  (DELETE /waf/blocked-ips/{ip}). Le jeton de service y est refusé (403) : le nginx du dashboard, qui
+  l'injecte pour les lectures, ne peut rien écrire à la place de l'opérateur.
+Sondes (/health, /ready, /metrics) sans jeton — joignables seulement depuis les réseaux internes.
 Le service n'est jamais publié (`ports:`) ni rattaché au réseau `edge`.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hmac
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 import http_metrics
 import httpx
-from actions.docker_proxy import DockerProxy
+from actions import ActionError, ActionParamError
+from actions.docker_proxy import DockerProxy, DockerProxyError
 from actions.runner import AnsibleRunnerAdapter
+from actions.waf import purge_and_reload, reload_waf
 from alertmanager import AlertmanagerPayload, to_events
+from blocklist import deny_lock, list_blocked_ips, remove_ip
 from config import Settings
 from decision import DecisionTable, DecisionTableError, load_decision_table
 from engine import RemediationEngine, Services
@@ -27,12 +37,25 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from journal import Journal
 from models import IncomingEvent
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from pydantic import BaseModel, ConfigDict, Field
 from resilience_common import get_logger
 from timeline import Broker, sse_stream
 from verify import ScriptVerifier
 
 SERVICE = "remediation"
 PROBES = frozenset({"/health", "/ready", "/metrics"})
+# Purge périodique des blocages WAF échus (en plus de chaque écriture/relecture) : un blocage expire
+# même si personne ne consulte le dashboard. Sans objet si REMEDIATION_WAF_BLOCK_TTL_S=0.
+WAF_PURGE_INTERVAL_S = 60.0
+
+
+class ManualAction(BaseModel):
+    """Corps de POST /manual-actions : liste blanche stricte (cf. engine.MANUAL_ACTIONS)."""
+
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["waf_block_ip", "restart_service"]
+    params: dict[str, Any]
+    reason: str | None = Field(default=None, max_length=200)
 
 
 def _error(status: int, code: str, message: str, request: Request) -> JSONResponse:
@@ -66,15 +89,27 @@ def create_app(
     engine = RemediationEngine(table=table, settings=settings, journal=journal, broker=broker,
                                services=services, log=log)
 
+    async def _purge_loop() -> None:
+        while True:  # 1re passe immédiate = purge au démarrage
+            await purge_and_reload(settings, services.docker, log)
+            await asyncio.sleep(WAF_PURGE_INTERVAL_S)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        purger = asyncio.create_task(_purge_loop())
         orphans = journal.recover_orphans()
         if orphans:
             log.warning(f"{orphans} incident(s) interrompu(s) par un redémarrage",
                         extra={"event": "remediation_failed"})
         if not settings.token_configured:
             log.error("REMEDIATION_TOKEN absent ou trop court : /events refusera tout (fail closed)")
+        if not settings.operator_token_configured:
+            log.warning("REMEDIATION_OPERATOR_TOKEN absent, trop court ou égal au jeton de service : "
+                        "actions opérateur refusées (fail closed)")
         yield
+        purger.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await purger
         await engine.shutdown()
         await http.aclose()
         journal.close()
@@ -124,21 +159,42 @@ def create_app(
             f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()[:5]), request)
 
     # --------------------------------------------------------------- authentification
+    def _bearer(authorization: str | None) -> str | None:
+        scheme, _, presented = (authorization or "").partition(" ")
+        return presented.strip() if scheme.lower() == "bearer" else None
+
+    def _matches(presented: str | None, expected: str | None) -> bool:
+        return presented is not None and hmac.compare_digest(presented.encode(), (expected or "").encode())
+
+    def _denied(request: Request, status: int, message: str) -> HTTPException:
+        log.warning(message, extra={
+            "request_id": getattr(request.state, "request_id", None),
+            "client_ip": request.client.host if request.client else None,
+            "http_method": request.method, "http_path": request.url.path, "http_status": status})
+        if status == 401:
+            return HTTPException(401, "unauthorized", headers={"WWW-Authenticate": "Bearer"})
+        return HTTPException(status, "operator_token_required")
+
     def require_token(request: Request, authorization: str | None = Header(default=None)) -> None:
-        """Bearer statique partagé (SOPS). Comparaison à temps constant ; fail closed."""
+        """Jeton de SERVICE (SOPS). Comparaison à temps constant ; fail closed."""
         if not settings.token_configured:
             raise HTTPException(503, "auth_not_configured")
-        scheme, _, presented = (authorization or "").partition(" ")
-        ok = scheme.lower() == "bearer" and hmac.compare_digest(
-            presented.strip().encode(), (settings.token or "").encode())
-        if not ok:
-            log.warning("Accès refusé : token absent ou invalide", extra={
-                "request_id": getattr(request.state, "request_id", None),
-                "client_ip": request.client.host if request.client else None,
-                "http_method": request.method, "http_path": request.url.path, "http_status": 401})
-            raise HTTPException(401, "unauthorized", headers={"WWW-Authenticate": "Bearer"})
+        if not _matches(_bearer(authorization), settings.token):
+            raise _denied(request, 401, "Accès refusé : token absent ou invalide")
+
+    def require_operator(request: Request, authorization: str | None = Header(default=None)) -> None:
+        """Jeton OPÉRATEUR (humain). Le jeton de service est explicitement refusé (403) ; fail closed."""
+        if not settings.operator_token_configured:
+            raise HTTPException(503, "auth_not_configured")
+        presented = _bearer(authorization)
+        if _matches(presented, settings.operator_token):
+            return
+        if settings.token_configured and _matches(presented, settings.token):
+            raise _denied(request, 403, "Action opérateur refusée : jeton de service présenté")
+        raise _denied(request, 401, "Action opérateur refusée : jeton opérateur absent ou invalide")
 
     auth = Depends(require_token)
+    operator = Depends(require_operator)
 
     # --------------------------------------------------------------- sondes
     @app.get("/health")
@@ -169,6 +225,15 @@ def create_app(
         return {"incident_id": sub.incident_id, "decision": sub.decision,
                 "dry_run": sub.dry_run, "detail": sub.detail}
 
+    @app.post("/manual-actions", dependencies=[operator])
+    async def post_manual_action(body: ManualAction, request: Request):
+        """Action confirmée par un opérateur depuis le dashboard (jamais appelée par l'assistant)."""
+        try:
+            return await engine.run_manual(body.action, body.params, body.reason)
+        except (ActionParamError, ActionError) as exc:  # rien n'a été exécuté ni journalisé
+            code = "invalid_params" if isinstance(exc, ActionParamError) else "action_refused"
+            return _error(422, code, str(exc), request)
+
     @app.post("/events/alertmanager", status_code=202, dependencies=[auth])
     async def post_alertmanager(payload: AlertmanagerPayload) -> dict[str, Any]:
         """Webhook Alertmanager (chemin SOC, secondaire) : chaque alerte firing avec un label
@@ -194,6 +259,35 @@ def create_app(
             return _error(404, "incident_not_found", "incident inconnu", request)
         return inc
 
+    @app.get("/waf/blocked-ips", dependencies=[auth])
+    async def blocked_ips() -> dict[str, Any]:
+        """IP actuellement en liste noire du WAF, enrichies par le journal (blocages échus purgés d'abord)."""
+        await purge_and_reload(settings, services.docker, log)
+        return {"blocked": list_blocked_ips(settings.waf_deny_file, journal.last_blocks())}
+
+    @app.delete("/waf/blocked-ips/{ip}", dependencies=[operator])
+    async def unblock_ip(ip: str, request: Request):
+        """Déblocage par l'opérateur (bouton du dashboard) : retire l'IP de la deny-list, recharge le WAF.
+
+        Hors boucle de reprise (aucun incident en dépend) : action d'administration, tracée dans les logs.
+        Jeton OPÉRATEUR exigé : le jeton de service (détenu par le nginx du dashboard) est refusé.
+        """
+        try:
+            async with deny_lock(settings.waf_deny_file):
+                removed = remove_ip(settings.waf_deny_file, ip)
+        except ValueError:
+            return _error(400, "invalid_ip", "adresse IP littérale attendue", request)
+        if not removed:
+            return _error(404, "ip_not_blocked", "cette IP n'est pas dans la liste noire du WAF", request)
+        log.warning(f"IP {ip} débloquée par l'opérateur (dashboard)",
+                    extra={"event": "remediation_action", "client_ip": ip})
+        try:
+            reloaded = await reload_waf(services.docker, settings.waf_service)  # SIGHUP via le proxy
+        except DockerProxyError:
+            return _error(502, "waf_reload_failed",
+                          "IP retirée de la liste noire mais WAF non rechargé (réessayer)", request)
+        return {"unblocked": ip, "waf_reloaded": len(reloaded)}
+
     @app.get("/decision-table", dependencies=[auth])
     async def get_table() -> dict[str, Any]:
         return table.model_dump(mode="json")
@@ -216,7 +310,7 @@ def create_app(
     return app
 
 
-_CODES = {400: "bad_request", 401: "unauthorized", 403: "forbidden", 404: "not_found",
+_CODES = {400: "bad_request", 401: "unauthorized", 403: "operator_token_required", 404: "not_found",
           503: "auth_not_configured"}
 
 

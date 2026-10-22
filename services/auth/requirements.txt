@@ -10,7 +10,9 @@ passlib==1.7.4
 bcrypt==4.0.1
 PyJWT==2.15.1
 slowapi==0.1.10
-httpx==0.28.1
 limits==5.8.0
 prometheus-client==0.26.0
 prometheus-fastapi-instrumentator==8.1.0
+# Client HTTP du back-office (appel face-id : auth_service/backoffice.py) — runtime, pas seulement tests
+httpx==0.28.1
+paho-mqtt==2.1.0

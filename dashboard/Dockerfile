@@ -9,8 +9,10 @@ COPY . .
 # Figés AU BUILD. Défaut : flux proxifié par nginx sur /remediation/stream.
 ARG VITE_REMEDIATION_BASE="/remediation"
 ARG VITE_GRAFANA_BASE="http://localhost:3000"
+ARG VITE_ASSISTANT_URL="/assistant/"
 ENV VITE_REMEDIATION_BASE=${VITE_REMEDIATION_BASE} \
-    VITE_GRAFANA_BASE=${VITE_GRAFANA_BASE}
+    VITE_GRAFANA_BASE=${VITE_GRAFANA_BASE} \
+    VITE_ASSISTANT_URL=${VITE_ASSISTANT_URL}
 RUN npm run build
 
 # ---- Étape 2 : nginx statique + proxy SSE, non-root --------------------------
@@ -25,6 +27,7 @@ COPY --from=build --chown=nginx:nginx /app/dist /usr/share/nginx/html
 ENV REMEDIATION_UPSTREAM=remediation:8005 \
     REMEDIATION_AUTH_HEADER="" \
     PROMETHEUS_UPSTREAM=prometheus:9090 \
+    ASSISTANT_UPSTREAM=assistant:8006 \
     DNS_RESOLVER=127.0.0.11
 
 USER nginx

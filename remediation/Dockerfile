@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Moteur de remédiation — image durcie.
 # Contexte de build = RACINE du dépôt (la lib partagée y est copiée) :
 #   docker build -f remediation/Dockerfile -t resilience/remediation .
@@ -12,12 +13,12 @@
 #   - pg_restore / psql (client 16)   restauration des dumps (réseau `data`, PG_BACKUP_DIR en lecture seule).
 
 FROM python:3.12-slim AS builder
-ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 COPY remediation/requirements.txt /tmp/requirements.txt
 COPY libs/python/resilience_common /tmp/resilience_common
-RUN pip install -r /tmp/requirements.txt /tmp/resilience_common
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/requirements.txt /tmp/resilience_common
 
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
@@ -30,6 +31,7 @@ ENV PYTHONUNBUFFERED=1 \
     ANSIBLE_PRIVATE_DATA_DIR=/tmp/ansible-runner \
     ANSIBLE_HOME=/tmp/.ansible \
     ANSIBLE_LOCAL_TEMP=/tmp/.ansible/tmp \
+    ANSIBLE_REMOTE_TMP=/tmp/.ansible/tmp \
     PG_BACKUP_DIR=/opt/backups \
     WAF_DENY_FILE=/etc/resilience/waf-deny/blocked_ips.conf \
     DOCKER_PROXY_URL=http://docker-socket-proxy:2375
@@ -47,8 +49,8 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 RUN groupadd --system --gid 10001 remediation \
  && useradd --system --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin remediation \
- && mkdir -p /var/lib/remediation /opt/backups /etc/resilience/waf-deny \
- && chown 10001:10001 /var/lib/remediation \
+ && mkdir -p /var/lib/remediation/export /opt/backups /etc/resilience/waf-deny \
+ && chown -R 10001:10001 /var/lib/remediation \
  # Point de montage du volume `waf-deny` partagé avec le WAF (gid 101 = groupe nginx du WAF) :
  # si ce conteneur initialise le volume, le WAF (uid 101) doit pouvoir y créer/lire le fichier.
  && chown 10001:101 /etc/resilience/waf-deny && chmod 2775 /etc/resilience/waf-deny
@@ -60,7 +62,8 @@ COPY remediation/actions /app/actions
 # Plan d'exécution : script de vérification + playbooks de remédiation (lecture seule).
 COPY --chmod=0755 scripts/verify_tx /opt/scripts/verify_tx
 COPY infra/ansible/playbooks/remediation /opt/ansible/project
-# Seul point inscriptible : le journal d'incidents (volume dédié).
+# Seul point inscriptible : le journal d'incidents (volume dédié) ; export/ = copie JSON pour
+# l'assistant (export_journal.py), volume nommé `incidents-export` en Compose.
 VOLUME ["/var/lib/remediation"]
 USER 10001:10001
 EXPOSE 8005

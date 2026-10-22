@@ -22,7 +22,7 @@ import hashlib
 import json
 import shutil
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import joblib
@@ -176,7 +176,7 @@ def train(
 
     stats = {
         "model_version": version,
-        "trained_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "trained_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "feature_names": list(FEATURE_NAMES),
         "mean": means,
         "std": stds,

@@ -1,20 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AssistantTab } from './components/AssistantTab'
+import { BlockedIpsCard } from './components/BlockedIpsCard'
 import { ActionsPanel, EvidencePanel, PlaybooksPanel, SignalsPanel } from './components/IncidentDetails'
 import { IncidentTimeline } from './components/IncidentTimeline'
+import { IncidentReportPanel, OperatorCommandPanel } from './components/OperatorTools'
 import { MetricsCards, ScoreCard, VerificationCard } from './components/MetricsCards'
 import { PhaseBanner } from './components/PhaseBanner'
 import { ScoreChart } from './components/ScoreChart'
 import { ServicesGrid } from './components/ServicesGrid'
 import { Sidebar } from './components/Sidebar'
-import { GRAFANA_BASE, LIVE_TRIGGERS, METRICS_POLL_MS, PROMETHEUS_BASE, STREAM_SOURCE, STREAM_URL, TRIGGER_URL, type StreamSource } from './config'
+import { ASSISTANT_URL, BLOCKED_IPS_URL, GRAFANA_BASE, LIVE_TRIGGERS, METRICS_POLL_MS, PROMETHEUS_BASE, STREAM_SOURCE, STREAM_URL, TRIGGER_URL, type StreamSource } from './config'
+import { useBlockedIps } from './hooks/useBlockedIps'
 import { useDashboard } from './hooks/useDashboard'
 import { useNow } from './hooks/useNow'
 import { defaultFactory, type EventSourceFactory } from './hooks/useRemediationStream'
 import { SimulatedEventSource, type SimulatedType } from './lib/simulator'
 import { currentThreshold, latestIncident, scoredServices } from './lib/state'
 
+type Tab = 'supervision' | 'assistant'
+const TABS: [Tab, string][] = [
+  ['supervision', 'Supervision'],
+  ['assistant', 'Assistant'],
+]
+
 interface Props {
   streamUrl?: string
+  assistantUrl?: string
   /** Injection pour les tests. */
   eventSourceFactory?: EventSourceFactory
   source?: StreamSource
@@ -22,10 +33,12 @@ interface Props {
   grafanaBase?: string
   /** Base du proxy Prometheus (score + santé) ; null = pas de polling (tests). */
   metricsBase?: string | null
+  /** Liste noire du WAF (carte « IP bloquées ») ; null = pas de relève (tests). */
+  blockedIpsUrl?: string | null
 }
 
 /** Choisit la source (flux réel / simulation) ; la console est remontée à chaque bascule. */
-export function App({ streamUrl = STREAM_URL, eventSourceFactory, source = STREAM_SOURCE, liveTriggers = LIVE_TRIGGERS, grafanaBase = GRAFANA_BASE, metricsBase = PROMETHEUS_BASE }: Props) {
+export function App({ streamUrl = STREAM_URL, assistantUrl = ASSISTANT_URL, eventSourceFactory, source = STREAM_SOURCE, liveTriggers = LIVE_TRIGGERS, grafanaBase = GRAFANA_BASE, metricsBase = PROMETHEUS_BASE, blockedIpsUrl = BLOCKED_IPS_URL }: Props) {
   const [simulated, setSimulated] = useState(source === 'simulation')
   const [fallback, setFallback] = useState(false)
 
@@ -46,13 +59,16 @@ export function App({ streamUrl = STREAM_URL, eventSourceFactory, source = STREA
       onToggleSource={() => setSimulated((s) => !s)}
       liveTriggers={liveTriggers}
       grafanaBase={grafanaBase}
+      assistantUrl={assistantUrl}
       metricsBase={metricsBase}
+      blockedIpsUrl={blockedIpsUrl}
     />
   )
 }
 
 interface ConsoleProps {
   streamUrl: string
+  assistantUrl: string
   eventSourceFactory?: EventSourceFactory
   simulated: boolean
   fallback: boolean
@@ -61,9 +77,19 @@ interface ConsoleProps {
   liveTriggers: boolean
   grafanaBase: string
   metricsBase: string | null
+  blockedIpsUrl: string | null
 }
 
-function Console({ streamUrl, eventSourceFactory, simulated, fallback, onNeverOpened, onToggleSource, liveTriggers, grafanaBase, metricsBase }: ConsoleProps) {
+function Console({ streamUrl, assistantUrl, eventSourceFactory, simulated, fallback, onNeverOpened, onToggleSource, liveTriggers, grafanaBase, metricsBase, blockedIpsUrl }: ConsoleProps) {
+  const [tab, setTab] = useState<Tab>('supervision')
+  // L'iframe n'est montée qu'au premier affichage de l'onglet, puis conservée.
+  const [assistantMounted, setAssistantMounted] = useState(false)
+  const select = (t: Tab) => {
+    setTab(t)
+    if (t === 'assistant') setAssistantMounted(true)
+  }
+  // Simulation locale : pas de moteur réel derrière, donc pas de liste noire à relever.
+  const blocked = useBlockedIps(simulated ? null : blockedIpsUrl)
   const simRef = useRef<SimulatedEventSource | null>(null)
   const factory = useMemo<EventSourceFactory>(
     () => (simulated ? () => (simRef.current = new SimulatedEventSource()) : (eventSourceFactory ?? defaultFactory)),
@@ -156,6 +182,27 @@ function Console({ streamUrl, eventSourceFactory, simulated, fallback, onNeverOp
           </div>
         </header>
 
+        <div role="tablist" aria-label="Vues" className="flex gap-2 border-b border-edge">
+          {TABS.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={`tab-${id}`}
+              aria-controls={`panel-${id}`}
+              aria-selected={tab === id}
+              onClick={() => select(id)}
+              className={`-mb-px cursor-pointer border-b-2 px-4 py-2 text-[13px] font-medium ${
+                tab === id ? 'border-accent text-accent-2' : 'border-transparent text-mute hover:text-fg-2'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* hidden (pas de rendu conditionnel) : la supervision reste montée, le flux SSE n'est pas coupé. */}
+        <div role="tabpanel" id="panel-supervision" aria-labelledby="tab-supervision" hidden={tab !== 'supervision'} className="flex flex-col gap-[22px]">
         <PhaseBanner phase={phase} incident={incident} />
 
         <section aria-label="Indicateurs" className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-3.5">
@@ -177,13 +224,21 @@ function Console({ streamUrl, eventSourceFactory, simulated, fallback, onNeverOp
             />
             <IncidentTimeline incident={incident} now={now} />
             <ActionsPanel incident={incident} />
+            <IncidentReportPanel incident={incident} />
           </div>
           <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-[18px]">
+            <OperatorCommandPanel />
             <ServicesGrid services={state.services} />
+            <BlockedIpsCard items={blocked.items} error={blocked.error} onUnblock={blocked.unblock} />
             <SignalsPanel incident={incident} />
             <PlaybooksPanel incident={incident} />
             <EvidencePanel incident={incident} grafanaBase={grafanaBase} />
           </div>
+        </div>
+        </div>
+
+        <div role="tabpanel" id="panel-assistant" aria-labelledby="tab-assistant" hidden={tab !== 'assistant'}>
+          {assistantMounted && <AssistantTab url={assistantUrl} />}
         </div>
       </main>
     </div>

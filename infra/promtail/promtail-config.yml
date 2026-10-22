@@ -21,6 +21,21 @@ scrape_configs:
       - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
         target_label: 'service'
     pipeline_stages:
+      # Masquage AVANT Loki de ce que le WAF écrit sur stderr (error_log nginx, niveau `warn`) :
+      # chaque ligne d'erreur nginx recopie la requête (`request: "GET /p?token=X HTTP/1.1"`,
+      # `upstream: "..."`, `referrer: "..."`) et les lignes « ModSecurity: Access denied » portent
+      # la donnée appariée `[data "..."]` et la valeur `(Value: `...' )`, qui peuvent contenir le
+      # contenu de la requête (mot de passe d'un login bloqué...). `replace` n'efface que le groupe
+      # capturé : méthode, chemin, hôte, id de règle restent. Test : infra/tests/test_promtail.py.
+      - replace:
+          expression: '(?:request|upstream|referrer): "[^"?]*(\?[^" ]*)[^"]*"'
+          replace: ''
+      - replace:
+          expression: '\[data "((?:[^"\\]|\\.)*)"\]'
+          replace: ''
+      - replace:
+          expression: 'Value: `(.*?)'' \)'
+          replace: ''
       # Les services émettent du JSON (contrat §1) : on parse les champs clés
       # pour les rendre requêtables et alimenter les règles SOC.
       - json:

@@ -2,7 +2,7 @@
 
 import csv
 import io
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -14,8 +14,8 @@ from ml.shared.features import FEATURE_NAMES
 
 QUERIES = build_queries("20s")
 BY_QUERY = {q: n for n, q in QUERIES.items()}
-START = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
-END = datetime(2026, 10, 19, 10, 1, tzinfo=timezone.utc)
+START = datetime(2026, 10, 19, 10, 0, tzinfo=UTC)
+END = datetime(2026, 10, 19, 10, 1, tzinfo=UTC)
 T = [START.timestamp() + 15 * i for i in range(5)]  # 10:00:00 .. 10:01:00
 
 

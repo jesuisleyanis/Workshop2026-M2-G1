@@ -17,14 +17,16 @@ Point d'accès : partage de connexion Windows **`RESILIENCE-G1`**, sous-réseau 
 | Réseau | `internal` | Services | Ports publiés |
 |---|---|---|---|
 | `edge` | non | waf | **80, 443** (HTTP/HTTPS) |
-| `app` | non | front, payment-api, auth, mosquitto (`iot`), collector, detector, remediation, docker-socket-proxy, dashboard, assistant | **1883** sur `192.168.137.1` pour Mosquitto (`iot` ; `MQTT_BIND_ADDR=127.0.0.1` hors hotspot, jamais `0.0.0.0`) |
+| `app` | non | front, payment-api, auth, mosquitto (`iot`), collector, detector, remediation, docker-socket-proxy, dashboard | **1883** sur `192.168.137.1` pour Mosquitto (`iot` ; `MQTT_BIND_ADDR=127.0.0.1` hors hotspot, jamais `0.0.0.0`) |
+| `ai` | non | assistant, ollama (profil `ai`), dashboard (proxy `/assistant/`) — **sans** remediation | aucun |
 | `data` | **oui** | postgres, pg-exporter, remediation (uniquement pour `pg_restore` : correction de corruption) | aucun |
-| `obs` | oui | prometheus, loki, promtail, grafana, alertmanager, cadvisor, waf-exporter | aucun (accès via tunnel/port-forward local pour le dev) |
+| `obs` | oui | prometheus, loki, promtail, grafana, alertmanager, cadvisor, waf-exporter, collector, detector, remediation (lecture Loki : `confirm_waf_block`) | aucun (accès via tunnel/port-forward local pour le dev) |
 
 - `data` et `obs` sont en `internal: true` : Postgres, secrets et observabilité ne sont **jamais** joignables depuis le hotspot ni ne sortent vers Internet.
-- `app` n'est **pas** `internal` : c'est le seul réseau avec sortie (pull d'images, modèles Ollama). Mosquitto est la seule exception à l'absence de port publié sur ce réseau, et seulement dans le profil `iot`.
+- `app` n'est **pas** `internal` : sortie (pull d'images). Mosquitto est la seule exception à l'absence de port publié sur ce réseau, et seulement dans le profil `iot`.
+- `ai` n'est **pas** `internal` (pull des modèles Ollama, PC IA externe) mais n'inclut pas le moteur de remédiation : l'assistant ne peut pas joindre `remediation:8005` (vérifié par `assistant/tests/test_security_guard.py`). Aucun `ports:` sur ce réseau. Le dashboard, sur `app` **et** `ai`, relaie quelques routes du moteur : ses routes d'**écriture** exigent le jeton **opérateur** (jamais injecté par son nginx, inconnu des conteneurs `ai`), donc rien depuis `ai` ne peut déclencher d'action (`infra/tests/test_dashboard_proxy.py`).
 - Le WAF est l'unique entrée HTTP de la plateforme. MQTT ne passe pas par le WAF : le broker écoute directement sur l'interface du PA. Rien d'autre n'est publié sur `0.0.0.0` hors WAF.
-- Le moteur de remédiation est sur `app` + `data` (restauration Postgres en direct, sans `docker exec`) — **jamais** sur `edge`, aucun `ports:`.
+- Le moteur de remédiation est sur `app` + `data` (restauration Postgres en direct, sans `docker exec`) + `obs` (lecture Loki) — **jamais** sur `edge` ni `ai`, aucun `ports:`.
 
 ## Pare-feu Windows (PC Hôte)
 
