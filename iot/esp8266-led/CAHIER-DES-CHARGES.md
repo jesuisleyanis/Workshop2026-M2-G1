@@ -25,16 +25,22 @@ Le firmware reçoit un **état sémantique** via MQTT ou une commande HTTP direc
 | `idle` | éteinte (**défaut**) | — |
 | `recognized` | vert clignotant | jusqu'à l'état suivant |
 | `auth_ok` | vert fixe | 30 s → éteinte |
-| `auth_fail` | rouge clignotant ×10 | → éteinte |
+| `auth_fail` | rouge clignotant ×10 | 12 s → éteinte |
 | `not_recognized` | rouge fixe | 30 s → éteinte |
 
-- **Non bloquant** : les motifs dérivent de `millis()` ; les tentatives Wi-Fi sont espacées de 5 s, sans boucle d'attente.
+- **Non bloquant** : les motifs dérivent de `millis()` ; le Wi-Fi retente après 5 s sur échec explicite ou après 30 s si la connexion reste en cours, sans boucle d'attente.
 - **Fail-safe** : payload JSON invalide ou état inconnu ⇒ aucun changement d'état ; perte WiFi/MQTT ⇒ tentative de reconnexion sans bloquer la LED.
+- **Indication Wi-Fi** : hors connexion, la LED alterne rouge/vert toutes les 400 ms ; une fois connectée, elle affiche l'état d'authentification.
 - **LWT** : à la déconnexion, le broker publie l'indisponibilité de l'objet (supervision côté hôte).
 
 ## 4. Câblage
 
 LED bicolore commune **cathode** : broche verte sur **D1**, broche rouge sur **D2**, cathode au GND via résistances (~220 Ω). (Adapter les broches dans `src/led_device.cpp` selon la carte.)
+
+Buzzer **passif** : borne positive sur **D5**, borne négative sur **GND**. Les sons suivent
+les états reçus : mélodie d'attente en boucle pour `recognized`, fanfare du drapeau de Mario pour `auth_ok`,
+mélodie de mort de Mario répétée pour `auth_fail`, mélodie de cirque en boucle
+pour `not_recognized`.
 
 ## 5. Critères d'acceptation
 
