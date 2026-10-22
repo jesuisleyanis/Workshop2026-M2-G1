@@ -47,8 +47,8 @@ model: ## Entraîne le modèle ML si l'artefact est absent (requis avant le buil
 up: decrypt model ## Lève la stack (profil démo minimal)
 	$(COMPOSE) --profile demo up -d --build
 
-up-full: decrypt model ## Lève la stack complète (observabilité + full)
-	$(COMPOSE) --profile demo --profile full up -d --build
+up-full: decrypt model ## Lève la stack complète (observabilité + full + broker MQTT iot)
+	$(COMPOSE) --env-file .env --profile demo --profile full --profile iot up -d --build
 
 up-iot: decrypt ## Lève la stack avec le broker MQTT sur le point d'accès
 	$(COMPOSE) --env-file .env --profile demo --profile iot up -d --build
