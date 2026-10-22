@@ -52,11 +52,13 @@ fi
 echo "[3] Secrets en clair"
 # Le filtre d'exclusion s'applique au CONTENU seul (on retire le préfixe `chemin:ligne:` via awk),
 # sinon un fichier dont le CHEMIN contient « test »/« latest »/« contest » échapperait au scan.
-# Les répertoires de tests sont exclus explicitement ; on couvre aussi .sh/.conf/.json.
+# Les répertoires de tests et les fichiers de test Vitest (*.test.ts[x]) sont exclus explicitement ;
+# on couvre aussi .sh/.conf/.json.
 secret_hits="$(grep -RInE '(password|secret|token|api[_-]?key)[[:space:]]*[:=][[:space:]]*["'\''][^"'\'' ]{8,}' \
      --include='*.py' --include='*.ts' --include='*.tsx' --include='*.yml' --include='*.yaml' \
      --include='*.sh' --include='*.conf' --include='*.json' \
      --exclude-dir='tests' --exclude-dir='node_modules' --exclude-dir='__pycache__' \
+     --exclude='*.test.ts' --exclude='*.test.tsx' \
      services/ ml/ remediation/ dashboard/ assistant/ infra/ scripts/ security/ 2>/dev/null \
      | awk -F: '{ c=$0; sub(/^[^:]*:[^:]*:/,"",c); if (c !~ /(change-me|example|fake|dummy|test|os\.environ|getenv|process\.env|VITE_|env\()/) print }')"
 if [[ -n "${secret_hits}" ]]; then
