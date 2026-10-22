@@ -24,8 +24,21 @@ API métier de la plateforme de paiement **fictive** : consultation des comptes,
 | Méthode & chemin | Auth | Description |
 |---|---|---|
 | `GET /api/v1/accounts` | JWT | Comptes de l'utilisateur : `[{id, iban_fake, balance_cents, currency}]` |
-| `POST /api/v1/transactions` | JWT | `{src_account, dst_account, amount_cents}` → `201` transaction. Refus : `409 insufficient_funds`, `422 invalid_amount / amount_too_large / same_account / currency_mismatch`, `404 account_not_found / destination_not_found` |
-| `GET /api/v1/transactions?limit=50` | JWT | Historique (transactions touchant un compte de l'utilisateur), plus récentes d'abord, `limit` 1–200 |
+| `POST /api/v1/transactions` | JWT | `{src_account, dst_account, amount_cents, category?}` → `201` transaction (`category` facultatif, défaut `transfer`, conservé aussi sur un refus). Refus : `403 step_up_required` (au-delà de 500 € sans mot de passe vérifié depuis 5 min, #51), `409 limit_exceeded` (plafond mensuel #46, contrôlé sous verrou de la source ; virements internes exclus), `409 insufficient_funds`, `422 invalid_amount / amount_too_large / same_account / currency_mismatch`, `404 account_not_found / destination_not_found` |
+| `GET /api/v1/transactions?limit=50` | JWT | Historique (transactions touchant un compte de l'utilisateur), plus récentes d'abord, `limit` 1–200 ; chaque ligne porte `category`, **masquée (`null`) pour le destinataire** (catégorisation privée de l'émetteur) |
+| `GET /api/v1/transactions/{id}` | JWT | Détail (#45) : émetteur ou destinataire seulement ; tiers et id inconnu = même `404 transaction_not_found` (pas de 403 : pas d'oracle d'existence), tracé `transaction_access_denied` (`unknown`/`foreign`) ; une seule requête SQL (opération + titulaires) |
+| `GET /api/v1/cards` | JWT | Cartes de l'utilisateur (#47) : `last4`, titulaire, expiration, statut, réglages — jamais de PAN ni de CVV |
+| `POST /api/v1/cards/{id}/freeze` · `/unfreeze` | JWT | Gel / dégel idempotents ; carte d'autrui = `404 card_not_found` |
+| `PATCH /api/v1/cards/{id}` | JWT | Réglages partiels bornés (plafond 0–10 000 €, sans contact, paiement en ligne) ; champ inconnu → `422` ; carte gelée → `409 card_frozen` |
+| `GET`·`POST /api/v1/scheduled-transfers`, `PATCH`·`DELETE /{id}` | JWT | Virements programmés (#48) : création validée (dates, montants, comptes), pause/reprise, annulation ; exécutés par la tâche de fond `schedules.run_due` |
+| `GET /api/v1/notifications?unread=` · `POST /{id}/read` · `POST /read-all` | JWT | Notifications in-app (#49) : virements émis/reçus/refusés, plafond 80 %, carte, virements programmés ; lecture idempotente, cloisonnée |
+| `GET /api/v1/statements?account_id=&from=&to=&format=` | JWT | Relevé CSV (téléchargement) ou JSON (impression) d'un compte possédé, période ≤ 12 mois, ≤ 5 000 lignes, injection CSV neutralisée (#50) |
+| `GET /api/v1/limits` | JWT | Plafond mensuel par compte (#46) : plafond (`null` = aucun), consommé du mois, restant, date de remise à zéro |
+| `GET /api/v1/stats/spending?period=week\|month&offset=0` | JWT | Dépenses d'une période (#44 ; `offset` ∈ [-24, 0]) : total, parts par catégorie (décroissant), série journalière complète. Dépense = virement `created` vers un compte d'un autre client ; périodes UTC `[start, end)` ; **agrégation SQL** (coût borné quel que soit l'historique) |
+| `GET /api/v1/beneficiaries` | JWT | Bénéficiaires de l'utilisateur (#43), triés par nom |
+| `POST /api/v1/beneficiaries` | JWT | `{display_name, iban_fake}` → `201`. IBAN ramené à la forme stockée (groupes de 4) : recherche exacte sur l'index unique, sans balayage. Refus : `404 account_not_found` (IBAN inconnu), `409 beneficiary_exists` (contrôle + contrainte BDD : sûr en concurrence ; toute autre violation d'intégrité = `503 db_unavailable`), `422 own_account`, `409 beneficiary_limit` (100/client). Piste d'audit : `beneficiary_added` / `beneficiary_rejected` (motif seul, **jamais l'IBAN sondé**) / `beneficiary_removed` |
+| `DELETE /api/v1/beneficiaries/{id}` | JWT | `204` ; objet d'autrui = `404 beneficiary_not_found` (anti-IDOR). Id borné à l'INTEGER Postgres (`422` au-delà, jamais un faux `db_error`) |
+| `GET /api/v1/status` | **aucune** | État public pour le bandeau client (#42) : `200 {status:"ok", checked_at}` / `503 {status:"degraded", checked_at}`. Rien d'autre (pas de version, d'hôte ni d'exception). Cache `STATUS_CACHE_S` = 2 s : **au plus une requête BDD par fenêtre**, quel que soit le trafic (pas d'amplification) ; le WAF limite en plus par IP |
 | `GET /health` | — | Liveness |
 | `GET /ready` | — | `200` si la DB répond ; `503 db_unavailable` sinon |
 | `GET /metrics` | — (réseau interne) | Prometheus |

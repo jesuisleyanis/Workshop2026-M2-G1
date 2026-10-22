@@ -7,11 +7,12 @@
   2. **`auth` publie des états sémantiques** (`idle|recognized|auth_ok|auth_fail|not_recognized`) ; le **firmware** mappe chaque état vers son **motif + timing** (vert fixe 30 s, rouge clignotant ×10, etc. — contrat §5.3). Le contrat réseau reste minimal.
   3. **Publication fail-open :** un broker ou un ESP injoignable n'empêche **jamais** la connexion (la LED est un témoin, pas un facteur). L'échec est journalisé (`led_publish_failed`).
   4. **Portée du facteur (D4) :** le visage et la LED ne renforcent que l'**accès privilégié** du back-office ; la boucle Zero-Touch Recovery (`verify_tx`, détection, remédiation, Clip Chrono) n'en dépend jamais — pas d'auto-DoS de la démo notée.
+  5. **Commande directe sur l'objet :** l'ESP expose trois routes HTTP Basic sur le PA pour déclencher les motifs vert clignotant, vert fixe et rouge clignotant. Elles utilisent la même machine à états que MQTT ; `auth` conserve MQTT comme transport de son flux d'authentification. Cette surface HTTP doit rester limitée au PA du groupe.
 - **Alternatives écartées :**
   - *ESP en serveur HTTP* (auth POSTe l'état sur l'IP de l'ESP) — auth devrait connaître/suivre l'IP de l'objet et franchir la frontière réseau ; plus fragile.
   - *Service `led-bridge` dédié* entre auth et MQTT — sur-découpage pour ce périmètre ; gardé comme option de montée en charge si l'on veut sortir le client MQTT de `auth`.
   - *Timing côté serveur* (auth tient le « 30 s » / « ×10 ») — alourdit le contrat et couple le serveur à l'objet ; le firmware autonome est plus robuste aux coupures.
 - **Conséquences :**
   - (+) Découplage net, testable (auth : publication mockée ; firmware : machine à états en test `native`).
-  - (+) Surface réseau ajoutée **maîtrisée et documentée** (un seul topic de commande, ACL, bind hotspot) — portée en risque résiduel EBIOS.
+  - (+) Surfaces réseau ajoutées **documentées** (topics MQTT avec ACL et commandes HTTP Basic sur l'ESP) — portées en risque résiduel EBIOS.
   - (−) Un broker de plus à durcir et à superviser (LWT → disponibilité de l'objet).

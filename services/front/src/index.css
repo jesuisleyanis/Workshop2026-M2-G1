@@ -4,46 +4,145 @@
 @import "@fontsource/jetbrains-mono/500.css";
 @import "tailwindcss";
 
-/* Design « Banque Résilience » : cadre clair, cartes nuit, accents ok/ko/warn. */
+/* Design « Banque Résilience » (Claude Design, maquettes desktop 1280 / mobile 390) : noir & blanc, cartes nuit, grands rayons. */
 @theme {
   --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
-  --color-page: #e8eaed;
-  --color-frame: #f4f5f7;
-  --color-soft: #f6f7f9;
+  --color-page: #f3f4f6;
+  --color-soft: #f7f8fa;
+  --color-mute: #eceef1;
   --color-line: #e1e3e7;
   --color-ink: #121316;
   --color-ink-2: #4a4e55;
   --color-ink-3: #6b6f76;
-  --color-ink-4: #8a8f97;
-  --color-night: #15161a;
-  --color-night-2: #23252b;
-  --color-night-3: #2c2f36;
-  --color-ok-bg: #e4f3ea;
-  --color-ok-fg: #1b6e47;
-  --color-ko-bg: #fbe8e4;
-  --color-ko-fg: #9c2f1d;
-  --color-warn-bg: #fbf1dc;
-  --color-warn-fg: #7a4d00;
+  --color-ink-4: #c3c6cc;
+  --color-night: #121316;
+  --color-night-2: #2a2c32;
+  --color-violet: #6d4aff;
+  --color-violet-ink: #5b34c4;
+  --color-violet-bg: #ebe3ff;
+  --color-ok-bg: #e3f3ea;
+  --color-ok-fg: #1f7a4d;
+  --color-ko-bg: #fbe9e7;
+  --color-ko-fg: #b3261e;
+  --color-warn-bg: #fbf0d9;
+  --color-warn-fg: #8a5a00;
+
+  --shadow-card: 0 1px 2px rgba(18, 19, 22, 0.04), 0 10px 30px -18px rgba(18, 19, 22, 0.18);
+  --shadow-chip: 0 1px 2px rgba(18, 19, 22, 0.06), 0 6px 16px -10px rgba(18, 19, 22, 0.25);
+  --shadow-float: 0 18px 36px -14px rgba(18, 19, 22, 0.6);
+
+  --animate-sk: sk 1.4s ease-in-out infinite;
+  --animate-spin-fast: spin 0.8s linear infinite;
+  --animate-pulse-warn: pulse-warn 1.6s ease-in-out infinite;
+  --animate-sheet-up: sheet-up 0.36s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-fade-in: fade-in 0.25s ease both;
+  --animate-wz-in: wz-in 0.34s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-wz-back: wz-back 0.34s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-shine: shine 2.4s linear infinite;
+  --animate-pop: pop 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+
+  @keyframes sk { 0%, 100% { opacity: 1 } 50% { opacity: 0.45 } }
+  @keyframes pulse-warn { 0%, 100% { box-shadow: 0 0 0 0 rgba(240, 180, 60, 0.7) } 50% { box-shadow: 0 0 0 8px rgba(240, 180, 60, 0) } }
+  @keyframes sheet-up { from { transform: translateY(100%) } to { transform: none } }
+  @keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes wz-in { from { opacity: 0; transform: translateX(28px) } to { opacity: 1; transform: none } }
+  @keyframes wz-back { from { opacity: 0; transform: translateX(-28px) } to { opacity: 1; transform: none } }
+  @keyframes shine { from { background-position: 120% 0 } to { background-position: -120% 0 } }
+  @keyframes pop { 0% { transform: scale(0.4); opacity: 0 } 60% { transform: scale(1.15); opacity: 1 } 100% { transform: scale(1) } }
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
   body {
     @apply bg-page font-sans text-ink antialiased;
   }
+  :focus {
+    outline: none;
+  }
+  :focus-visible {
+    outline: 2.5px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+  input[type="range"] {
+    accent-color: var(--color-ink);
+  }
+  input::placeholder {
+    color: #8a8e95;
+  }
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+/* Impression : seule la zone [data-print] (RIB) est imprimée. */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  [data-print],
+  [data-print] * {
+    visibility: visible !important;
+  }
+  [data-print] {
+    position: fixed;
+    inset: 0 auto auto 0;
+    width: 100% !important;
+    box-shadow: none !important;
+  }
+  /* Document long (relevé #50) : `fixed` n'imprimerait que la 1re page. Tout ce qui n'est ni le
+     document ni l'un de ses ancêtres sort du flux, et les conteneurs du shell (hauteur d'écran,
+     défilement) se déplient pour que le document s'étende sur plusieurs pages. */
+  body:has([data-print-doc]) :not(:has([data-print-doc])):not([data-print-doc]):not([data-print-doc] *) {
+    display: none !important;
+  }
+  body:has([data-print-doc]) :has([data-print-doc]) {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  [data-print-doc],
+  [data-print-doc] * {
+    visibility: visible !important;
+  }
+  [data-print-doc] {
+    width: 100% !important;
+    box-shadow: none !important;
+  }
+  [data-print-doc] tr {
+    break-inside: avoid;
+  }
+}
+
+@utility card {
+  @apply rounded-[28px] bg-white shadow-card;
 }
 
 @utility field {
-  @apply h-[52px] w-full rounded-[14px] border-[1.5px] border-line bg-[#f7f8fa] px-4 text-base outline-none focus:border-night focus:bg-white aria-[invalid=true]:border-[#d0644f];
+  @apply h-[52px] w-full rounded-[14px] border-[1.5px] border-line bg-soft px-4 text-[15px] outline-none focus:border-ink focus:bg-white aria-[invalid=true]:border-ko-fg;
+}
+
+@utility search {
+  @apply h-[52px] w-full min-w-0 rounded-full border-[1.5px] border-line bg-white pr-4 pl-12 text-[15px] outline-none focus:border-ink;
 }
 
 @utility btn-primary {
-  @apply inline-flex h-12 items-center justify-center rounded-[13px] bg-night px-5 font-semibold text-white hover:bg-[#2a2c32] disabled:cursor-not-allowed disabled:opacity-60;
+  @apply inline-flex h-[54px] items-center justify-center gap-2 rounded-2xl border-0 bg-night px-5 text-base font-semibold text-white hover:bg-night-2 disabled:cursor-not-allowed disabled:opacity-60;
 }
 
 @utility btn-ghost {
-  @apply inline-flex h-11 items-center justify-center rounded-xl border-[1.5px] border-line bg-white px-4 text-sm hover:border-night disabled:cursor-not-allowed disabled:opacity-60;
+  @apply inline-flex h-[54px] items-center justify-center gap-2 rounded-2xl border-[1.5px] border-line bg-white px-5 text-base font-semibold hover:border-ink disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+@utility round-btn {
+  @apply grid h-11 w-11 flex-none place-items-center rounded-full border-0 bg-white shadow-chip;
 }
 
 @utility tnum {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createApiClient } from './client'
 import { createEndpoints } from './index'
 import { decodeJwtClaims, decodeJwtExp } from './tokenStore'
-import { parseAccounts, parseLogin, parseTransaction } from './parsers'
+import { parseAccounts, parseCard, parseLimits, parseLogin, parseNotification, parseSchedule, parseTransaction } from './parsers'
 import { fakeJwt, jsonResponse } from '../test/helpers'
 
 function endpointsWith(handler: (url: string, init?: RequestInit) => Response) {
@@ -19,6 +19,129 @@ describe('endpoints /api/v1', () => {
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/v1/login')
     expect(init.method).toBe('POST')
+  })
+
+  it('getStatus : GET /api/v1/status sans jeton ; 503 degraded = erreur serveur', async () => {
+    const { api, f } = endpointsWith(() => jsonResponse({ status: 'ok', checked_at: '2026-10-21T10:00:00Z' }))
+    expect(await api.getStatus()).toEqual({ status: 'ok', checkedAt: '2026-10-21T10:00:00Z' })
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/api/v1/status')
+    expect((init.headers as Record<string, string>).Authorization).toBeUndefined()
+    const down = endpointsWith(() => jsonResponse({ status: 'degraded', checked_at: '2026-10-21T10:00:00Z' }, 503))
+    await expect(down.api.getStatus()).rejects.toMatchObject({ status: 503 })
+  })
+
+  it('bénéficiaires : GET, POST {display_name, iban_fake}, DELETE /{id} (204)', async () => {
+    const row = { id: 5, display_name: 'Léa', account_id: 42, iban_fake: 'FR76 9001', created_at: '2026-10-21T10:00:00Z' }
+    const { api, f } = endpointsWith((_u, init) =>
+      init?.method === 'DELETE' ? new Response(null, { status: 204 }) : jsonResponse(init?.method === 'POST' ? row : [row]),
+    )
+    expect(await api.listBeneficiaries()).toEqual([{ id: '5', name: 'Léa', accountId: '42', iban: 'FR76 9001', createdAt: '2026-10-21T10:00:00Z' }])
+    await api.addBeneficiary({ name: 'Léa', iban: 'FR76 9001' })
+    expect(JSON.parse((f.mock.calls[1]![1] as RequestInit).body as string)).toEqual({ display_name: 'Léa', iban_fake: 'FR76 9001' })
+    await expect(api.deleteBeneficiary('5')).resolves.toBeUndefined()
+    expect(f.mock.calls[2]).toEqual(['/api/v1/beneficiaries/5', expect.objectContaining({ method: 'DELETE' })])
+  })
+
+  it('transactions : catégorie absente => « transfer », inconnue => « other », masquée (reçu) => null', () => {
+    const base = { id: 1, src_account: 1, dst_account: 2, amount_cents: 100, status: 'created' }
+    expect(parseTransaction(base).category).toBe('transfer')
+    expect(parseTransaction({ ...base, category: 'casino' }).category).toBe('other')
+    expect(parseTransaction({ ...base, category: null }).category).toBeNull()
+    expect(parseTransaction({ ...base, category: 'health' }).category).toBe('health')
+  })
+
+  it('createTransaction : category envoyée seulement si fournie', async () => {
+    const { api, f } = endpointsWith(() => jsonResponse({ id: 1, src_account: 1, dst_account: 2, amount_cents: 100, status: 'created' }, 201))
+    await api.createTransaction({ from_account: '1', to_account: '2', amount: 1, category: 'food' })
+    await api.createTransaction({ from_account: '1', to_account: '2', amount: 1 })
+    const bodies = f.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string))
+    expect(bodies[0]).toEqual({ src_account: 1, dst_account: 2, amount_cents: 100, category: 'food' })
+    expect(bodies[1]).not.toHaveProperty('category')
+  })
+
+  it('getSpending : GET /api/v1/stats/spending?period=, centimes -> euros', async () => {
+    const { api, f } = endpointsWith(() =>
+      jsonResponse({
+        period: 'week',
+        offset: -1,
+        start: '2026-10-19',
+        end: '2026-10-26',
+        total_cents: 1250,
+        by_category: [{ category: 'food', amount_cents: 1250, share: 1 }],
+        by_day: [{ date: '2026-10-19', amount_cents: 1250 }],
+      }),
+    )
+    expect(await api.getSpending('week', -1)).toEqual({
+      period: 'week',
+      offset: -1,
+      start: '2026-10-19',
+      end: '2026-10-26',
+      total: 12.5,
+      byCategory: [{ category: 'food', amount: 12.5, share: 1 }],
+      byDay: [{ date: '2026-10-19', amount: 12.5 }],
+    })
+    expect((f.mock.calls[0] as unknown as [string])[0]).toBe('/api/v1/stats/spending?period=week&offset=-1')
+  })
+
+  it('plafonds : centimes -> euros, null (sans plafond) préservé', () => {
+    expect(
+      parseLimits([
+        { account_id: 1, monthly_limit_cents: 200000, used_cents: 1050, remaining_cents: 198950, period_end: '2026-11-01' },
+        { account_id: 2, monthly_limit_cents: null, used_cents: 0, remaining_cents: null, period_end: '2026-11-01' },
+      ]),
+    ).toEqual([
+      { accountId: '1', limit: 2000, used: 10.5, remaining: 1989.5, periodEnd: '2026-11-01' },
+      { accountId: '2', limit: null, used: 0, remaining: null, periodEnd: '2026-11-01' },
+    ])
+  })
+
+  it('cartes : liste parsée (centimes -> euros), PATCH partiel en centimes', async () => {
+    const card = { id: 9, account_id: 1, last4: '4001', holder: 'C D', expiry_month: 3, expiry_year: 2029, status: 'frozen', payment_limit_cents: 150000, contactless: true, online_payments: false }
+    const { api, f } = endpointsWith((_u, init) => jsonResponse(init?.method === 'GET' ? [card] : card))
+    expect(await api.listCards()).toEqual([
+      { id: '9', accountId: '1', last4: '4001', holder: 'C D', expiryMonth: 3, expiryYear: 2029, status: 'frozen', paymentLimit: 1500, contactless: true, onlinePayments: false },
+    ])
+    await api.updateCard('9', { paymentLimit: 20.5, onlinePayments: true })
+    expect(f.mock.calls[1]).toEqual(['/api/v1/cards/9', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ payment_limit_cents: 2050, online_payments: true }) })])
+    await api.freezeCard('9')
+    expect(f.mock.calls[2]).toEqual(['/api/v1/cards/9/freeze', expect.objectContaining({ method: 'POST' })])
+  })
+
+  it('parseCard : échec fermé sur un statut ou un booléen inattendu (jamais « Active » par défaut)', () => {
+    const base = { id: 9, account_id: 1, last4: '4001', holder: 'X', expiry_month: 1, expiry_year: 2029, status: 'active', payment_limit_cents: 100, contactless: true, online_payments: false }
+    expect(parseCard(base).status).toBe('active')
+    expect(() => parseCard({ ...base, status: 'blocked' })).toThrow(/Statut de carte inconnu/)
+    expect(() => parseCard({ ...base, contactless: undefined })).toThrow(/contactless/)
+  })
+
+  it('parseSchedule : euros, last_run, échec fermé sur statut/fréquence inconnus', () => {
+    const base = { id: 3, src_account: 1, dst_account: 42, amount_cents: 5000, category: 'housing', frequency: 'monthly', start_on: '2026-10-01', next_run_on: '2026-11-01', end_on: null, status: 'active', last_run: { run_on: '2026-10-01', status: 'failed', error_code: 'limit_exceeded' } }
+    const s = parseSchedule(base)
+    expect([s.amount, s.endOn, s.lastRun]).toEqual([50, null, { runOn: '2026-10-01', status: 'failed', errorCode: 'limit_exceeded' }])
+    expect(() => parseSchedule({ ...base, status: 'running' })).toThrow()
+    expect(() => parseSchedule({ ...base, frequency: 'daily' })).toThrow()
+  })
+
+  it('parseSchedule : une exécution interrompue (pending) reste lisible', () => {
+    const row = { id: 1, src_account: 1, dst_account: 2, amount_cents: 100, category: 'transfer', frequency: 'once', start_on: '2026-10-21', next_run_on: null, end_on: null, status: 'completed', last_run: { run_on: '2026-10-21', status: 'pending', error_code: null } }
+    expect(parseSchedule(row).lastRun?.status).toBe('pending')
+  })
+
+  it('notifications : type inconnu => « other », id/titre/corps exigés, endpoints', async () => {
+    const row = { id: 7, type: 'card_frozen', title: 'Carte gelée', body: 'x', created_at: '2026-10-21T10:00:00Z', read_at: null }
+    expect(parseNotification(row)).toEqual({ id: '7', type: 'card_frozen', title: 'Carte gelée', body: 'x', createdAt: '2026-10-21T10:00:00Z', readAt: null })
+    expect(parseNotification({ ...row, type: 'nouveau' }).type).toBe('other')
+    expect(() => parseNotification({ ...row, title: undefined })).toThrow()
+    const { api, f } = endpointsWith((u) => (u.endsWith('read-all') ? jsonResponse({ updated: 3 }) : jsonResponse(u.includes('?') ? [row] : row)))
+    expect(await api.listNotifications(true)).toHaveLength(1)
+    await api.markNotificationRead('7')
+    expect(await api.markAllNotificationsRead()).toBe(3)
+    expect(f.mock.calls.map(([u]) => u)).toEqual(['/api/v1/notifications?unread=true', '/api/v1/notifications/7/read', '/api/v1/notifications/read-all'])
+    const count = endpointsWith(() => jsonResponse({ count: 4 }))
+    expect(await count.api.getUnreadCount()).toBe(4)
+    expect((count.f.mock.calls[0] as unknown as [string])[0]).toBe('/api/v1/notifications/unread-count')
+    await expect(endpointsWith(() => jsonResponse({ count: -1 })).api.getUnreadCount()).rejects.toMatchObject({ code: 'invalid_response' })
   })
 
   it('getAccounts : GET /api/v1/accounts, centimes payment-api -> euros', async () => {

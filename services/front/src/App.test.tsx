@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act } from 'react'
+import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { App } from './App'
 import { AuthProvider } from './components/AuthProvider'
-import { fakeJwt, jsonResponse, stubFetch } from './test/helpers'
+import { fakeJwt, jsonResponse, setViewport, stubFetch } from './test/helpers'
 import { tokenStore } from './api/tokenStore'
 import { labelStore } from './lib/labels'
 
@@ -12,11 +13,13 @@ import { labelStore } from './lib/labels'
 const ACCOUNTS = [{ id: 1, iban_fake: 'FR76 0000 0001', balance_cents: 125050, currency: 'EUR' }]
 const TWO_ACCOUNTS = [...ACCOUNTS, { id: 2, iban_fake: 'FR76 0000 0002', balance_cents: 5000, currency: 'EUR' }]
 const TXS = [
-  { id: 1, src_account: 1, dst_account: 99, amount_cents: 2000, status: 'created', label: 'Loyer', created_at: '2026-10-21T09:14:33Z' },
+  { id: 1, src_account: 1, dst_account: 99, amount_cents: 2000, status: 'created', created_at: '2026-10-21T09:14:33Z', request_id: 'req-abc' },
   { id: 2, src_account: 1, dst_account: 98, amount_cents: 999900, status: 'rejected', created_at: '2026-10-21T09:15:00Z' },
 ]
+const CREATED = { id: 77, src_account: 1, dst_account: 77, amount_cents: 2550, status: 'created', created_at: '2026-10-21T10:00:00Z', request_id: 'req-77' }
 
-function renderApp(path = '/') {
+function renderApp(path = '/', { desktop = true } = {}) {
+  setViewport(desktop)
   return render(
     <MemoryRouter initialEntries={[path]}>
       <AuthProvider>
@@ -31,6 +34,7 @@ function loginAsStored() {
 }
 
 const posts = (f: ReturnType<typeof stubFetch>) => f.mock.calls.filter(([, i]) => (i as RequestInit | undefined)?.method === 'POST')
+const bodyOf = (f: ReturnType<typeof stubFetch>) => JSON.parse((posts(f)[0]![1] as RequestInit).body as string)
 
 describe('Front - connexion', () => {
   it('redirige vers /login sans jeton, avec un message de garde', () => {
@@ -39,7 +43,7 @@ describe('Front - connexion', () => {
     expect(screen.getByText('Connectez-vous pour accéder à cette page.')).toBeInTheDocument()
   })
 
-  it('login réussi : stocke le JWT, affiche solde total, utilisateur (claim sub) et opérations', async () => {
+  it('login réussi : stocke le JWT, accueil « Bonjour » + solde total + opérations récentes', async () => {
     const jwt = fakeJwt(Math.floor(Date.now() / 1000) + 600)
     stubFetch({
       'POST /api/v1/login': () => jsonResponse({ access_token: jwt, token_type: 'bearer', expires_in: 900 }),
@@ -54,9 +58,12 @@ describe('Front - connexion', () => {
 
     await waitFor(() => expect(screen.getByTestId('balance')).toHaveTextContent(/1\s?250,50/))
     expect(tokenStore.get()).toBe(jwt)
-    expect(screen.getByText('Bonjour demo01')).toBeInTheDocument()
-    expect(await screen.findByText(/Loyer/)).toBeInTheDocument()
-    expect(screen.getByText(/Session \d+:\d{2}/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: 'demo01' })).toBeInTheDocument()
+    expect(screen.getByText('Bonjour')).toBeInTheDocument()
+    const recent = screen.getByRole('region', { name: 'Opérations récentes' })
+    expect(await within(recent).findByText('Compte n°99 · ' + new Date(TXS[0]!.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }))).toBeInTheDocument()
+    expect(within(recent).getByText('Refusé')).toBeInTheDocument()
+    expect(screen.getByText(/^\d{2}:\d{2}$/)).toBeInTheDocument() // session restante (barre latérale)
   })
 
   it('login refusé : affiche le message et ne stocke rien', async () => {
@@ -95,19 +102,45 @@ describe('Front - connexion', () => {
     expect(tokenStore.get()).toBeNull()
   })
 
-  it('déconnexion manuelle', async () => {
+  it('déconnexion depuis le Profil, avec confirmation', async () => {
     loginAsStored()
     stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
-    renderApp('/')
-    await userEvent.click(await screen.findByRole('button', { name: 'Se déconnecter' }))
+    renderApp('/profile', { desktop: false })
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Se déconnecter' }))
+    const dialog = screen.getByRole('alertdialog', { name: 'Se déconnecter ?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Se déconnecter' }))
     expect(screen.getByRole('heading', { name: 'Connexion' })).toBeInTheDocument()
     expect(screen.getByText('Vous êtes déconnecté.')).toBeInTheDocument()
     expect(tokenStore.get()).toBeNull()
   })
 })
 
+describe('Front - shell responsive', () => {
+  it('desktop : barre latérale (navigation + services), pas de barre d’onglets', async () => {
+    loginAsStored()
+    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
+    renderApp('/')
+    const nav = await screen.findByRole('navigation', { name: 'Navigation principale' })
+    expect(within(nav).getByRole('button', { name: 'Accueil' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('button', { name: 'RIB' })).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Onglets' })).not.toBeInTheDocument()
+  })
+
+  it('mobile : barre d’onglets, navigation vers Historique', async () => {
+    loginAsStored()
+    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse(TXS) })
+    renderApp('/', { desktop: false })
+    const tabs = await screen.findByRole('navigation', { name: 'Onglets' })
+    expect(screen.queryByRole('navigation', { name: 'Navigation principale' })).not.toBeInTheDocument()
+    await userEvent.click(within(tabs).getByRole('button', { name: 'Historique' }))
+    expect(screen.getByRole('heading', { level: 1, name: 'Historique' })).toBeInTheDocument()
+    expect(within(tabs).getByRole('button', { name: 'Historique' })).toHaveAttribute('aria-current', 'page')
+  })
+})
+
 describe('Front - espace client', () => {
-  it('accueil : état de chargement puis erreur avec réessai', async () => {
+  it('accueil : chargement puis erreur avec référence et réessai', async () => {
     loginAsStored()
     let calls = 0
     stubFetch({
@@ -125,110 +158,1332 @@ describe('Front - espace client', () => {
     expect(screen.getByText('Aucune opération pour le moment.')).toBeInTheDocument()
   })
 
-  it('comptes : « Virer depuis ce compte » pré-sélectionne le compte à débiter', async () => {
+  it('bandeau d’état : « Service perturbé » sur 5xx puis « Service rétabli » à la reprise, sans action', async () => {
     loginAsStored()
-    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(TWO_ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
-    renderApp('/accounts')
-    const card = await screen.findByRole('article', { name: 'Compte #2' })
-    expect(card).toHaveTextContent('FR76 0000 0002')
-    await userEvent.click(within(card).getByRole('button', { name: 'Virer depuis ce compte' }))
-    expect(await screen.findByRole('button', { name: 'Débiter le compte #2' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Débiter le compte #1' })).toHaveAttribute('aria-pressed', 'false')
+    let calls = 0
+    stubFetch({
+      'GET /api/v1/accounts': () => (++calls === 1 ? jsonResponse({ error: { code: 'upstream', message: 'x' } }, 503) : jsonResponse(ACCOUNTS)),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+    })
+    renderApp('/')
+    expect(await screen.findByText('Service perturbé — reprise automatique en cours')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Réessayer' }))
+    expect(await screen.findByText('Service rétabli')).toBeInTheDocument()
+    expect(screen.queryByText(/Service perturbé/)).not.toBeInTheDocument()
   })
 
-  it('historique : statuts, filtres avec compteurs, libellé local', async () => {
+  it('incident pendant que l’utilisateur ne fait rien : le rafraîchissement périodique affiche le bandeau', async () => {
+    loginAsStored()
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    let down = false
+    const fail = () => jsonResponse({ error: { code: 'upstream', message: 'x' } }, 503)
+    const degraded = () => jsonResponse({ status: 'degraded', checked_at: '2026-10-21T10:00:00Z' }, 503)
+    let dbDown = false
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => (down ? fail() : jsonResponse(ACCOUNTS)),
+      'GET /api/v1/transactions': () => (down ? fail() : jsonResponse(TXS)),
+      'GET /api/v1/status': () => (dbDown ? degraded() : jsonResponse({ status: 'ok', checked_at: '2026-10-21T10:00:05Z' })),
+    })
+    const statusCalls = () => f.mock.calls.filter(([u]) => String(u).endsWith('/api/v1/status'))
+    try {
+      renderApp('/')
+      await screen.findByTestId('balance')
+      expect(statusCalls()).toHaveLength(0) // pas de sonde tant que tout va bien
+      down = dbDown = true
+      act(() => vi.advanceTimersByTime(15_000))
+      expect(await screen.findByText('Service perturbé — reprise automatique en cours')).toBeInTheDocument()
+      // Les données déjà affichées restent visibles pendant l'incident.
+      expect(screen.getByTestId('balance')).toHaveTextContent(/1\s?250,50/)
+      act(() => vi.advanceTimersByTime(5_000)) // sonde : encore « degraded » (503)
+      await waitFor(() => expect(statusCalls()).toHaveLength(1))
+      expect(screen.getByText('Service perturbé — reprise automatique en cours')).toBeInTheDocument()
+      const [, init] = statusCalls()[0] as unknown as [string, RequestInit]
+      expect((init.headers as Record<string, string>).Authorization).toBeUndefined() // route publique
+      dbDown = false // BDD revenue, mais les routes métier échouent encore : pas de faux « rétabli »
+      act(() => vi.advanceTimersByTime(5_000))
+      await waitFor(() => expect(statusCalls()).toHaveLength(2))
+      await waitFor(() => expect(f.mock.calls.filter(([u]) => String(u).endsWith('/api/v1/accounts')).length).toBeGreaterThan(1))
+      expect(screen.getByText('Service perturbé — reprise automatique en cours')).toBeInTheDocument()
+      down = false
+      act(() => vi.advanceTimersByTime(5_000)) // sonde ok puis /accounts ok : reprise confirmée
+      expect(await screen.findByText('Service rétabli')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('historique : groupé par jour, rejet visible, libellé local, filtre Refusés, détail avec référence', async () => {
     loginAsStored()
     labelStore.save('2', 'Achat refusé')
     stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse(TXS) })
     renderApp('/history')
-    const table = await screen.findByRole('table', { name: 'Opérations' })
-    expect(within(table).getByText('Effectué')).toBeInTheDocument()
-    expect(within(table).getByText('Rejeté')).toBeInTheDocument()
-    expect(within(table).getByText('Achat refusé')).toBeInTheDocument()
+    const user = userEvent.setup()
+    expect(await screen.findByText('2 opérations')).toBeInTheDocument()
+    expect(screen.getByText('Achat refusé')).toBeInTheDocument()
     // Le plus récent d'abord.
-    const rows = within(table).getAllByRole('row').slice(1)
-    expect(rows[0]).toHaveTextContent('#98')
+    const rows = screen.getAllByRole('button', { name: /Compte n°9\d/ })
+    expect(rows[0]).toHaveTextContent('Achat refusé')
 
-    await userEvent.click(screen.getByRole('button', { name: /Rejetées\s*1/ }))
-    expect(within(table).queryByText('Effectué')).not.toBeInTheDocument()
-    expect(within(table).getByText('Rejeté')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Refusés' }))
+    expect(screen.getByText('1 opération')).toBeInTheDocument()
+    expect(screen.queryByText('Virement émis')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Tous', pressed: false }))
+    await user.click(screen.getByRole('button', { name: /Virement émis/ }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Détail de l’opération' })).toBeInTheDocument()
+    expect(screen.getByText('req-abc')).toBeInTheDocument()
+    expect(screen.getByTestId('tx-amount')).toHaveTextContent(/−\s?20,00/)
+  })
+
+  it('historique mobile : feuille de filtres et pastille de filtre actif', async () => {
+    loginAsStored()
+    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse(TXS) })
+    renderApp('/history', { desktop: false })
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Filtres' }))
+    const sheet = screen.getByRole('dialog', { name: 'Filtres' })
+    await user.click(within(sheet).getByRole('button', { name: 'Refusés' }))
+    await user.click(within(sheet).getByRole('button', { name: 'Afficher 1 opération' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Filtres, 1 actifs' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retirer le filtre Refusés' }))
+    expect(screen.getByText('2 opérations')).toBeInTheDocument()
+  })
+
+  it('RIB : choix du compte depuis la carte de l’accueil', async () => {
+    loginAsStored()
+    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(TWO_ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
+    renderApp('/')
+    await userEvent.click(await screen.findByRole('button', { name: /^Compte n°2, solde/ }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Relevé d’identité bancaire' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'RIB du Compte n°2' })).toHaveTextContent('FR76 0000 0002')
+    expect(screen.getByRole('button', { name: 'Compte n°2' })).toHaveAttribute('aria-pressed', 'true')
   })
 })
 
-describe('Front - virement', () => {
-  it('validation client puis POST /api/v1/transactions, libellé conservé localement', async () => {
-    loginAsStored()
-    const fetchMock = stubFetch({
-      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
-      'GET /api/v1/transactions': () => jsonResponse([]),
-      'POST /api/v1/transactions': () =>
-        jsonResponse({ id: 77, src_account: 1, dst_account: 77, amount_cents: 2550, status: 'created', created_at: '2026-10-21T10:00:00Z' }, 201),
-    })
-    renderApp('/transfer')
+describe('Front - envoi (desktop)', () => {
+  const routes = (post: () => Response) => ({
+    'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+    'GET /api/v1/transactions': () => jsonResponse([]),
+    'POST /api/v1/transactions': post,
+  })
+
+  async function fillDesktop(amount: string, label = '') {
     const user = userEvent.setup()
-    await screen.findByRole('group', { name: 'Compte à débiter' })
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, amount)
+    if (label) await user.type(screen.getByLabelText(/Libellé/), label)
+    return user
+  }
 
-    await user.click(screen.getByRole('button', { name: 'Envoyer le virement' }))
-    expect(screen.getByText('Indiquez le compte bénéficiaire.')).toBeInTheDocument()
-    expect(screen.getByText('Indiquez un montant.')).toBeInTheDocument()
-    expect(posts(fetchMock)).toHaveLength(0)
+  it('validation, récapitulatif puis POST /api/v1/transactions ; libellé conservé localement', async () => {
+    loginAsStored()
+    const f = stubFetch(routes(() => jsonResponse(CREATED, 201)))
+    renderApp('/send')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /^Envoyer 50,00/ }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Choisissez un destinataire.')
 
-    await user.type(screen.getByLabelText('Compte bénéficiaire'), '77')
-    await user.type(screen.getByLabelText('Montant'), '25,50')
-    await user.type(screen.getByLabelText(/Libellé/), 'Cadeau')
-    expect(within(screen.getByRole('complementary', { name: 'Récapitulatif' })).getByText(/1\s?225,00/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /Envoyer 25,50/ }))
+    await fillDesktop('25,50', 'Cadeau')
+    await user.click(screen.getByRole('button', { name: /^Envoyer 25,50/ }))
+    expect(screen.getByText('Récapitulatif')).toBeInTheDocument()
+    expect(posts(f)).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent(/Virement accepté/)
-    const [post] = posts(fetchMock)
-    expect(JSON.parse((post![1] as RequestInit).body as string)).toEqual({ src_account: 1, dst_account: 77, amount_cents: 2550 })
+    expect(await screen.findByRole('heading', { name: 'Virement envoyé' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copier la référence' })).toHaveTextContent('req-77')
+    expect(bodyOf(f)).toEqual({ src_account: 1, dst_account: 77, amount_cents: 2550 })
     expect(labelStore.all()).toEqual({ '77': 'Cadeau' })
   })
 
   it('montant supérieur au solde : bloqué côté client', async () => {
     loginAsStored()
-    const fetchMock = stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
-    renderApp('/transfer')
-    const user = userEvent.setup()
-    await user.type(await screen.findByLabelText('Compte bénéficiaire'), '77')
-    await user.type(screen.getByLabelText('Montant'), '5000')
-    await user.click(screen.getByRole('button', { name: /Envoyer/ }))
-    expect(screen.getByText('Montant supérieur au solde disponible.')).toBeInTheDocument()
-    expect(posts(fetchMock)).toHaveLength(0)
+    const f = stubFetch(routes(() => jsonResponse(CREATED, 201)))
+    renderApp('/send')
+    const user = await fillDesktop('5000')
+    await user.click(screen.getByRole('button', { name: /^Envoyer 5\s?000,00/ }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Montant supérieur au solde disponible.')
+    expect(posts(f)).toHaveLength(0)
   })
 
-  it('refus serveur insufficient_funds (409) : carte « Virement refusé » avec le code', async () => {
+  it('refus serveur insufficient_funds (409) : « Virement refusé — solde insuffisant »', async () => {
     loginAsStored()
-    stubFetch({
-      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
-      'GET /api/v1/transactions': () => jsonResponse([]),
-      'POST /api/v1/transactions': () =>
-        jsonResponse({ error: { code: 'insufficient_funds', message: 'Insufficient funds', request_id: 'rid-1' } }, 409),
-    })
-    renderApp('/transfer')
-    const user = userEvent.setup()
-    await user.type(await screen.findByLabelText('Compte bénéficiaire'), '77')
-    await user.type(screen.getByLabelText('Montant'), '10')
-    await user.click(screen.getByRole('button', { name: /Envoyer/ }))
+    stubFetch(routes(() => jsonResponse({ error: { code: 'insufficient_funds', message: 'Insufficient funds', request_id: 'rid-1' } }, 409)))
+    renderApp('/send')
+    const user = await fillDesktop('10')
+    await user.click(screen.getByRole('button', { name: /^Envoyer 10,00/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
     const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('Virement refusé')
-    expect(alert).toHaveTextContent('Solde insuffisant pour ce virement.')
+    expect(alert).toHaveTextContent('Virement refusé — solde insuffisant')
     expect(alert).toHaveTextContent('rid-1')
   })
 
-  it('autre erreur serveur : bandeau sous le formulaire, saisie conservée', async () => {
+  it('erreur technique (503) : « n’a pas pu être transmis » puis Réessayer renvoie le virement', async () => {
+    loginAsStored()
+    let n = 0
+    const f = stubFetch(routes(() => (++n === 1 ? jsonResponse({ error: { code: 'db_error', message: 'Service indisponible' } }, 503) : jsonResponse(CREATED, 201))))
+    renderApp('/send')
+    const user = await fillDesktop('10')
+    await user.click(screen.getByRole('button', { name: /^Envoyer 10,00/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
+    expect(await screen.findByRole('heading', { name: 'Le virement n’a pas pu être transmis' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Réessayer' }))
+    expect(await screen.findByRole('heading', { name: 'Virement envoyé' })).toBeInTheDocument()
+    expect(posts(f)).toHaveLength(2)
+  })
+})
+
+describe('Front - revue complète', () => {
+  const R = (post: () => Response) => ({
+    'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+    'GET /api/v1/transactions': () => jsonResponse([]),
+    'POST /api/v1/transactions': post,
+  })
+
+  it.each([502, 504, 500])('passerelle %i : statut inconnu, jamais « Réessayer » (double débit)', async (status) => {
+    loginAsStored()
+    const f = stubFetch(R(() => jsonResponse({ error: { code: 'upstream', message: 'x' } }, status)))
+    renderApp('/send')
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '10')
+    await user.click(screen.getByRole('button', { name: /^Envoyer 10,00/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
+    expect(await screen.findByRole('heading', { name: 'Statut du virement inconnu' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Réessayer' })).not.toBeInTheDocument()
+    expect(posts(f)).toHaveLength(1)
+  })
+
+  it('reconnexion : le chemin ET ses paramètres sont restitués (page imprimable d’un relevé)', async () => {
+    const jwt = fakeJwt(Math.floor(Date.now() / 1000) + 600)
+    const f = stubFetch({
+      'POST /api/v1/login': () => jsonResponse({ access_token: jwt, token_type: 'bearer', expires_in: 900 }),
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+    })
+    renderApp('/statements/print?account=1&from=2026-10-01&to=2026-10-21')
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Identifiant'), 'demo01')
+    await user.type(screen.getByLabelText('Mot de passe'), 'secret')
+    await user.click(screen.getByRole('button', { name: 'Se connecter' }))
+    await waitFor(() =>
+      expect(f.mock.calls.some(([u]) => String(u).includes('/api/v1/statements?account_id=1&from=2026-10-01&to=2026-10-21'))).toBe(true),
+    )
+  })
+
+  it('notifications : un seul chargement de la liste à l’ouverture', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: 1 }),
+      'GET /api/v1/notifications?unread=false': () =>
+        jsonResponse([{ id: 1, type: 'transfer_received', title: 'Virement reçu', body: 'x', created_at: new Date().toISOString(), read_at: null }]),
+    })
+    renderApp('/notifications')
+    expect(await screen.findByText('Virement reçu')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Notifications, 1 non lue/ })).toBeInTheDocument())
+    expect(f.mock.calls.filter(([u]) => String(u).endsWith('?unread=false'))).toHaveLength(1)
+  })
+
+  it('statistiques : jamais le total de la période précédente pendant le rechargement', async () => {
+    loginAsStored()
+    const today = new Date().toISOString().slice(0, 10)
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/stats/spending?period=month&offset=0': () =>
+        jsonResponse({ period: 'month', offset: 0, start: today, end: today, total_cents: 123456, by_category: [], by_day: [{ date: today, amount_cents: 123456 }] }),
+      'GET /api/v1/stats/spending?period=month&offset=-1': () => new Promise<Response>(() => {}), // ne répond jamais
+    })
+    renderApp('/stats')
+    await waitFor(() => expect(screen.getByTestId('stats-total')).toHaveTextContent(/1\s?234,56/))
+    await userEvent.click(screen.getByRole('button', { name: 'Période précédente' }))
+    expect(screen.getByTestId('stats-total')).toHaveTextContent('—')
+    expect(screen.getByText('Calcul en cours…')).toBeInTheDocument()
+  })
+
+  it('un statut d’opération inconnu n’est jamais affiché « Effectué » ni ne casse l’historique', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([{ ...TXS[0], id: 5, status: 'reversed' }, TXS[1]]),
+    })
+    renderApp('/history')
+    expect(await screen.findByText('1 opération')).toBeInTheDocument()
+    expect(screen.queryByText('Effectué')).not.toBeInTheDocument()
+  })
+
+  it('statistiques : total et barres = agrégat serveur de la période, pas les 50 dernières opérations', async () => {
+    loginAsStored()
+    const today = new Date().toISOString().slice(0, 10)
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/stats/spending?period=month&offset=0': () =>
+        jsonResponse({ period: 'month', offset: 0, start: today, end: today, total_cents: 123456, by_category: [], by_day: [{ date: today, amount_cents: 123456 }] }),
+    })
+    renderApp('/stats')
+    await waitFor(() => expect(screen.getByTestId('stats-total')).toHaveTextContent(/1\s?234,56/))
+  })
+})
+
+describe('Front - envoi : statut inconnu', () => {
+  it('coupure réseau pendant l’envoi : pas de « Réessayer » (risque de double débit), renvoi vers l’historique', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'POST /api/v1/transactions': () => {
+        throw new TypeError('Failed to fetch')
+      },
+    })
+    renderApp('/send')
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    await user.click(screen.getByRole('button', { name: /^Envoyer 50,00/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
+    expect(await screen.findByRole('heading', { name: 'Statut du virement inconnu' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Réessayer' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Voir l’historique' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Historique' })).toBeInTheDocument()
+    expect(posts(f)).toHaveLength(1)
+  })
+})
+
+describe('Front - envoi (mobile, assistant 4 étapes)', () => {
+  it('destinataire → montant → détails → glisser pour envoyer (clavier)', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(TWO_ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'POST /api/v1/transactions': () => jsonResponse({ ...CREATED, dst_account: 99 }, 201),
+    })
+    renderApp('/send', { desktop: false })
+    const user = userEvent.setup()
+    expect(await screen.findByText('Étape 1 sur 4')).toBeInTheDocument()
+    // Mes autres comptes puis les comptes déjà crédités.
+    const list = screen.getByRole('region', { name: 'Destinataires' })
+    expect(within(list).getAllByRole('button').map((b) => b.textContent)).toEqual([
+      expect.stringContaining('Compte n°2'),
+      expect.stringContaining('Compte n°98'),
+      expect.stringContaining('Compte n°99'),
+    ])
+    await user.click(within(list).getByRole('button', { name: /Compte n°99/ }))
+
+    expect(screen.getByText('Étape 2 sur 4')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '100 €' }))
+    await user.click(screen.getByRole('button', { name: /Continuer/ }))
+    expect(screen.getByText('Étape 3 sur 4')).toBeInTheDocument()
+    // Retour de l'en-tête = étape précédente.
+    await user.click(screen.getByRole('button', { name: 'Retour' }))
+    expect(screen.getByText('Étape 2 sur 4')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Continuer/ }))
+    await user.click(screen.getByRole('button', { name: /Vérifier le virement/ }))
+
+    expect(screen.getByText('Étape 4 sur 4')).toBeInTheDocument()
+    expect(screen.getByText('Vous envoyez à Compte n°99')).toBeInTheDocument()
+    screen.getByRole('button', { name: /^Envoyer 100,00\s€ à Compte n°99/ }).focus()
+    await user.keyboard('{Enter}')
+    expect(await screen.findByRole('heading', { name: 'Virement envoyé' }, { timeout: 3000 })).toBeInTheDocument()
+    expect(bodyOf(f)).toEqual({ src_account: 1, dst_account: 99, amount_cents: 10000 })
+  })
+
+  it('depuis l’accueil, un destinataire récent ouvre directement l’étape Montant', async () => {
+    loginAsStored()
+    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse(TXS) })
+    renderApp('/', { desktop: false })
+    await userEvent.click(await screen.findByRole('button', { name: 'Envoyer à Compte n°99' }))
+    expect(await screen.findByText('Étape 2 sur 4')).toBeInTheDocument()
+    expect(screen.getByText('Compte n°99')).toBeInTheDocument()
+  })
+})
+
+describe('Front - bénéficiaires (#43)', () => {
+  const LEA = { id: 5, display_name: 'Léa Martin', account_id: 42, iban_fake: 'FR76 0000 0000 9001 0000 0000 000', created_at: '2026-10-21T10:00:00Z' }
+  const HUGO = { id: 6, display_name: 'Hugo Bernard', account_id: 43, iban_fake: 'FR76 0000 0000 9002 0000 0000 000', created_at: '2026-10-21T10:00:00Z' }
+
+  it('accueil : « Envoyer à » propose les bénéficiaires par leur nom, puis Envoyer pré-remplit le destinataire', async () => {
     loginAsStored()
     stubFetch({
       'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
       'GET /api/v1/transactions': () => jsonResponse([]),
-      'POST /api/v1/transactions': () => jsonResponse({ error: { code: 'db_error', message: 'Service indisponible' } }, 503),
+      'GET /api/v1/beneficiaries': () => jsonResponse([LEA]),
     })
-    renderApp('/transfer')
+    renderApp('/', { desktop: false })
+    await userEvent.click(await screen.findByRole('button', { name: 'Envoyer à Léa Martin' }))
+    expect(await screen.findByText('Étape 2 sur 4')).toBeInTheDocument()
+    expect(screen.getByText('Léa Martin')).toBeInTheDocument()
+  })
+
+  it('liste + recherche, ajout refusé (IBAN inconnu) puis accepté, suppression confirmée', async () => {
+    loginAsStored()
+    let list = [LEA]
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/beneficiaries': () => jsonResponse(list),
+      'POST /api/v1/beneficiaries': (init) => {
+        const body = JSON.parse(init!.body as string)
+        if (body.iban_fake !== HUGO.iban_fake) return jsonResponse({ error: { code: 'account_not_found', message: 'x' } }, 404)
+        list = [LEA, HUGO]
+        return jsonResponse(HUGO, 201)
+      },
+      'DELETE /api/v1/beneficiaries/5': () => {
+        list = [HUGO]
+        return new Response(null, { status: 204 })
+      },
+    })
+    renderApp('/beneficiaries')
     const user = userEvent.setup()
-    await user.type(await screen.findByLabelText('Compte bénéficiaire'), '77')
-    await user.type(screen.getByLabelText('Montant'), '10')
-    await user.click(screen.getByRole('button', { name: /Envoyer/ }))
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('code=db_error'))
-    expect(screen.getByLabelText('Compte bénéficiaire')).toHaveValue('77')
+    const rows = await screen.findByRole('list', { name: 'Bénéficiaires' })
+    expect(within(rows).getByText('Léa Martin')).toBeInTheDocument()
+    await user.type(screen.getByRole('searchbox', { name: 'Rechercher un bénéficiaire' }), 'zzz')
+    expect(screen.getByText('Aucun résultat')).toBeInTheDocument()
+    await user.clear(screen.getByRole('searchbox', { name: 'Rechercher un bénéficiaire' }))
+
+    await user.click(screen.getByRole('button', { name: 'Ajouter' }))
+    const form = screen.getByRole('form', { name: 'Nouveau bénéficiaire' })
+    await user.type(within(form).getByLabelText('Nom'), 'Hugo Bernard')
+    await user.type(within(form).getByLabelText('IBAN'), 'FR76 NOPE')
+    await user.click(within(form).getByRole('button', { name: 'Enregistrer le bénéficiaire' }))
+    expect(await within(form).findByText('Aucun compte ne correspond à cet IBAN.')).toBeInTheDocument()
+    await user.clear(within(form).getByLabelText('IBAN'))
+    await user.type(within(form).getByLabelText('IBAN'), HUGO.iban_fake)
+    await user.click(within(form).getByRole('button', { name: 'Enregistrer le bénéficiaire' }))
+    expect(await screen.findByText('Hugo Bernard')).toBeInTheDocument()
+    expect(JSON.parse((posts(f).at(-1)![1] as RequestInit).body as string)).toEqual({ display_name: 'Hugo Bernard', iban_fake: HUGO.iban_fake })
+
+    await user.click(screen.getByRole('button', { name: 'Supprimer Léa Martin' }))
+    const dlg = screen.getByRole('alertdialog')
+    await user.click(within(dlg).getByRole('button', { name: 'Supprimer' }))
+    await waitFor(() => expect(screen.queryByText('Léa Martin')).not.toBeInTheDocument())
+    expect(f.mock.calls.some(([u, i]) => String(u).endsWith('/api/v1/beneficiaries/5') && (i as RequestInit).method === 'DELETE')).toBe(true)
+  })
+
+  it('bénéficiaires en échec pendant un incident : rechargés sans action à la reprise', async () => {
+    loginAsStored()
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    let down = true
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/beneficiaries': () => (down ? jsonResponse({ error: { code: 'db_unavailable', message: 'x' } }, 503) : jsonResponse([LEA])),
+      'GET /api/v1/status': () => jsonResponse({ status: 'ok', checked_at: '2026-10-21T10:00:00Z' }),
+    })
+    try {
+      renderApp('/', { desktop: false })
+      await screen.findByTestId('balance')
+      expect(screen.queryByRole('button', { name: 'Envoyer à Léa Martin' })).not.toBeInTheDocument()
+      down = false
+      act(() => vi.advanceTimersByTime(15_000))
+      expect(await screen.findByRole('button', { name: 'Envoyer à Léa Martin' })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('annuler la suppression ne supprime rien', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/beneficiaries': () => jsonResponse([LEA]),
+    })
+    renderApp('/beneficiaries')
+    await userEvent.click(await screen.findByRole('button', { name: 'Supprimer Léa Martin' }))
+    await userEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: /Annuler/ }))
+    expect(screen.getByText('Léa Martin')).toBeInTheDocument()
+    expect(f.mock.calls.some(([, i]) => (i as RequestInit | undefined)?.method === 'DELETE')).toBe(false)
+  })
+})
+
+describe('Front - catégories (#44)', () => {
+  const SPENDING = {
+    period: 'month',
+    start: '2026-10-01',
+    end: '2026-11-01',
+    total_cents: 10000,
+    by_category: [
+      { category: 'food', amount_cents: 7300, share: 0.73 },
+      { category: 'transport', amount_cents: 2700, share: 0.27 },
+    ],
+    by_day: [],
+  }
+  const EMPTY = { ...SPENDING, period: 'week', total_cents: 0, by_category: [] }
+
+  it('envoi : la catégorie choisie est au récapitulatif et dans le POST', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'POST /api/v1/transactions': () => jsonResponse({ ...CREATED, category: 'food' }, 201),
+    })
+    renderApp('/send')
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const picker = screen.getByRole('group', { name: 'Catégorie du virement' })
+    expect(within(picker).getByRole('button', { name: 'Virement' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(within(picker).getByRole('button', { name: 'Alimentation' }))
+    await user.click(screen.getByRole('button', { name: /^Envoyer 50,00/ }))
+    expect(screen.getByText('Catégorie').nextSibling).toHaveTextContent('Alimentation')
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
+    expect(await screen.findByRole('heading', { name: 'Virement envoyé' })).toBeInTheDocument()
+    expect(bodyOf(f)).toEqual({ src_account: 1, dst_account: 77, amount_cents: 5000, category: 'food' })
+  })
+
+  it('historique : filtre par catégorie, pastille retirable', async () => {
+    loginAsStored()
+    const txs = [{ ...TXS[0], category: 'food' }, { ...TXS[1], category: 'transport' }]
+    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse(txs) })
+    renderApp('/history', { desktop: false })
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Filtres' }))
+    const sheet = screen.getByRole('dialog', { name: 'Filtres' })
+    await user.click(within(within(sheet).getByRole('group', { name: 'Catégorie' })).getByRole('button', { name: 'Transport' }))
+    await user.click(within(sheet).getByRole('button', { name: 'Afficher 1 opération' }))
+    expect(screen.getByText('1 opération')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retirer le filtre Transport' }))
+    expect(screen.getByText('2 opérations')).toBeInTheDocument()
+  })
+
+  it('statistiques : parts par catégorie de la période affichée, puis état vide', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/stats/spending?period=week&offset=0': () => jsonResponse(EMPTY),
+      'GET /api/v1/stats/spending?period=month&offset=0': () => jsonResponse(SPENDING),
+      'GET /api/v1/stats/spending?period=month&offset=-1': () => jsonResponse({ ...EMPTY, period: 'month', offset: -1 }),
+    })
+    renderApp('/stats')
+    const list = await screen.findByRole('list', { name: 'Dépenses par catégorie' })
+    // Vue « Mois » par défaut.
+    expect(screen.getByRole('button', { name: 'Mois' })).toHaveAttribute('aria-pressed', 'true')
+    const rows = within(list).getAllByRole('listitem')
+    expect(rows[0]).toHaveTextContent(/Alimentation.*73,00\s€.*73 %/)
+    expect(rows[1]).toHaveTextContent(/Transport.*27 %/)
+    // Période précédente : la répartition suit la période affichée (offset=-1), pas le mois en cours.
+    await userEvent.click(screen.getByRole('button', { name: 'Période précédente' }))
+    expect(await screen.findByText('Aucune dépense sur cette période.')).toBeInTheDocument()
+    expect(f.mock.calls.some(([u]) => String(u).endsWith('period=month&offset=-1'))).toBe(true)
+    await userEvent.click(screen.getByRole('button', { name: 'Semaine' }))
+    expect(await screen.findByText('Aucune dépense cette semaine.')).toBeInTheDocument()
+  })
+
+  it('accueil : tuile Dépenses avec la 1re catégorie du mois ; rien si erreur', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/stats/spending?period=month&offset=0': () => jsonResponse(SPENDING),
+    })
+    const { unmount } = renderApp('/')
+    expect(await screen.findByTestId('top-category')).toHaveTextContent('Alimentation 73 %')
+    // Total et part sur la même base (serveur), même si l'historique local ne montre rien.
+    expect(screen.getByText(/dépensés en/).previousElementSibling).toHaveTextContent(/100,00\s€/)
+    unmount()
+    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
+    renderApp('/')
+    await screen.findByTestId('balance')
+    expect(screen.queryByTestId('top-category')).not.toBeInTheDocument()
+  })
+})
+
+describe('Front - détail d’opération (#45)', () => {
+  it('lien direct vers une opération absente de la liste : GET /api/v1/transactions/{id}, comptes masqués', async () => {
+    loginAsStored()
+    const old = { id: 500, src_account: 1, dst_account: 42, amount_cents: 1234, status: 'created', created_at: '2026-09-02T10:00:00Z', request_id: 'req-old', category: 'health' }
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse([{ id: 1, iban_fake: 'FR76 0000 0000 0001 0000 0000 000', balance_cents: 1000, currency: 'EUR' }]),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/beneficiaries': () => jsonResponse([{ id: 5, display_name: 'Léa Martin', account_id: 42, iban_fake: 'FR76 9999 0000 0001 0000 0000 000', created_at: null }]),
+      'GET /api/v1/transactions/500': () => jsonResponse(old),
+    })
+    renderApp('/operations/500')
+    expect(await screen.findByTestId('tx-amount')).toHaveTextContent(/12,34/)
+    expect(screen.getByText('Compte n°1 · FR76 0000 •••• 0001 •••• •••• •••')).toBeInTheDocument()
+    expect(screen.getByText('Léa Martin · FR76 9999 •••• 0001 •••• •••• •••')).toBeInTheDocument()
+    expect(screen.getByText('Santé')).toBeInTheDocument()
+    // Référence copiable (support / démo).
+    const writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await userEvent.click(screen.getByRole('button', { name: 'Copier la référence' }))
+    expect(writeText).toHaveBeenCalledWith('req-old')
+    expect(await screen.findByText('Référence copiée')).toBeInTheDocument()
+  })
+
+  it('RIB : IBAN complet, copie, partage (repli copie sans Web Share) et impression', async () => {
+    loginAsStored()
+    stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
+    const writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {})
+    try {
+      renderApp('/rib')
+      const rib = await screen.findByRole('region', { name: 'RIB du Compte n°1' })
+      expect(rib).toHaveTextContent('FR76 0000 0001')
+      await userEvent.click(screen.getByRole('button', { name: /Partager/ }))
+      expect(writeText).toHaveBeenLastCalledWith(expect.stringMatching(/IBAN FR76 0000 0001 — BIC/))
+      await userEvent.click(screen.getByRole('button', { name: /Imprimer/ }))
+      expect(print).toHaveBeenCalled()
+    } finally {
+      print.mockRestore()
+    }
+  })
+
+  it('opération d’un tiers ou inconnue (404) : « Opération introuvable » ; panne (503) : erreur + réessai', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/transactions/77': () => jsonResponse({ error: { code: 'transaction_not_found', message: 'x' } }, 404),
+    })
+    const { unmount } = renderApp('/operations/77')
+    expect(await screen.findByText('Opération introuvable')).toBeInTheDocument()
+    expect(screen.queryByTestId('tx-amount')).not.toBeInTheDocument()
+    unmount()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'GET /api/v1/transactions/77': () => jsonResponse({ error: { code: 'db_unavailable', message: 'x' } }, 503),
+    })
+    renderApp('/operations/77')
+    expect(await screen.findByRole('button', { name: 'Réessayer' })).toBeInTheDocument()
+    expect(screen.queryByText('Opération introuvable')).not.toBeInTheDocument()
+  })
+})
+
+describe('Front - plafonds (#46)', () => {
+  const LIMITED = { account_id: 1, monthly_limit_cents: 200000, used_cents: 92000, remaining_cents: 108000, period_end: '2026-11-01' }
+  const UNLIMITED = { account_id: 1, monthly_limit_cents: null, used_cents: 5000, remaining_cents: null, period_end: '2026-11-01' }
+  const base = (limits: unknown, extra: Record<string, () => Response> = {}) => ({
+    'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+    'GET /api/v1/transactions': () => jsonResponse([]),
+    'GET /api/v1/limits': () => jsonResponse(limits),
+    ...extra,
+  })
+
+  it('accueil : barre « Plafond restant » en % du plafond, ou « Sans plafond » pour un compte de service', async () => {
+    loginAsStored()
+    stubFetch(base([LIMITED]))
+    const { unmount } = renderApp('/')
+    const bar = await screen.findByTestId('limit-bar')
+    expect(bar).toHaveTextContent('54 %')
+    expect(within(bar).getByRole('meter', { name: 'Plafond restant' })).toHaveAttribute('aria-valuenow', '54')
+    expect(bar).toHaveTextContent(/1\s?080,00\s€.*sur 2\s?000,00\s€.*1 novembre/)
+    unmount()
+    stubFetch(base([UNLIMITED]))
+    renderApp('/')
+    expect(await screen.findByTestId('limit-bar')).toHaveTextContent('Sans plafond')
+    expect(screen.queryByRole('meter')).not.toBeInTheDocument()
+  })
+
+  it('accueil : plafonds indisponibles (erreur) => aucune barre, pas de crash', async () => {
+    loginAsStored()
+    stubFetch(base({ error: { code: 'db_unavailable', message: 'x' } }))
+    renderApp('/')
+    await screen.findByTestId('balance')
+    expect(screen.queryByTestId('limit-bar')).not.toBeInTheDocument()
+  })
+
+  it('écran Plafonds : plafond, consommé, restant, remise à zéro', async () => {
+    loginAsStored()
+    stubFetch(base([LIMITED]))
+    renderApp('/limits')
+    const card = await screen.findByRole('region', { name: 'Plafond du Compte n°1' })
+    expect(card).toHaveTextContent(/Plafond mensuel\s*2\s?000,00\s€/)
+    expect(card).toHaveTextContent(/Consommé\s*920,00\s€/)
+    expect(card).toHaveTextContent(/Restant\s*1\s?080,00\s€/)
+    expect(card).toHaveTextContent('le 1 novembre')
+  })
+
+  it('envoi : avertissement non bloquant au-delà du plafond restant, puis refus 409 limit_exceeded explicite', async () => {
+    loginAsStored()
+    const f = stubFetch(
+      base([{ ...LIMITED, remaining_cents: 500 }], {
+        'POST /api/v1/transactions': () => jsonResponse({ error: { code: 'limit_exceeded', message: 'Monthly limit exceeded', request_id: 'rid-lim' } }, 409),
+      }),
+    )
+    renderApp('/send')
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '10')
+    expect(await screen.findByText(/dépasse votre plafond mensuel restant \(5,00\s€\)/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^Envoyer 10,00/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Virement refusé — plafond mensuel atteint')
+    expect(alert).toHaveTextContent('rid-lim')
+    expect(posts(f)).toHaveLength(1)
+    // Plafonds rechargés après le refus.
+    await waitFor(() => expect(f.mock.calls.filter(([u]) => String(u).endsWith('/api/v1/limits')).length).toBeGreaterThan(1))
+  })
+})
+
+describe('Front - plafonds, revue (#46)', () => {
+  const LIMITS = [{ account_id: 1, monthly_limit_cents: 80000, used_cents: 21399, remaining_cents: 58601, period_end: '2026-11-01' }]
+
+  it('la barre n’est pas dans un bouton ; « Voir les plafonds » ouvre /limits', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/limits': () => jsonResponse(LIMITS),
+    })
+    renderApp('/')
+    const meter = await screen.findByRole('meter')
+    expect(meter.closest('button')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Voir les plafonds' }))
+    expect(await screen.findByRole('heading', { level: 1, name: /Plafonds/ })).toBeInTheDocument()
+  })
+
+  it('profil : plafonds en erreur => « Indisponible pour le moment »', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/limits': () => jsonResponse({ error: { code: 'rate_limited', message: 'x' } }, 429),
+      'GET /api/v1/cards': () => jsonResponse([]),
+    })
+    renderApp('/profile')
+    expect(await screen.findByText('Indisponible pour le moment')).toBeInTheDocument()
+  })
+})
+
+describe('Front - cartes (#47)', () => {
+  const CARD = { id: 9, account_id: 1, last4: '4001', holder: 'CAMILLE DURAND', expiry_month: 3, expiry_year: 2029, status: 'active', payment_limit_cents: 150000, contactless: true, online_payments: false }
+  const base = { 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) }
+  const patches = (f: ReturnType<typeof stubFetch>) =>
+    f.mock.calls.filter(([, i]) => (i as RequestInit | undefined)?.method === 'PATCH').map(([u, i]) => [String(u), JSON.parse((i as RequestInit).body as string)])
+
+  it('visuel : 4 derniers chiffres, titulaire, expiration ; jamais de numéro complet', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/cards': () => jsonResponse([CARD]) })
+    renderApp('/cards')
+    const visual = await screen.findByTestId('card-visual')
+    expect(visual).toHaveTextContent('•••• •••• •••• 4001')
+    expect(visual).toHaveTextContent('CAMILLE DURAND')
+    expect(visual).toHaveTextContent('03/29')
+    expect(visual).toHaveTextContent('Active')
+    expect(visual.textContent).not.toMatch(/\d{5,}/)
+  })
+
+  it('gel avec confirmation puis dégel ; réglages verrouillés quand gelée', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      ...base,
+      'GET /api/v1/cards': () => jsonResponse([CARD]),
+      'POST /api/v1/cards/9/freeze': () => jsonResponse({ ...CARD, status: 'frozen' }),
+      'POST /api/v1/cards/9/unfreeze': () => jsonResponse(CARD),
+    })
+    renderApp('/cards')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Geler la carte' }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Geler' }))
+    expect(await screen.findByText('Gelée')).toBeInTheDocument()
+    expect(f.mock.calls.some(([u]) => String(u).endsWith('/api/v1/cards/9/freeze'))).toBe(true)
+    expect(screen.getByRole('switch', { name: 'Sans contact' })).toBeDisabled()
+    expect(screen.getByRole('slider')).toBeDisabled()
+    expect(screen.getByText('Carte gelée : réglages verrouillés jusqu’au dégel.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Dégeler la carte' }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Dégeler' }))
+    expect(await screen.findByText('Active')).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Sans contact' })).toBeEnabled()
+  })
+
+  it('annuler la confirmation de gel : aucun appel', async () => {
+    loginAsStored()
+    const f = stubFetch({ ...base, 'GET /api/v1/cards': () => jsonResponse([CARD]) })
+    renderApp('/cards')
+    await userEvent.click(await screen.findByRole('button', { name: 'Geler la carte' }))
+    await userEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: /Annuler/ }))
+    expect(f.mock.calls.some(([u]) => String(u).includes('/freeze'))).toBe(false)
+    expect(screen.getByText('Active')).toBeInTheDocument()
+  })
+
+  it('plafond de paiement : PATCH en centimes ; sans contact : PATCH booléen', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      ...base,
+      'GET /api/v1/cards': () => jsonResponse([CARD]),
+      'PATCH /api/v1/cards/9': (init) => jsonResponse({ ...CARD, ...JSON.parse(init!.body as string) }),
+    })
+    renderApp('/cards')
+    const slider = await screen.findByRole('slider')
+    fireEvent.change(slider, { target: { value: '2050' } })
+    await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }))
+    expect(await screen.findByText('Plafond de paiement enregistré')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('switch', { name: 'Sans contact' }))
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Sans contact' })).toHaveAttribute('aria-checked', 'false'))
+    expect(patches(f)).toEqual([
+      ['/api/v1/cards/9', { payment_limit_cents: 205000 }],
+      ['/api/v1/cards/9', { contactless: false }],
+    ])
+  })
+
+  it('409 card_frozen et 422 : messages clairs', async () => {
+    loginAsStored()
+    let code = 'card_frozen'
+    stubFetch({
+      ...base,
+      'GET /api/v1/cards': () => jsonResponse([CARD]),
+      'PATCH /api/v1/cards/9': () => jsonResponse({ error: { code, message: 'x' } }, code === 'card_frozen' ? 409 : 422),
+    })
+    renderApp('/cards')
+    await userEvent.click(await screen.findByRole('switch', { name: 'Paiement en ligne' }))
+    expect(await screen.findByText('Carte gelée : dégelez-la avant de modifier ses réglages.')).toBeInTheDocument()
+    code = 'validation_error'
+    await userEvent.click(screen.getByRole('switch', { name: 'Paiement en ligne' }))
+    expect(await screen.findByText('Réglage refusé : valeur hors des bornes autorisées.')).toBeInTheDocument()
+  })
+
+  it('aucune carte : état vide', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/cards': () => jsonResponse([]) })
+    renderApp('/cards')
+    expect(await screen.findByText('Aucune carte')).toBeInTheDocument()
+  })
+})
+
+describe('Front - virements programmés (#48)', () => {
+  const SCHED = (over: Record<string, unknown> = {}) => ({
+    id: 3, src_account: 1, dst_account: 42, amount_cents: 5000, category: 'housing', frequency: 'monthly',
+    start_on: '2026-10-01', next_run_on: '2026-11-01', end_on: null, status: 'active', last_run: null, ...over,
+  })
+  const base = {
+    'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+    'GET /api/v1/transactions': () => jsonResponse([]),
+    'GET /api/v1/beneficiaries': () => jsonResponse([{ id: 5, display_name: 'Léa Martin', account_id: 42, iban_fake: 'FR76 9999 0000 0001', created_at: null }]),
+  }
+
+  it('liste : destinataire nommé, fréquence, prochaine exécution, exécution échouée avec motif', async () => {
+    loginAsStored()
+    stubFetch({
+      ...base,
+      'GET /api/v1/scheduled-transfers': () =>
+        jsonResponse([SCHED({ last_run: { run_on: '2026-10-01', status: 'failed', error_code: 'insufficient_funds' } }), SCHED({ id: 4, status: 'cancelled', frequency: 'once', next_run_on: null })]),
+    })
+    renderApp('/scheduled')
+    const list = await screen.findByRole('list', { name: 'Virements programmés' })
+    const [first, second] = within(list).getAllByRole('listitem')
+    expect(first).toHaveTextContent('Léa Martin')
+    expect(first).toHaveTextContent('Chaque mois')
+    expect(first).toHaveTextContent(/1 nov\. 2026/)
+    expect(first).toHaveTextContent('Dernière exécution échouée le 1 oct. 2026 : solde insuffisant.')
+    expect(second).toHaveTextContent('Annulée')
+    expect(within(second!).queryByRole('button', { name: 'Annuler' })).not.toBeInTheDocument()
+  })
+
+  it('pause puis reprise (PATCH), annulation confirmée (DELETE), refus de confirmation sans appel', async () => {
+    loginAsStored()
+    let current = SCHED()
+    const f = stubFetch({
+      ...base,
+      'GET /api/v1/scheduled-transfers': () => jsonResponse([current]),
+      'PATCH /api/v1/scheduled-transfers/3': (init) => {
+        current = SCHED({ status: JSON.parse(init!.body as string).status })
+        return jsonResponse(current)
+      },
+      'DELETE /api/v1/scheduled-transfers/3': () => {
+        current = SCHED({ status: 'cancelled', next_run_on: null })
+        return new Response(null, { status: 204 })
+      },
+    })
+    renderApp('/scheduled')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Mettre en pause' }))
+    await user.click(await screen.findByRole('button', { name: 'Reprendre' }))
+    expect(await screen.findByRole('button', { name: 'Mettre en pause' })).toBeInTheDocument()
+    const patches = f.mock.calls.filter(([, i]) => (i as RequestInit | undefined)?.method === 'PATCH')
+    expect(patches.map(([, i]) => JSON.parse((i as RequestInit).body as string))).toEqual([{ status: 'paused' }, { status: 'active' }])
+
+    const deletes = () => f.mock.calls.filter(([, i]) => (i as RequestInit | undefined)?.method === 'DELETE')
+    await user.click(screen.getByRole('button', { name: 'Annuler' }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Annuler' }))
+    expect(deletes()).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Annuler' }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Annuler la programmation' }))
+    expect(await screen.findByText('Annulée')).toBeInTheDocument()
+    expect(deletes()).toHaveLength(1)
+  })
+
+  async function programFromSend(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '12,50')
+    await user.click(screen.getByRole('switch', { name: 'Programmer le virement' }))
+    await user.click(screen.getByRole('button', { name: 'Chaque semaine' }))
+    const start = screen.getByLabelText('Début')
+    await user.clear(start)
+    await user.type(start, '2026-12-01')
+    await user.type(screen.getByLabelText('Fin (facultatif)'), '2027-03-01')
+    await user.click(screen.getByRole('button', { name: /^Programmer 12,50/ }))
+    expect(screen.getByText(/Chaque semaine à partir du 1 déc\. 2026, jusqu’au 1 mars 2027/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Confirmer la programmation' }))
+  }
+
+  it('Envoyer → Programmer : POST /scheduled-transfers en centimes + dates, écran « Virement programmé »', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      ...base,
+      'POST /api/v1/scheduled-transfers': (init) => jsonResponse(SCHED({ ...JSON.parse(init!.body as string), id: 9 }), 201),
+    })
+    renderApp('/send')
+    const user = userEvent.setup()
+    await programFromSend(user)
+    expect(await screen.findByRole('heading', { name: 'Virement programmé' })).toBeInTheDocument()
+    expect(f.mock.calls.some(([u, i]) => String(u).endsWith('/api/v1/transactions') && (i as RequestInit | undefined)?.method === 'POST')).toBe(false)
+    expect(JSON.parse((posts(f)[0]![1] as RequestInit).body as string)).toEqual({
+      src_account: 1, dst_account: 77, amount_cents: 1250, frequency: 'weekly', start_on: '2026-12-01', end_on: '2027-03-01',
+    })
+    await user.click(screen.getByRole('button', { name: 'Voir mes virements programmés' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Virements programmés' })).toBeInTheDocument()
+  })
+
+  it('refus invalid_dates : retour au formulaire avec un message clair, aucun virement immédiat', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      ...base,
+      'POST /api/v1/scheduled-transfers': () => jsonResponse({ error: { code: 'invalid_dates', message: 'x' } }, 422),
+    })
+    renderApp('/send')
+    const user = userEvent.setup()
+    await programFromSend(user)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Dates invalides/)
+    expect(screen.getByRole('switch', { name: 'Programmer le virement' })).toHaveAttribute('aria-checked', 'true')
+    expect(posts(f).every(([u]) => String(u).endsWith('/api/v1/scheduled-transfers'))).toBe(true)
+  })
+})
+
+describe('Front - notifications (#49)', () => {
+  const now = new Date()
+  const iso = (daysAgo: number) => new Date(now.getTime() - daysAgo * 86_400_000).toISOString()
+  const N = (id: number, over: Record<string, unknown> = {}) => ({
+    id, type: 'transfer_received', title: `Virement reçu ${id}`, body: `Vous avez reçu ${id},00 €`, created_at: iso(0), read_at: null, ...over,
+  })
+  const base = {
+    'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+    'GET /api/v1/transactions': () => jsonResponse([]),
+  }
+
+  it('page ouverte : le sondage du badge rafraîchit aussi la liste', async () => {
+    loginAsStored()
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    let list = [N(1)]
+    stubFetch({
+      ...base,
+      'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: list.length }),
+      'GET /api/v1/notifications?unread=false': () => jsonResponse(list),
+    })
+    try {
+      renderApp('/notifications')
+      expect(await screen.findByText('Virement reçu 1')).toBeInTheDocument()
+      list = [N(2), N(1)]
+      act(() => vi.advanceTimersByTime(30_000))
+      expect(await screen.findByText('Virement reçu 2')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('badge : nombre de non-lues, libellé accessible, « 9+ » au-delà de 9, absent à 0', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: 3 }) })
+    const { unmount } = renderApp('/')
+    expect(await screen.findByRole('button', { name: 'Notifications, 3 non lues' })).toBeInTheDocument()
+    expect(screen.getByTestId('bell-badge')).toHaveTextContent('3')
+    unmount()
+    stubFetch({ ...base, 'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: 12 }) })
+    const second = renderApp('/')
+    await waitFor(() => expect(screen.getByTestId('bell-badge')).toHaveTextContent('9+'))
+    second.unmount()
+    stubFetch({ ...base, 'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: 0 }) })
+    renderApp('/')
+    await screen.findByTestId('balance')
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument()
+    expect(screen.queryByTestId('bell-badge')).not.toBeInTheDocument()
+  })
+
+  it('page : groupée par jour, clic sur une non-lue = POST /read et marque visuelle retirée', async () => {
+    loginAsStored()
+    let unread = [N(1), N(2, { created_at: iso(1), type: 'card_frozen', title: 'Carte gelée' })]
+    const f = stubFetch({
+      ...base,
+      'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: unread.length }),
+      'GET /api/v1/notifications?unread=false': () => jsonResponse([N(1), N(2, { created_at: iso(1), type: 'card_frozen', title: 'Carte gelée' }), N(3, { created_at: iso(1), read_at: iso(1), title: 'Ancienne' })]),
+      'POST /api/v1/notifications/1/read': () => {
+        unread = unread.filter((n) => n.id !== 1)
+        return jsonResponse(N(1, { read_at: iso(0) }))
+      },
+    })
+    renderApp('/')
+    await userEvent.click(await screen.findByRole('button', { name: 'Notifications, 2 non lues' }))
+    expect(await screen.findByRole('region', { name: "Aujourd'hui" })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Hier' })).toHaveTextContent('Carte gelée')
+    expect(screen.getAllByTestId('unread-dot')).toHaveLength(2)
+    await userEvent.click(screen.getByRole('button', { name: 'Non lue : Virement reçu 1' }))
+    await waitFor(() => expect(screen.getAllByTestId('unread-dot')).toHaveLength(1))
+    expect(screen.getByRole('button', { name: 'Virement reçu 1' })).toBeInTheDocument()
+    expect(f.mock.calls.some(([u, i]) => String(u).endsWith('/api/v1/notifications/1/read') && (i as RequestInit).method === 'POST')).toBe(true)
+    expect(await screen.findByRole('button', { name: 'Notifications, 1 non lue' })).toBeInTheDocument()
+  })
+
+  it('« Tout marquer comme lu » : POST read-all puis plus aucune non-lue', async () => {
+    loginAsStored()
+    let done = false
+    const f = stubFetch({
+      ...base,
+      'GET /api/v1/notifications/unread-count': () => jsonResponse({ count: done ? 0 : 1 }),
+      'GET /api/v1/notifications?unread=false': () => jsonResponse([N(1, done ? { read_at: iso(0) } : {})]),
+      'POST /api/v1/notifications/read-all': () => {
+        done = true
+        return jsonResponse({ updated: 1 })
+      },
+    })
+    renderApp('/notifications')
+    await userEvent.click(await screen.findByRole('button', { name: /Tout marquer comme lu/ }))
+    expect(await screen.findByText('Tout est lu')).toBeInTheDocument()
+    expect(screen.queryByTestId('unread-dot')).not.toBeInTheDocument()
+    expect(f.mock.calls.some(([u]) => String(u).endsWith('/api/v1/notifications/read-all'))).toBe(true)
+    expect(await screen.findByRole('button', { name: 'Notifications' })).toBeInTheDocument()
+  })
+
+  it('type inconnu affiché sans casser la liste ; texte jamais interprété comme HTML', async () => {
+    loginAsStored()
+    stubFetch({
+      ...base,
+      'GET /api/v1/notifications?unread=false': () => jsonResponse([N(1, { type: 'crypto_alert', title: '<b>Nouveau</b>' }), N(2)]),
+    })
+    renderApp('/notifications')
+    expect(await screen.findByText('<b>Nouveau</b>')).toBeInTheDocument()
+    expect(screen.getByText('Virement reçu 2')).toBeInTheDocument()
+  })
+
+  it('vide puis erreur : états dédiés', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/notifications?unread=false': () => jsonResponse([]) })
+    const { unmount } = renderApp('/notifications')
+    expect(await screen.findByText('Aucune notification')).toBeInTheDocument()
+    unmount()
+    stubFetch({ ...base, 'GET /api/v1/notifications?unread=false': () => jsonResponse({ error: { code: 'db_unavailable', message: 'x' } }, 503) })
+    renderApp('/notifications')
+    expect(await screen.findByRole('button', { name: 'Réessayer' })).toBeInTheDocument()
+  })
+})
+
+describe('Front - relevés (#50)', () => {
+  const base = { 'GET /api/v1/accounts': () => jsonResponse(TWO_ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) }
+  const STATEMENT = {
+    account_id: 1,
+    iban_fake: 'FR76 0000 0001',
+    holder: 'CAMILLE DURAND',
+    from: '2026-10-01',
+    to: '2026-10-21',
+    rows: [
+      { id: 10, created_at: '2026-10-02T10:00:00Z', reference: 'req-10', direction: 'debit', counterparty_account: 7, category: 'food', amount_cents: 1250, status: 'created' },
+      { id: 11, created_at: '2026-10-03T10:00:00Z', reference: 'req-11', direction: 'debit', counterparty_account: 7, category: 'shopping', amount_cents: 99900, status: 'rejected' },
+      { id: 12, created_at: '2026-10-04T10:00:00Z', reference: 'req-12', direction: 'credit', counterparty_account: 8, category: null, amount_cents: 5000, status: 'created' },
+    ],
+    total_debit_cents: 1250,
+    total_credit_cents: 5000,
+  }
+
+  it('télécharge le CSV avec le Bearer, via une URL blob nommée comme le serveur', async () => {
+    loginAsStored()
+    // stubFetch route sur le chemin exact : on accepte ici toute query de /api/v1/statements.
+    const f = stubFetch(base)
+    f.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/v1/statements')) {
+        return new Response('﻿Date;Référence', { status: 200, headers: { 'Content-Disposition': 'attachment; filename="releve-2-x.csv"' } })
+      }
+      const key = `${init?.method ?? 'GET'} ${url}`
+      return key === 'GET /api/v1/accounts' ? jsonResponse(TWO_ACCOUNTS) : jsonResponse([])
+    })
+    const create = vi.fn(() => 'blob:fake')
+    const revoke = vi.fn()
+    Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke })
+    const clicked: HTMLAnchorElement[] = []
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this)
+    })
+    try {
+      renderApp('/statements')
+      await userEvent.click(await screen.findByRole('button', { name: 'Compte n°2' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Mois dernier' }))
+      await userEvent.click(screen.getByRole('button', { name: /Télécharger CSV/ }))
+      await waitFor(() => expect(clicked).toHaveLength(1))
+      const call = f.mock.calls.find(([u]) => String(u).startsWith('/api/v1/statements'))!
+      const url = new URL(String(call[0]), 'http://x')
+      expect(url.searchParams.get('account_id')).toBe('2')
+      expect(url.searchParams.get('format')).toBe('csv')
+      const now = new Date()
+      const first = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 10)
+      expect(url.searchParams.get('from')).toBe(first)
+      expect(((call[1] as RequestInit).headers as Record<string, string>).Authorization).toMatch(/^Bearer /)
+      expect(clicked[0]!.download).toBe('releve-2-x.csv')
+      expect(clicked[0]!.href).toBe('blob:fake')
+      await waitFor(() => expect(revoke).toHaveBeenCalledWith('blob:fake'))
+    } finally {
+      click.mockRestore()
+    }
+  })
+
+  it.each([
+    ['invalid_period', 'Période invalide'],
+    ['statement_too_large', 'Trop d’opérations sur cette période'],
+  ])('erreur %s : message clair', async (code, text) => {
+    loginAsStored()
+    const f = stubFetch(base)
+    f.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/v1/statements')) return jsonResponse({ error: { code, message: 'x' } }, 422)
+      return url === '/api/v1/accounts' ? jsonResponse(TWO_ACCOUNTS) : jsonResponse([])
+    })
+    renderApp('/statements')
+    await userEvent.click(await screen.findByRole('button', { name: /Télécharger CSV/ }))
+    expect(await screen.findByText(new RegExp(text))).toBeInTheDocument()
+  })
+
+  it('période personnalisée : saisie des dates puis version imprimable avec ces paramètres', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/statements?account_id=1&from=2026-09-01&to=2026-09-30&format=json': () => jsonResponse({ ...STATEMENT, from: '2026-09-01', to: '2026-09-30' }) })
+    renderApp('/statements')
+    await userEvent.click(await screen.findByRole('button', { name: 'Personnalisée' }))
+    const from = screen.getByLabelText('Du')
+    const to = screen.getByLabelText('Au')
+    await userEvent.clear(from)
+    await userEvent.type(from, '2026-09-01')
+    await userEvent.clear(to)
+    await userEvent.type(to, '2026-09-30')
+    expect(screen.getByTestId('statement-range')).toHaveTextContent('Du 2026-09-01 au 2026-09-30')
+    await userEvent.click(screen.getByRole('button', { name: /Version imprimable/ }))
+    expect(await screen.findByRole('region', { name: 'Relevé de compte' })).toHaveTextContent('Du 2026-09-01 au 2026-09-30')
+  })
+
+  it('page imprimable : lignes, refusée barrée, totaux, bouton imprimer', async () => {
+    loginAsStored()
+    stubFetch({ ...base, 'GET /api/v1/statements?account_id=1&from=2026-10-01&to=2026-10-21&format=json': () => jsonResponse(STATEMENT) })
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {})
+    try {
+      renderApp('/statements/print?account=1&from=2026-10-01&to=2026-10-21')
+      const doc = await screen.findByRole('region', { name: 'Relevé de compte' })
+      expect(doc).toHaveTextContent('CAMILLE DURAND')
+      expect(doc).toHaveTextContent('Banque Résilience')
+      const rows = screen.getAllByTestId('statement-row')
+      expect(rows).toHaveLength(3)
+      expect(rows[0]).toHaveTextContent(/Alimentation.*12,50/)
+      expect(rows[1]).toHaveClass('line-through')
+      expect(rows[1]).toHaveTextContent('Refusé')
+      expect(screen.getByTestId('total-debit')).toHaveTextContent(/12,50/)
+      expect(screen.getByTestId('total-credit')).toHaveTextContent(/50,00/)
+      await userEvent.click(screen.getByRole('button', { name: /Imprimer/ }))
+      expect(print).toHaveBeenCalled()
+    } finally {
+      print.mockRestore()
+    }
+  })
+})
+
+describe('Front - relevés, revue (#50)', () => {
+  it('dates personnalisées vides ou inversées : message et boutons désactivés, aucun appel', async () => {
+    loginAsStored()
+    const f = stubFetch({ 'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS), 'GET /api/v1/transactions': () => jsonResponse([]) })
+    renderApp('/statements')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Personnalisée' }))
+    const [from, to] = screen.getAllByDisplayValue(/^\d{4}-\d{2}-\d{2}$/) as HTMLInputElement[]
+    await user.clear(from!)
+    expect(screen.getByText('Renseignez les deux dates.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Télécharger CSV/ })).toBeDisabled()
+    await user.type(from!, '2026-10-20')
+    await user.clear(to!)
+    await user.type(to!, '2026-10-01')
+    expect(screen.getByText('La date de début doit précéder la date de fin.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Version imprimable/ })).toBeDisabled()
+    expect(f.mock.calls.some(([u]) => String(u).includes('/api/v1/statements'))).toBe(false)
+  })
+
+  it('page imprimable : dates en UTC (même jour que le CSV)', async () => {
+    loginAsStored()
+    stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'GET /api/v1/statements?account_id=1&from=2026-10-01&to=2026-10-31&format=json': () =>
+        jsonResponse({
+          account_id: 1, iban_fake: 'FR76 0000 0001', holder: 'demo01', from: '2026-10-01', to: '2026-10-31',
+          rows: [{ id: 9, created_at: '2026-10-31T23:30:00Z', reference: 'r', direction: 'debit', counterparty_account: 3, category: null, amount_cents: 100, status: 'created' }],
+          total_debit_cents: 100, total_credit_cents: 0,
+        }),
+    })
+    renderApp('/statements/print?account=1&from=2026-10-01&to=2026-10-31')
+    expect(await screen.findByText('31/10/2026 23:30 UTC')).toBeInTheDocument()
+  })
+})
+
+describe('Front - confirmation renforcée des gros virements (#51)', () => {
+  const STEP_UP = () => jsonResponse({ error: { code: 'step_up_required', message: 'x' } }, 403)
+  const NEW_TOKEN = fakeJwt(Math.floor(Date.now() / 1000) + 900)
+  const authOf = (call: unknown[]) => ((call[1] as RequestInit).headers as Record<string, string>).Authorization
+  const txPosts = (f: ReturnType<typeof stubFetch>) => posts(f).filter(([u]) => String(u).endsWith('/api/v1/transactions'))
+
+  async function bigTransfer(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '600')
+    await user.click(screen.getByRole('button', { name: /^Envoyer 600,00/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmer l’envoi' }))
+  }
+
+  function routes(stepUp: (init: RequestInit | undefined) => Response) {
+    let calls = 0
+    return stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'POST /api/v1/transactions': () => (++calls === 1 ? STEP_UP() : jsonResponse({ ...CREATED, amount_cents: 60000 }, 201)),
+      'POST /api/v1/auth/step-up': stepUp,
+    })
+  }
+
+  it('mobile : annuler la confirmation renforcée garde le message à l’étape 4, sans second envoi', async () => {
+    loginAsStored()
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse([{ ...ACCOUNTS[0]!, balance_cents: 1_000_000 }]),
+      'GET /api/v1/transactions': () => jsonResponse(TXS),
+      'POST /api/v1/transactions': STEP_UP,
+    })
+    renderApp('/send', { desktop: false })
+    const user = userEvent.setup()
+    await user.click(within(await screen.findByRole('region', { name: 'Destinataires' })).getByRole('button', { name: /Compte n°99/ }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '600')
+    await user.click(screen.getByRole('button', { name: /Continuer/ }))
+    await user.click(screen.getByRole('button', { name: /Vérifier le virement/ }))
+    screen.getByRole('button', { name: /^Envoyer 600,00/ }).focus()
+    await user.keyboard('{Enter}')
+    const dlg = await screen.findByRole('dialog')
+    await user.click(within(dlg).getByRole('button', { name: /Annuler/ }))
+    expect(await screen.findByText('Virement non envoyé : la confirmation renforcée a été annulée.')).toBeInTheDocument()
+    expect(screen.getByText('Étape 4 sur 4')).toBeInTheDocument()
+    expect(txPosts(f)).toHaveLength(1)
+  })
+
+  it('403 step_up_required → modale → mot de passe → rejeu identique avec le nouveau jeton → succès', async () => {
+    loginAsStored()
+    const oldToken = tokenStore.get()
+    const f = routes(() => jsonResponse({ access_token: NEW_TOKEN, token_type: 'bearer', expires_in: 900 }))
+    renderApp('/send')
+    const user = userEvent.setup()
+    await bigTransfer(user)
+    const dlg = await screen.findByRole('dialog', { name: 'Confirmation renforcée' })
+    expect(within(dlg).getByText(/montant important/)).toBeInTheDocument()
+    const pwd = within(dlg).getByLabelText('Mot de passe')
+    expect(pwd).toHaveFocus()
+    expect(pwd).toHaveAttribute('autocomplete', 'current-password')
+    await user.type(pwd, 's3cret')
+    await user.click(within(dlg).getByRole('button', { name: 'Confirmer' }))
+    expect(await screen.findByRole('heading', { name: 'Virement envoyé' })).toBeInTheDocument()
+    const sent = txPosts(f)
+    expect(sent).toHaveLength(2)
+    expect((sent[0]![1] as RequestInit).body).toBe((sent[1]![1] as RequestInit).body)
+    expect(authOf(sent[0]!)).toBe(`Bearer ${oldToken}`)
+    expect(authOf(sent[1]!)).toBe(`Bearer ${NEW_TOKEN}`)
+    const stepCall = f.mock.calls.find(([u]) => String(u).endsWith('/api/v1/auth/step-up'))!
+    expect(JSON.parse((stepCall[1] as RequestInit).body as string)).toEqual({ password: 's3cret' })
+    expect(tokenStore.get()).toBe(NEW_TOKEN)
+  })
+
+  it('mot de passe incorrect : message, modale ouverte, aucun rejeu, toujours connecté', async () => {
+    loginAsStored()
+    const f = routes(() => jsonResponse({ error: { code: 'invalid_credentials', message: 'x' } }, 401))
+    renderApp('/send')
+    const user = userEvent.setup()
+    await bigTransfer(user)
+    const dlg = await screen.findByRole('dialog', { name: 'Confirmation renforcée' })
+    await user.type(within(dlg).getByLabelText('Mot de passe'), 'faux')
+    await user.click(within(dlg).getByRole('button', { name: 'Confirmer' }))
+    expect(await within(dlg).findByText('Mot de passe incorrect.')).toBeInTheDocument()
+    expect(within(dlg).getByLabelText('Mot de passe')).toHaveValue('')
+    expect(txPosts(f)).toHaveLength(1)
+    expect(tokenStore.get()).not.toBeNull()
+  })
+
+  it('trop de tentatives (429) : message et bouton Fermer ; fermer = aucun rejeu', async () => {
+    loginAsStored()
+    const f = routes(() => jsonResponse({ error: { code: 'rate_limited', message: 'x' } }, 429))
+    renderApp('/send')
+    const user = userEvent.setup()
+    await bigTransfer(user)
+    const dlg = await screen.findByRole('dialog', { name: 'Confirmation renforcée' })
+    await user.type(within(dlg).getByLabelText('Mot de passe'), 'x')
+    await user.click(within(dlg).getByRole('button', { name: 'Confirmer' }))
+    expect(await within(dlg).findByText(/Trop de tentatives/)).toBeInTheDocument()
+    await user.click(within(dlg).getByRole('button', { name: 'Fermer' }))
+    expect(await screen.findByText(/Virement non envoyé/)).toBeInTheDocument()
+    expect(txPosts(f)).toHaveLength(1)
+  })
+
+  it('annulation (Échap) : retour au récapitulatif « Virement non envoyé », aucun second envoi', async () => {
+    loginAsStored()
+    const f = routes(() => jsonResponse({ access_token: NEW_TOKEN }))
+    renderApp('/send')
+    const user = userEvent.setup()
+    await bigTransfer(user)
+    await screen.findByRole('dialog', { name: 'Confirmation renforcée' })
+    await user.keyboard('{Escape}')
+    expect(await screen.findByText(/Virement non envoyé/)).toBeInTheDocument()
+    expect(screen.getByText('Récapitulatif')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(txPosts(f)).toHaveLength(1)
+    expect(f.mock.calls.some(([u]) => String(u).endsWith('/api/v1/auth/step-up'))).toBe(false)
+  })
+
+  it('programmation au-dessus du seuil : même flux, rejeu du POST /scheduled-transfers', async () => {
+    loginAsStored()
+    let calls = 0
+    const f = stubFetch({
+      'GET /api/v1/accounts': () => jsonResponse(ACCOUNTS),
+      'GET /api/v1/transactions': () => jsonResponse([]),
+      'POST /api/v1/auth/step-up': () => jsonResponse({ access_token: NEW_TOKEN, token_type: 'bearer', expires_in: 900 }),
+      'POST /api/v1/scheduled-transfers': (init) => {
+        if (++calls === 1) return STEP_UP()
+        const b = JSON.parse(init!.body as string)
+        return jsonResponse({ id: 5, ...b, category: 'transfer', next_run_on: b.start_on, end_on: null, status: 'active', last_run: null }, 201)
+      },
+    })
+    renderApp('/send')
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Rechercher un destinataire par nom ou numéro de compte'), '77')
+    await user.click(screen.getByRole('button', { name: 'Compte n°77' }))
+    const input = screen.getByLabelText('Montant en euros')
+    await user.clear(input)
+    await user.type(input, '600')
+    await user.click(screen.getByRole('switch', { name: 'Programmer le virement' }))
+    await user.click(screen.getByRole('button', { name: /^Programmer 600,00/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmer la programmation' }))
+    const dlg = await screen.findByRole('dialog', { name: 'Confirmation renforcée' })
+    await user.type(within(dlg).getByLabelText('Mot de passe'), 's3cret')
+    await user.click(within(dlg).getByRole('button', { name: 'Confirmer' }))
+    expect(await screen.findByRole('heading', { name: 'Virement programmé' })).toBeInTheDocument()
+    const sched = posts(f).filter(([u]) => String(u).endsWith('/api/v1/scheduled-transfers'))
+    expect(sched).toHaveLength(2)
+    expect((sched[0]![1] as RequestInit).body).toBe((sched[1]![1] as RequestInit).body)
   })
 })

@@ -1,8 +1,9 @@
 # RESILIENCE-ALPHA — orchestration Docker Compose
-# Profils : (défaut=demo) chemin critique | full=observabilité complète | attack=banc d'essai | ai=assistant RAG
+# Profils : (défaut=demo) chemin critique | full=observabilité complète | iot=broker MQTT | attack=banc d'essai | ai=assistant RAG
 # Secrets injectés depuis ../../.env (produit par scripts/decrypt-secrets.sh à partir de SOPS).
 # Durcissement : non-root (Dockerfiles), cap_drop ALL, no-new-privileges, limites ressources,
-# seuls le WAF (HTTP) et mosquitto (MQTT, bind hotspot) publient des ports. Voir ../../security/hardening/hardening.md.
+# seul le WAF publie des ports HTTP (80/443, plus le listener hôte-seulement 127.0.0.1:9443 du
+# back-office) ; le profil iot publie MQTT sur le hotspot. Voir ../../security/hardening/hardening.md.
 # Reproductibilité (R5) : toutes les images tierces sont épinglées à une version précise (aucun
 # `:latest`) — un rebuild ultérieur ne doit pas tirer un major différent (Grafana/Loki/Prometheus…).
 
@@ -75,6 +76,9 @@ services:
       MODSEC_AUDIT_LOG_FORMAT: JSON
       MODSEC_AUDIT_LOG_TYPE: Serial
       MODSEC_AUDIT_LOG: /var/log/modsec/audit.json
+      # Parties journalisées : en-tête (A), requête sans corps (B), réponse (F), règles (H), fin (Z).
+      # Jamais les corps (C/I/J) : un /login bloqué y laisserait le mot de passe en clair.
+      MODSEC_AUDIT_LOG_PARTS: ABFHZ
     volumes:
       - waf-deny:/etc/nginx/deny:rw
       - waf-logs:/var/log/modsec:rw
@@ -175,8 +179,8 @@ services:
       BACKOFFICE_FACE_TIMEOUT: "8"
       # Durée de vie d'un challenge de poses : chargement à froid de MediaPipe + 3 maintiens de pose.
       BACKOFFICE_CHALLENGE_TTL: "120"
-    # mosquitto NON requis : si l'IP du hotspot (MQTT_BIND) est absente, le broker ne peut pas se lier
-    # et ne démarre pas ; auth (donc le WAF) doit démarrer quand même — la LED est fail-open (ADR 0006).
+    # mosquitto NON requis : hors profil iot (make up), ou si l'IP du hotspot (MQTT_BIND_ADDR) est absente,
+    # le broker ne démarre pas ; auth (donc le WAF) doit démarrer quand même — la LED est fail-open (ADR 0006).
     # `required: false` exige Docker Compose >= 2.20.
     depends_on:
       postgres: { condition: service_started }
@@ -218,31 +222,33 @@ services:
       start_period: 20s
 
   mosquitto:
-    # Broker MQTT du pilotage LED (ADR 0006). Seul ingress MQTT : publié sur l'IP du hotspot (jamais 0.0.0.0).
-    # Racine en lecture seule ; le fichier de mots de passe est généré au démarrage par l'entrypoint dans
-    # le tmpfs /mosquitto/run (uid 1883) à partir de MQTT_AUTH_PASSWORD / MQTT_LED_PASSWORD (SOPS).
     <<: *hardening
-    image: eclipse-mosquitto:2.0.20
+    image: eclipse-mosquitto:2.0.18
+    profiles: [iot]
     user: "1883:1883"
     networks: [app]
-    ports:
-      - "${MQTT_BIND:-192.168.137.1}:1883:1883"
-    entrypoint: ["/bin/sh", "/mosquitto/docker-entrypoint.sh"]
+    # Seule l'interface du point d'accès est joignable par l'ESP8266. Hors hotspot (poste de
+    # dev), MQTT_BIND_ADDR=127.0.0.1 ; jamais 0.0.0.0 (cf. docs/network.md).
+    ports: ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]
     environment:
-      MQTT_AUTH_PASSWORD: ${MQTT_AUTH_PASSWORD}
-      MQTT_LED_PASSWORD: ${MQTT_LED_PASSWORD}
+      MQTT_AUTH_PASSWORD: ${MQTT_AUTH_PASSWORD:-}
+      MQTT_LED_PASSWORD: ${MQTT_LED_PASSWORD:-}
+    entrypoint: ["/bin/sh", "/mosquitto/config/entrypoint.sh"]
     volumes:
       - ../mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ../mosquitto/aclfile:/mosquitto/config/aclfile:ro
-      - ../mosquitto/docker-entrypoint.sh:/mosquitto/docker-entrypoint.sh:ro
+      - ../mosquitto/entrypoint.sh:/mosquitto/config/entrypoint.sh:ro
+    # Le fichier de mots de passe est généré au démarrage en RAM, jamais dans le dépôt.
+    tmpfs:
+      - "/run/mosquitto:uid=1883,gid=1883,mode=0700"
+      - "/tmp:uid=1883,gid=1883,mode=0700"  # mosquitto_passwd écrit un fichier temporaire
     read_only: true
-    tmpfs: ["/mosquitto/run:uid=1883,gid=1883,mode=0700"]
     mem_limit: 64m
     healthcheck:
-      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -u auth -P \"$$MQTT_AUTH_PASSWORD\" -C 1 -W 3 -t '$$SYS/broker/uptime' >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "test -s /run/mosquitto/passwd && nc -z 127.0.0.1 1883"]
       interval: 15s
-      timeout: 5s
-      retries: 5
+      timeout: 3s
+      retries: 3
 
   # ---------------------------------------------------------------- data (interne)
   postgres:
@@ -277,17 +283,20 @@ services:
     depends_on: [prometheus]
     read_only: true
     tmpfs: ["/tmp"]
+    profiles: [ml]
 
   detector:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: ml/detector/Dockerfile }
     networks: [app, obs]
     environment:
-      REMEDIATION_URL: http://remediation:8005
+      # URL COMPLÈTE de l'endpoint (le detector POSTe tel quel, cf. ml/detector/core.py)
+      REMEDIATION_URL: http://remediation:8005/events
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
     depends_on: [collector, remediation]
     read_only: true
     tmpfs: ["/tmp"]
+    profiles: [ml]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8003/health').status==200 else 1)"]
       interval: 15s

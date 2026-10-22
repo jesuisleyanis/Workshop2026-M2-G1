@@ -166,7 +166,7 @@ Le facteur visage + LED s'applique **au back-office** (accès privilégié), **e
 
 ### 6.6 Modèle de données (`resilience_db`) — *amendé : photos et gabarits chiffrés (contracts.md §5.4)*
 - `users.role` : `customer` (défaut) \| `operator` \| `admin`. Le back-office exige `operator`/`admin`.
-- Table `face_enrollments` : `user_id` (FK `users.id`, unique), `embedding` (BYTEA, ~~vecteur uniquement~~ **blob chiffré des 3 gabarits** depuis la migration `0003`, qui ajoute aussi `photos` chiffrées et `poses`), `model_version` (str), `enrolled_by` (str), `enrolled_at` (timestamptz). Migration Alembic dédiée.
+- Table `face_enrollments` : `user_id` (FK `users.id`, unique), `embedding` (BYTEA, ~~vecteur uniquement~~ **blob chiffré des 3 gabarits** depuis la migration `0009` (ex-`0003`), qui ajoute aussi `photos` chiffrées et `poses`), `model_version` (str), `enrolled_by` (str), `enrolled_at` (timestamptz). Migration Alembic dédiée.
 
 ---
 

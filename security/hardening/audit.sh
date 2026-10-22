@@ -74,8 +74,9 @@ else
   pass "aucune clé age dans le dépôt"
 fi
 
-# 5. Exposition réseau : SEUL le WAF (HTTP) et mosquitto (MQTT, bind hotspot) publient des ports (R11/R19, point dur jury).
-echo "[5] Exposition réseau (seuls le WAF et mosquitto publient des ports)"
+# 5. Exposition réseau : WAF HTTP (+ listener hôte 9443 du back-office sur loopback uniquement),
+#    et Mosquitto sur l'IP du PA si le profil iot est actif (R11/R19, point dur jury).
+echo "[5] Exposition réseau (WAF HTTP + 9443 loopback + MQTT sur le PA)"
 COMPOSE="infra/compose/docker-compose.yml"
 if [[ -f "${COMPOSE}" ]]; then
   # Repère les services (indent 2) du bloc `services:` qui déclarent une clé `ports:` (indent 4).
@@ -85,9 +86,16 @@ if [[ -f "${COMPOSE}" ]]; then
     in_services && /^    ports:/        { if (svc != "waf" && svc != "mosquitto") print svc }
   ' "${COMPOSE}" | sort -u)"
   if [[ -n "${offenders}" ]]; then
-    fail "des services autres que le WAF et mosquitto publient des ports : ${offenders}"
+    fail "des services autres que WAF/Mosquitto publient des ports : ${offenders}"
+  elif ! grep -Fq 'ports: ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]' "${COMPOSE}"; then
+    fail "Mosquitto doit être lié uniquement à 192.168.137.1:1883 (surchargeable par MQTT_BIND_ADDR)"
+  elif [[ "${MQTT_BIND_ADDR:-192.168.137.1}" == "0.0.0.0" ]]; then
+    fail "MQTT_BIND_ADDR=0.0.0.0 exposerait le broker sur toutes les interfaces"
+  elif ! grep -Fq -- '- "127.0.0.1:9443:9443"' "${COMPOSE}" \
+       || grep -Eq '^[[:space:]]*-[[:space:]]*"?(0\.0\.0\.0:)?9443:' "${COMPOSE}"; then
+    fail "le listener hôte 9443 (back-office, /api/v1/auth/, /api/v1/admin/) doit être publié sur 127.0.0.1 uniquement"
   else
-    pass "seuls le WAF et mosquitto (hotspot) publient des ports (DB/API/obs internes)"
+    pass "WAF HTTP, 9443 sur loopback et Mosquitto lié au PA ; DB/API/obs internes"
   fi
 else
   fail "docker-compose.yml introuvable"

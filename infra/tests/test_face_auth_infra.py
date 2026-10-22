@@ -46,8 +46,10 @@ def test_host_listener_9443_is_published_on_loopback_only() -> None:
 
 def test_mosquitto_not_published_on_all_interfaces() -> None:
     mosq = SERVICES["mosquitto"]
-    assert mosq["image"] == "eclipse-mosquitto:2.0.20"
-    assert mosq["ports"] == ["${MQTT_BIND:-192.168.137.1}:1883:1883"]
+    assert mosq["image"] == "eclipse-mosquitto:2.0.18"
+    # Broker de l'équipe (profil iot, `make up-iot`) : jamais levé par `make up` (le bind exige l'IP du PA).
+    assert mosq["profiles"] == ["iot"]
+    assert mosq["ports"] == ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]
     for p in mosq["ports"]:
         assert not p.startswith(("0.0.0.0:", "1883:", ":")), "MQTT jamais sur 0.0.0.0"
     assert mosq["networks"] == ["app"]
@@ -56,32 +58,37 @@ def test_mosquitto_not_published_on_all_interfaces() -> None:
 
 def test_mosquitto_passwd_lives_in_tmpfs_run_dir_and_config_is_read_only() -> None:
     mosq = SERVICES["mosquitto"]
-    run = [t for t in mosq["tmpfs"] if t.startswith("/mosquitto/run")]
+    run = [t for t in mosq["tmpfs"] if t.startswith("/run/mosquitto:")]
     assert run and "uid=1883" in run[0] and "gid=1883" in run[0] and "mode=0700" in run[0]
     for v in mosq["volumes"]:
         assert v.endswith(":ro"), f"volume mosquitto non read-only : {v}"
-    assert any("docker-entrypoint.sh" in v for v in mosq["volumes"])
-    assert "docker-entrypoint.sh" in " ".join(mosq["entrypoint"])
+    assert any(v.startswith("../mosquitto/entrypoint.sh:") for v in mosq["volumes"])
+    assert "/mosquitto/config/entrypoint.sh" in " ".join(mosq["entrypoint"])
     env = mosq["environment"]
-    assert env["MQTT_AUTH_PASSWORD"] == "${MQTT_AUTH_PASSWORD}"
-    assert env["MQTT_LED_PASSWORD"] == "${MQTT_LED_PASSWORD}"
+    assert env["MQTT_AUTH_PASSWORD"] == "${MQTT_AUTH_PASSWORD:-}"
+    assert env["MQTT_LED_PASSWORD"] == "${MQTT_LED_PASSWORD:-}"
     hc = " ".join(mosq["healthcheck"]["test"])
-    assert "mosquitto_sub" in hc and "$$SYS/broker/uptime" in hc and "-u auth" in hc
+    assert "test -s /run/mosquitto/passwd" in hc and "1883" in hc
+    # L'ancien entrypoint de la branche face-auth est remplacé par celui de l'équipe.
+    assert not (MOSQ / "docker-entrypoint.sh").exists()
 
 
 def test_mosquitto_conf_and_entrypoint_agree_on_passwd_path() -> None:
     conf = (MOSQ / "mosquitto.conf").read_text(encoding="utf-8")
-    assert re.search(r"^password_file /mosquitto/run/passwd\s*$", conf, re.M)
-    sh = (MOSQ / "docker-entrypoint.sh").read_text(encoding="utf-8")
-    assert "/mosquitto/run/passwd" in sh
+    assert re.search(r"^password_file /run/mosquitto/passwd\s*$", conf, re.M)
+    assert re.search(r"^acl_file /run/mosquitto/aclfile\s*$", conf, re.M)
+    sh = (MOSQ / "entrypoint.sh").read_text(encoding="utf-8")
+    assert b"\r\n" not in (MOSQ / "entrypoint.sh").read_bytes(), "entrypoint monté dans un conteneur Linux : LF obligatoire"
+    assert "/run/mosquitto/passwd" in sh and "/run/mosquitto/aclfile" in sh
     assert re.search(r"mosquitto_passwd -b -c \S+ auth ", sh)
     assert re.search(r"mosquitto_passwd -b \S+ led ", sh)
-    assert "MQTT_AUTH_PASSWORD" in sh and "MQTT_LED_PASSWORD" in sh
-    assert "exec mosquitto -c /mosquitto/config/mosquitto.conf" in sh
     assert sh.index("mosquitto_passwd") < sh.index("exec mosquitto")
+    assert "exec mosquitto -c /mosquitto/config/mosquitto.conf" in sh
     # Échec franc si un mot de passe est vide (pas de broker sans creds).
-    assert re.search(r'-z\s+"\$\{MQTT_AUTH_PASSWORD', sh) and re.search(r'-z\s+"\$\{MQTT_LED_PASSWORD', sh)
-    assert "set -e" in sh
+    assert re.search(r'\$\{MQTT_AUTH_PASSWORD:\?', sh) and re.search(r'\$\{MQTT_LED_PASSWORD:\?', sh)
+    assert "set -eu" in sh
+    attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert re.search(r"^infra/mosquitto/entrypoint\.sh\s+text\s+eol=lf\s*$", attrs, re.M)
 
 
 def test_acl_auth_reads_led_status_and_least_privilege_kept() -> None:
@@ -171,9 +178,10 @@ def test_sops_example_has_new_secrets_with_fake_values() -> None:
         if line and not line.startswith("#") and "=" in line
     )
     for k in ("FACE_INTERNAL_TOKEN", "FACE_DATA_KEY", "MQTT_AUTH_PASSWORD", "MQTT_LED_PASSWORD",
-              "BACKOFFICE_BOOTSTRAP_TOKEN", "MQTT_BIND"):
+              "BACKOFFICE_BOOTSTRAP_TOKEN", "MQTT_BIND_ADDR"):
         assert k in env, k
     for k in ("FACE_INTERNAL_TOKEN", "MQTT_AUTH_PASSWORD", "MQTT_LED_PASSWORD", "BACKOFFICE_BOOTSTRAP_TOKEN"):
         assert env[k].startswith("change-me"), k
     assert "change-me" in env["FACE_DATA_KEY"]
-    assert env["MQTT_BIND"] == "192.168.137.1"
+    assert env["MQTT_BIND_ADDR"] == "192.168.137.1"
+    assert "MQTT_BIND" not in env, "variable renommée MQTT_BIND_ADDR (compose du profil iot)"

@@ -7,7 +7,7 @@
 ```
                         ┌─────────────────────────── PC Hôte (192.168.137.1) ───────────────────────────┐
   PC Attaquant          │                                                                                │
-  (banc d'essai) ──443──►  WAF (Nginx + ModSecurity + CRS)   [edge — seul exposé]                         │
+  (banc d'essai) ──443──►  WAF (Nginx + ModSecurity + CRS)   [edge — seul HTTP exposé]                    │
                         │        │                                                                        │
                         │        ├──► front (React/Vite)            [app]                                 │
                         │        ├──► payment-api (FastAPI) ──┐                                            │
@@ -41,7 +41,7 @@
 
 | Composant | Techno | Réseau | Exposé | Rôle |
 |---|---|---|---|---|
-| waf | Nginx+ModSecurity+CRS | edge, app | **oui (80/443)** | Filtrage applicatif, point d'entrée unique, blocage IP |
+| waf | Nginx+ModSecurity+CRS | edge, app | **oui (80/443)** | Filtrage applicatif, unique point d'entrée HTTP, blocage IP |
 | front | React/Vite/TS/Tailwind | app | via WAF | Interface de paiement utilisateur |
 | payment-api | FastAPI | app | via WAF | Comptes, transactions fictives |
 | auth | FastAPI | app | via WAF | Login/register, JWT, rate-limit |
@@ -56,10 +56,17 @@
 | detector | FastAPI + scikit-learn | app | non | Score ML, émet l'AnomalyEvent |
 | remediation | FastAPI + ansible-runner | app | non | Décision + actions + vérification |
 | docker-socket-proxy | HAProxy (liste blanche stricte) | app | non | Médie l'accès Docker (verbes limités) |
+| mosquitto | MQTT | app | `192.168.137.1:1883` (`iot`) | Transporte les états LED de `auth` vers l'ESP8266 |
 | dashboard | React/Vite/TS/Tailwind | app/obs | via WAF/interne | Supervision, timeline, MTTD/MTTR |
 | assistant | FastAPI + LangChain + Ollama | ai | non | RAG opérateur (lecture seule) |
 
 ## Flux de la reprise autonome (chemin critique de la démo)
+
+Pour l'IoT, le navigateur du back-office appelle `auth` via le WAF ; `auth` publie ensuite
+un état sur Mosquitto via le réseau Docker `app`. L'ESP8266, connecté au PA, s'abonne
+au broker sur `192.168.137.1:1883`. Le WAF traite HTTP/HTTPS ; le
+`docker-socket-proxy` ne sert qu'aux actions Docker de la remédiation. Le client MQTT
+dans `auth` reste à raccorder (lot L5-2).
 
 1. **avant** — `verify_tx` → transaction fictive OK (exit 0).
 2. **attaque** — scénario lancé depuis le PC Attaquant vers le WAF.

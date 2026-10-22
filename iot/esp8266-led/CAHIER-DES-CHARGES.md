@@ -6,15 +6,16 @@
 
 Objet connecté **ESP8266 + LED bicolore (rouge/vert)** connecté en **WiFi au point d'accès de la solution** (`RESILIENCE-G<n>`, `192.168.137.0/24`). Il matérialise physiquement la **phase d'authentification** du back-office : la LED passe au vert/rouge selon que l'opérateur est reconnu et que son mot de passe est validé (contrat §5.3).
 
-Le firmware est **mince par conception** : il reçoit un **état sémantique** via MQTT et délègue le **motif + timing** à `resilience::LedController` (logique pure, testée sur PC). Cette séparation (ADR 0006) garde le contrat réseau minimal et le firmware robuste aux coupures.
+Le firmware reçoit un **état sémantique** via MQTT ou une commande HTTP directe sur le PA, puis délègue le **motif + timing** à `resilience::LedController` (logique pure, testée sur PC). `main.cpp` orchestre les modules LED, Wi-Fi, HTTP et MQTT ; chacun a son `.h` dans `include/` et son `.cpp` dans `src/`.
 
 ## 2. Exigences couvertes
 
 | Réf. | Exigence | Comment |
 |---|---|---|
-| **CA6** | ESP8266 + LED bicolore, WiFi sur le PA | `src/main.cpp` (ESP8266WiFi + PubSubClient) |
-| **CA7** | Machine à états LED (5 états, timings) | `lib/led/led_controller.h` + tests `native` |
+| **CA6** | ESP8266 + LED bicolore, WiFi sur le PA | `src/led_device.cpp` + `src/wifi_connection.cpp` |
+| **CA7** | Machine à états LED (5 états, timings) | `lib/led/led_controller.{h,cpp}` + tests `native` |
 | **CA8** | Transport des états depuis le PC Hôte | abonnement MQTT `resilience/led/cmd`, statut/LWT `resilience/led/status` |
+| **Commande directe** | Déclencher les trois motifs demandés sur l'objet | `src/http_api.cpp` : trois routes POST authentifiées |
 | **R13** | Secrets hors git | `include/secrets.h` (gabarit `secrets.h.example`), gitignored |
 
 ## 3. Comportement de la LED (contrat §5.3)
@@ -27,13 +28,13 @@ Le firmware est **mince par conception** : il reçoit un **état sémantique** v
 | `auth_fail` | rouge clignotant ×10 | → éteinte |
 | `not_recognized` | rouge fixe | 30 s → éteinte |
 
-- **Non bloquant** : tout dérive de `millis()`, aucune temporisation active (`delay` seulement pendant l'attente WiFi initiale, en continuant d'actualiser la LED).
+- **Non bloquant** : les motifs dérivent de `millis()` ; les tentatives Wi-Fi sont espacées de 5 s, sans boucle d'attente.
 - **Fail-safe** : payload JSON invalide ou état inconnu ⇒ aucun changement d'état ; perte WiFi/MQTT ⇒ tentative de reconnexion sans bloquer la LED.
 - **LWT** : à la déconnexion, le broker publie l'indisponibilité de l'objet (supervision côté hôte).
 
 ## 4. Câblage
 
-LED bicolore commune **cathode** : broche verte sur **D1**, broche rouge sur **D2**, cathode au GND via résistances (~220 Ω). (Adapter les broches dans `main.cpp` selon la carte.)
+LED bicolore commune **cathode** : broche verte sur **D1**, broche rouge sur **D2**, cathode au GND via résistances (~220 Ω). (Adapter les broches dans `src/led_device.cpp` selon la carte.)
 
 ## 5. Critères d'acceptation
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, setUnauthorizedHandler } from '../api'
+import { ApiError } from '../api/errors'
 import { decodeJwtClaims, tokenStore } from '../api/tokenStore'
 import { AuthContext, type AuthContextValue, type LogoutReason } from '../hooks/auth-context'
 
@@ -49,6 +50,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(sessionFrom(res.accessToken, username, res.expiresIn))
   }, [])
 
+  const stepUp = useCallback(
+    async (password: string) => {
+      try {
+        const res = await api.stepUp(password)
+        tokenStore.set(res.accessToken)
+        // Nouvelle expiration : le minuteur de déconnexion suit le nouveau jeton.
+        setSession((s) => sessionFrom(res.accessToken, s?.username ?? null, res.expiresIn))
+      } catch (e) {
+        if (e instanceof ApiError && e.code === 'invalid_token') logout('expired')
+        throw e
+      }
+    },
+    [logout],
+  )
+
   // 401 sur une requête authentifiée => retour au login.
   useEffect(() => {
     setUnauthorizedHandler(() => logout('expired'))
@@ -72,8 +88,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       notice,
       login,
       logout,
+      stepUp,
     }),
-    [session, expiresAt, notice, login, logout],
+    [session, expiresAt, notice, login, logout, stepUp],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

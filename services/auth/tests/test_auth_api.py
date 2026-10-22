@@ -87,3 +87,25 @@ def test_login_metrics_increment_per_result(client, registered):
     client.post("/api/v1/login", json={"username": registered, "password": "wrong-wrong"})
     assert sample("resilience_auth_logins_total", result="success") == ok0 + 1
     assert sample("resilience_auth_logins_total", result="failed") == ko0 + 1
+
+
+def test_registered_customer_account_is_capped_like_a_demo_client(client, engine):
+    from authkit import PASSWORD
+    from resilience_db import make_session_factory
+    from resilience_db.models import Account, User
+
+    assert (
+        client.post(
+            "/api/v1/register", json={"username": "newclient01", "password": PASSWORD}
+        ).status_code
+        == 201
+    )
+    with make_session_factory(engine)() as s:
+        user = s.query(User).filter_by(username="newclient01").one()
+        (account,) = s.query(Account).filter_by(user_id=user.id).all()
+        assert account.monthly_limit_cents == 80_000, "client, pas compte de service (#46)"
+
+
+def test_control_characters_in_username_are_422_not_db_errors(client):
+    r = client.post("/api/v1/login", json={"username": "ali\u0000ce", "password": "x"})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "validation_error"

@@ -76,7 +76,11 @@ class RequestContextMiddleware:
 
         async def send_with_id(message) -> None:
             if message["type"] == "http.response.start":
-                MutableHeaders(scope=message)["X-Request-ID"] = rid
+                out = MutableHeaders(scope=message)
+                out["X-Request-ID"] = rid
+                # Données bancaires / jetons : jamais en cache (navigateur, proxy). Le WAF pose ses
+                # en-têtes au niveau server, on ne les surcharge pas par location.
+                out.setdefault("Cache-Control", "no-store")
             await send(message)
 
         await self.app(scope, receive, send_with_id)

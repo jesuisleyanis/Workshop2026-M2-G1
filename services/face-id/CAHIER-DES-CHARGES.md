@@ -37,7 +37,7 @@ Toutes les routes `/api/v1/*` exigent `X-Internal-Token`. Erreurs au format cont
 - **Vérification** : chaque image est comparée au gabarit de **sa** pose (distance euclidienne ≤ 0,6 pour `team`) et la pose détectée doit être la pose demandée. Les 3 images sont évaluées (pas de court-circuit) ; motif ∈ `ok`, `no_face`, `multiple_faces`, `wrong_pose`, `face_mismatch`, `incomplete`.
 
 ### Consommées
-- **PostgreSQL** (`postgres:5432/resilience`, réseau `data`) : tables `users`, `face_enrollments` (`libs/python/resilience_db`, migration `0003`).
+- **PostgreSQL** (`postgres:5432/resilience`, réseau `data`) : tables `users`, `face_enrollments` (`libs/python/resilience_db`, migrations `0002` + `0009`).
 - **Secrets (SOPS)** : `FACE_INTERNAL_TOKEN`, `FACE_DATA_KEY` (base64, 32 octets), `POSTGRES_PASSWORD`. Variantes `*_FILE`.
 - **Appelant** : `auth` (étape visage + enrôlement/consultation via le back-office), réseau `app`.
 

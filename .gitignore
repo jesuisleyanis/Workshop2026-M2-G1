@@ -1,5 +1,7 @@
 # Secrets déchiffrés et clés — JAMAIS commités
 .env
+security/sops/secrets.env
+security/sops/.sops.yaml
 *.decrypted.env
 *.env.dec
 secrets.enc.env.dec
@@ -52,3 +54,12 @@ prise_brute*
 docs/dossier/clip/*.ass
 # venv de travail cyber (local)
 .venv-cyber/
+# Captures ML en cours (écrites en .tmp puis renommées si valides)
+ml/training/data/*.tmp
+
+# Journal et PID du lanceur de scénarios (exécution locale)
+attacks/.runlog
+attacks/.run.pid
+
+# Artefacts de recette live (logs, captures d anomalies)
+.testrun/

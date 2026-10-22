@@ -31,6 +31,7 @@ def _fake_repo(tmp_path: Path) -> Path:
         "README.md": "# demo\n",
         "services/api/main.py": "print('x')\n",
         "security/sops/secrets.example.env": "POSTGRES_PASSWORD=change-me\n",
+        "security/sops/secrets.env": "MQTT_AUTH_PASSWORD=real\n",
         ".env": "POSTGRES_PASSWORD=real\n",
         "security/sops/keys.txt": "# created\nAGE-SECRET-KEY-" + "1QQQ\n",
         "dashboard/node_modules/x/index.js": "x",
@@ -62,7 +63,7 @@ def test_archive_has_exact_name_and_excludes_secrets_and_artifacts(tmp_path):
     assert archive.is_file()
     names = set(zipfile.ZipFile(archive).namelist())
     assert {"README.md", "services/api/main.py", "security/sops/secrets.example.env", "scripts/package_deliverables.sh"} <= names
-    for forbidden in (".env", "security/sops/keys.txt", ".git/HEAD", "dashboard/node_modules/x/index.js",
+    for forbidden in (".env", "security/sops/secrets.env", "security/sops/keys.txt", ".git/HEAD", "dashboard/node_modules/x/index.js",
                       "dashboard/dist/index.html", "libs/python/pkg.egg-info/PKG-INFO", "remediation/incidents.db",
                       "infra/ansible/backups/dump.sql", "Workshop2026-M2-G1-Dossier.pdf"):
         assert forbidden not in names, f"{forbidden} ne doit pas être dans {CODE}"

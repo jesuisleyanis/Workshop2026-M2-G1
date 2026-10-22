@@ -35,6 +35,12 @@ class NoData(RuntimeError):
     """Prometheus répond mais aucune des features n'a de valeur."""
 
 
+#: Services compose dont la charge (CPU, mémoire) compte comme signal : ceux que les attaques
+#: visent. Label posé par Docker et exposé par cAdvisor.
+PLATFORM_SERVICES = ("waf", "front", "payment-api", "auth", "postgres")
+PLATFORM = f'container_label_com_docker_compose_service=~"{"|".join(PLATFORM_SERVICES)}"'
+
+
 def build_queries(window: str = "30s") -> dict[str, str]:
     """Requêtes PromQL par feature (noms de métriques : docs/contracts.md §2).
 
@@ -56,19 +62,26 @@ def build_queries(window: str = "30s") -> dict[str, str]:
         "ratio_5xx": (
             f'sum(rate(resilience_http_requests_total{{status=~"5.."}}[{w}])) / {total}'
         ),
+        # Tentatives de login REFUSÉES : mauvais mot de passe ET refus du rate-limit. Sans le
+        # second terme, une attaque par force brute retombe à ~0 dès que le rate-limit répond 429
+        # (compteur à part, resilience_auth_rate_limited_total) et serait routée en service_flood.
+        # `or vector(0)` : un compteur sans série (aucun échec encore) ne masque pas l'autre.
         "auth_failed_per_s": (
-            f'sum(rate(resilience_auth_logins_total{{result="failed"}}[{w}]))'
+            f'(sum(rate(resilience_auth_logins_total{{result="failed"}}[{w}])) or vector(0))'
+            f" + (sum(rate(resilience_auth_rate_limited_total[{w}])) or vector(0))"
         ),
         "waf_blocked_per_s": f"sum(rate(resilience_waf_blocked_total[{w}]))",
-        # cAdvisor : % d'un coeur pour le conteneur le plus chargé
+        # cAdvisor : % d'un coeur pour le conteneur de la PLATEFORME le plus chargé. Pas
+        # l'observabilité (cAdvisor, Prometheus, Grafana) : leur charge propre n'est pas un
+        # signal d'attaque et dominait la feature (compactions, cAdvisor à 92 % de sa limite).
         "cpu_pct_max": (
-            f'100 * max(rate(container_cpu_usage_seconds_total{{name!=""}}[{w}]))'
+            f"100 * max(rate(container_cpu_usage_seconds_total{{{PLATFORM}}}[{w}]))"
         ),
-        # cAdvisor : % de la limite mémoire pour le conteneur le plus chargé
+        # cAdvisor : % de la limite mémoire pour le conteneur de la plateforme le plus chargé
         # (seuls les conteneurs avec limite définie comptent)
         "mem_pct_max": (
-            "100 * max(container_memory_working_set_bytes{name!=\"\"} "
-            "/ (container_spec_memory_limit_bytes{name!=\"\"} > 0))"
+            f"100 * max(container_memory_working_set_bytes{{{PLATFORM}}} "
+            f"/ (container_spec_memory_limit_bytes{{{PLATFORM}}} > 0))"
         ),
         "db_errors_per_s": f"sum(rate(resilience_db_errors_total[{w}]))",
     }

@@ -220,7 +220,7 @@ Aucun risque Élevé ou Critique ne subsiste. Les quatre risques Moyens (SO1-SO5
 | Id | Élément | Critère dominant | Où |
 |---|---|---|---|
 | **VM5** | **Accès privilégié au back-office** (habilitations, rôles, visages des agents) | Confidentialité, intégrité | `services/backoffice`, `services/auth` (`/api/v1/admin/*`) |
-| **BS11** | **face-id** (modèle `face_recognition`/dlib de l'équipe) + table `face_enrollments` | Confidentialité (donnée biométrique **sensible, RGPD**) | `services/face-id`, `resilience_db` migration `0003` [R] |
+| **BS11** | **face-id** (modèle `face_recognition`/dlib de l'équipe) + table `face_enrollments` | Confidentialité (donnée biométrique **sensible, RGPD**) | `services/face-id`, `resilience_db` migrations `0002`/`0009` [R] |
 | **BS12** | **Clé `FACE_DATA_KEY`** (AES-256-GCM, SOPS) | Confidentialité | `security/sops/secrets.example.env` [R] ; clé réelle [S] |
 | **BS13** | **Broker MQTT + ESP8266 + LED** | Disponibilité (témoin), pas un facteur | `infra/mosquitto`, `iot/esp8266-led` [R] code, [M] matériel |
 | **BS14** | **Listener hôte WAF `127.0.0.1:9443`** | Intégrité du périmètre | `security/waf/nginx.conf`, `infra/compose` [R] |

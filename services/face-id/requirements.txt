@@ -1,10 +1,11 @@
-# Dépendances runtime épinglées, alignées sur le jeu testé d'auth / payment-api. Les libs du
-# monorepo resilience_common / resilience_db s'installent séparément depuis libs/python/
-# (cf. Dockerfile) ; leurs dépendances (SQLAlchemy, alembic, psycopg, prometheus-client) sont
-# donc listées ici. Noyau testable sans modèle ML : le backend par défaut est un stub.
+# Dépendances runtime épinglées, alignées sur le jeu testé d'auth / payment-api. Noyau testable
+# sans modèle ML : le backend par défaut est un stub déterministe.
 fastapi==0.146.0
-uvicorn[standard]==0.54.0
+uvicorn==0.54.0
 pydantic==2.14.1
+# Les libs du monorepo resilience_common / resilience_db s'installent depuis libs/python/
+# (--no-deps, cf. Dockerfile) : JAMAIS par leur nom ici, pip irait les chercher sur PyPI.
+# Leurs dépendances runtime sont donc épinglées explicitement (mêmes versions qu'auth).
 SQLAlchemy==2.1.5
 alembic==1.20.0
 psycopg[binary]==3.3.6

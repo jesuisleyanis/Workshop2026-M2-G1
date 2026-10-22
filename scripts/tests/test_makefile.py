@@ -8,6 +8,7 @@ Python du dépôt est bien couvert, qu'un process pytest est lancé par composan
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -61,3 +62,18 @@ def test_face_auth_components_are_aggregated() -> None:
     # Exigence Node documentée (jsdom/undici) plutôt qu'un chemin d'interpréteur codé en dur.
     assert re.search(r"Node >= 22\.15", MAKEFILE)
     assert "test: test-py test-front" in MAKEFILE
+def test_every_vitest_app_is_covered_by_test_front() -> None:
+    recipe = _recipe("test-front")
+    # La boucle itère sur $(FRONT_APPS) : on l'expanse pour contrôler la liste réelle des apps.
+    m = re.search(r"for app in ([^;]*);", recipe)
+    assert m, "boucle `for app in ...` absente de test-front"
+    looped = m.group(1).replace("$(FRONT_APPS)", " ".join(_var("FRONT_APPS")))
+    for top, dirs, files in os.walk(ROOT):
+        dirs[:] = [d for d in dirs if d not in {"node_modules", ".git", "dist"}]
+        if "package.json" not in files or Path(top) == ROOT:
+            continue
+        scripts = json.loads((Path(top) / "package.json").read_text(encoding="utf-8")).get("scripts", {})
+        if "vitest" not in scripts.get("test", ""):
+            continue
+        rel = Path(top).relative_to(ROOT).as_posix()
+        assert re.search(rf"(?:^|\s){re.escape(rel)}(?:\s|$)", looped), f"{rel} non couvert par make test-front"

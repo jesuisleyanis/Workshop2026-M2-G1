@@ -56,7 +56,7 @@ def _servers(text: str) -> list[str]:
 
 
 def _locations(block: str) -> list[str]:
-    return re.findall(r"location\s+((?:\^~\s+|=\s+)?\S+)\s*\{", block)
+    return re.findall(r"location\s+((?:\^~\s+|=\s+|~\s+)?\S+)\s*\{", block)
 
 
 PUBLIC_SERVER = next(b for b in _servers(NGINX) if "listen 8443" in b)
@@ -65,7 +65,10 @@ HOST_SERVER = next((b for b in _servers(NGINX) if "listen 9443" in b), "")
 
 def test_only_public_routes_are_proxied():
     assert set(_locations(PUBLIC_SERVER)) == {
-        "= /healthz", "/", "/api/v1/accounts", "/api/v1/transactions", "/api/v1/login", "/api/v1/register",
+        "= /healthz", "/", "/api/v1/accounts", "/api/v1/transactions", "~ ^/api/v1/transactions/[0-9]+$",
+        "= /api/v1/status", "/api/v1/beneficiaries", "= /api/v1/stats/spending", "= /api/v1/limits",
+        "/api/v1/cards", "/api/v1/scheduled-transfers", "/api/v1/notifications", "= /api/v1/statements",
+        "/api/v1/login", "/api/v1/register", "= /api/v1/auth/step-up",
         "^~ /api/v1/auth/", "^~ /api/v1/admin/",
     }
     for forbidden in ("/internal", "/metrics", "remediation", "dashboard:"):
@@ -76,6 +79,10 @@ def test_public_server_returns_404_on_host_only_prefixes():
     for prefix in ("/api/v1/auth/", "/api/v1/admin/"):
         assert re.search(rf"location \^~ {re.escape(prefix)}\s*\{{\s*return 404;\s*\}}", PUBLIC_SERVER), prefix
         assert "auth_api" not in re.search(rf"location \^~ {re.escape(prefix)}\s*\{{[^}}]*\}}", PUBLIC_SERVER).group(0)
+    # Seule route /api/v1/auth/ publique : la ré-authentification du front (#51), en correspondance exacte.
+    step_up = re.search(r"location = /api/v1/auth/step-up\s*\{[^}]*\}", PUBLIC_SERVER)
+    assert step_up and "proxy_pass http://auth_api;" in step_up.group(0)
+    assert not re.search(r"location /api/v1/(auth|admin)/", PUBLIC_SERVER), "aucun préfixe auth/admin proxifié en public"
     # login / register restent publics.
     assert re.search(r"location /api/v1/login\s*\{[^}]*proxy_pass http://auth_api", PUBLIC_SERVER)
     assert re.search(r"location /api/v1/register\s*\{[^}]*proxy_pass http://auth_api", PUBLIC_SERVER)
@@ -121,7 +128,12 @@ def test_crs_allowed_methods_cover_every_backoffice_api_method():
     assert {"POST", "PATCH", "PUT", "DELETE"} <= used, "le scan des clients API a échoué"
     assert used <= allowed, f"méthodes bloquées par le CRS : {sorted(used - allowed)}"
     assert {"HEAD", "OPTIONS"} <= allowed  # défaut CRS conservé (sondes, pré-vols)
-    assert "ALLOWED_METHODS" not in DOCKERFILE  # une seule source de vérité : le Compose
+    # Le Compose surcharge le défaut de l'image (DELETE/PATCH du front) en y ajoutant ce que le
+    # back-office utilise ; PUT reste refusé sur le serveur public par $method_denied (405).
+    image = set(re.search(r'ALLOWED_METHODS="([^"]+)"', DOCKERFILE).group(1).split())
+    assert image <= allowed
+    assert re.search(r"if \(\$method_denied\)\s*\{\s*return 405;\s*\}", PUBLIC_SERVER)
+    assert "$method_denied" not in HOST_SERVER, "l'API d'administration (PATCH/PUT/DELETE) passe sur 9443"
 
 
 def test_host_listener_9443_routes_auth_admin_and_backoffice():
@@ -132,7 +144,8 @@ def test_host_listener_9443_routes_auth_admin_and_backoffice():
     assert "ssl_protocols       TLSv1.2 TLSv1.3;" in HOST_SERVER
     assert "if ($blocked_source) { return 403; }" in HOST_SERVER
     assert "client_max_body_size 4m;" in HOST_SERVER
-    for header in ("X-Content-Type-Options nosniff", "X-Frame-Options DENY", "Referrer-Policy no-referrer"):
+    for header in ("X-Content-Type-Options nosniff", "X-Frame-Options DENY", "Referrer-Policy no-referrer",
+                   'Strict-Transport-Security "max-age=31536000"'):
         assert f"add_header {header} always;" in HOST_SERVER
     # Le back-office pose lui-même sa CSP / Permissions-Policy ; le WAF ne doit pas la contredire.
     for m in re.findall(r"add_header\s+Permissions-Policy\s+(.*?);", HOST_SERVER):
@@ -143,6 +156,111 @@ def test_host_listener_9443_routes_auth_admin_and_backoffice():
         loc = re.search(rf"location {re.escape(prefix)}\s*\{{[^}}]*\}}", HOST_SERVER).group(0)
         assert "proxy_pass http://auth_api;" in loc
         assert "proxy_set_header X-Forwarded-For $remote_addr;" in loc
+
+
+def test_crs_allows_delete_and_patch_but_not_put():
+    # #43 : DELETE /api/v1/beneficiaries/{id}. Sans ALLOWED_METHODS, la règle CRS 911100 le bloque.
+    m = re.search(r'ALLOWED_METHODS="([^"]+)"', DOCKERFILE)
+    assert m, "ALLOWED_METHODS doit être fixé dans l'image WAF"
+    assert set(m.group(1).split()) == {"GET", "HEAD", "POST", "OPTIONS", "DELETE", "PATCH"}
+
+
+def test_delete_and_patch_are_denied_everywhere_except_their_one_route():
+    conf = _directives(NGINX)
+    m = re.search(r'map "\$request_method:\$uri" \$method_denied \{\s*default 0;((?:\s*"~[^"]+" 1;)+)\s*\}', conf)
+    assert m, "map $method_denied absente"
+    assert re.search(r"if \(\$method_denied\)\s*\{\s*return 405;\s*\}", conf)
+    rules = [re.compile(r) for r in re.findall(r'"~([^"]+)" 1;', m.group(1))]
+
+    def denied(probe: str) -> bool:
+        return any(r.search(probe) for r in rules)
+
+    assert not denied("DELETE:/api/v1/beneficiaries/12")
+    assert not denied("PATCH:/api/v1/cards/3")
+    assert not denied("PATCH:/api/v1/scheduled-transfers/7") and not denied("DELETE:/api/v1/scheduled-transfers/7")
+    assert denied("DELETE:/api/v1/scheduled-transfers") and denied("PATCH:/api/v1/scheduled-transfers/7/x")
+    for probe in ("DELETE:/api/v1/beneficiaries", "DELETE:/api/v1/beneficiaries/12/x",
+                  "DELETE:/api/v1/accounts", "DELETE:/api/v1/cards/3", "DELETE:/",
+                  "PATCH:/api/v1/cards", "PATCH:/api/v1/cards/3/freeze", "PATCH:/api/v1/accounts",
+                  "PATCH:/api/v1/beneficiaries/12"):
+        assert denied(probe), probe
+    assert not denied("GET:/api/v1/accounts") and not denied("POST:/api/v1/cards/3/freeze")
+    # PUT (admis par le CRS pour le listener hôte 9443) est refusé partout sur le serveur public.
+    for probe in ("PUT:/api/v1/accounts", "PUT:/api/v1/cards/3", "PUT:/api/v1/admin/users/1/face", "PUT:/"):
+        assert denied(probe), probe
+
+
+def test_scheduled_transfers_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=schedules_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/scheduled-transfers\s+\{\s*limit_req zone=schedules_per_ip", conf)
+
+
+def test_notifications_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=notifications_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/notifications\s+\{\s*limit_req zone=notifications_per_ip", conf)
+
+
+def test_statements_route_is_exact_rate_limited_and_read_only():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=statements_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    block = re.search(r"location = /api/v1/statements\s*\{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block and "limit_req zone=statements_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
+
+
+def test_cards_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=cards_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/cards\s+\{\s*limit_req zone=cards_per_ip", conf)
+
+
+def test_spending_stats_route_is_rate_limited_and_read_only():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=stats_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    block = re.search(r"location = /api/v1/stats/spending \{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block and "limit_req zone=stats_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
+
+
+def test_transaction_detail_is_rate_limited_but_transfers_are_not():
+    # #45 : GET /api/v1/transactions/{id} (regex, prioritaire sur le préfixe) est borné par IP ;
+    # le préfixe (POST de virement, cible de service_flood) reste sans limite côté WAF.
+    conf = _directives(NGINX)
+    block = re.search(r"location ~ \^/api/v1/transactions/\[0-9\]\+\$ \{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block, "location regex du détail absente"
+    assert "limit_req zone=tx_detail_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=tx_detail_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    prefix = re.search(r"location /api/v1/transactions\s+\{([^}]*)\}", conf)
+    assert prefix and "limit_req" not in prefix.group(1), "ne pas étouffer service_flood au WAF"
+
+
+def test_limits_route_is_exact_rate_limited_and_read_only():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=limits_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    block = re.search(r"location = /api/v1/limits\s*\{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block and "limit_req zone=limits_per_ip" in block.group(1)
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", block.group(1))
+
+
+def test_beneficiaries_route_is_rate_limited_per_ip():
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=beneficiaries_per_ip:\d+m\s+rate=\d+r/m;", conf)
+    assert re.search(r"location /api/v1/beneficiaries \{\s*limit_req zone=beneficiaries_per_ip", conf)
+
+
+def test_public_status_route_is_exact_rate_limited_and_read_only():
+    # #42 : route sans auth -> correspondance exacte (pas de préfixe ouvert sur payment-api),
+    # limite par IP, GET seulement.
+    conf = _directives(NGINX)
+    assert re.search(r"limit_req_zone\s+\$binary_remote_addr\s+zone=status_per_ip:\d+m\s+rate=\d+r/s;", conf)
+    block = re.search(r"location = /api/v1/status\s*\{([^}]*\{[^}]*\}[^}]*)\}", conf)
+    assert block, "location exacte /api/v1/status absente"
+    body = block.group(1)
+    assert "limit_req zone=status_per_ip" in body and "proxy_pass http://payment_api;" in body
+    assert re.search(r"limit_except GET\s*\{\s*deny all;\s*\}", body)
 
 
 # --------------------------------------------------------------------------- #6 Dockerfile / non-root / TLS
@@ -199,6 +317,7 @@ def test_compose_publishes_80_443_to_unprivileged_ports_with_valid_healthcheck()
     test = waf["healthcheck"]["test"]
     assert test[0] == "CMD-SHELL" and "8443/healthz" in test[1], "healthcheck exec-form malformé (ticket #10)"
     assert {n for n, svc in services.items() if "ports" in svc} == {"waf", "mosquitto"}, "seuls le WAF (HTTP) et mosquitto (MQTT hotspot) publient des ports"
+    assert services["mosquitto"]["ports"] == ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]
 
 
 # --------------------------------------------------------------------------- #12 waf-exporter
@@ -234,3 +353,25 @@ def test_waf_exporter_image_is_non_root_and_bundles_shared_lib():
     assert re.search(r"^USER 10006:10006", EXPORTER_DOCKERFILE, re.M)
     assert "libs/python/resilience_common" in EXPORTER_DOCKERFILE
     assert 'CMD ["python", "/app/waf_exporter.py"]' in EXPORTER_DOCKERFILE
+
+
+
+def test_plain_http_only_redirects_to_https_and_hsts_is_sent():
+    conf = _directives(NGINX)
+    plain = re.search(r"server \{\s*listen 8080;(.*?)\n    \}", conf, re.S)
+    assert plain, "serveur HTTP clair dédié"
+    body = plain.group(1)
+    assert "return 301 https://$host$request_uri;" in body and "proxy_pass" not in body
+    assert re.search(r"location = /healthz", body), "sonde de vie conservée sur :8080"
+    tls = conf[conf.index("listen 8443 ssl;"):]
+    assert "listen 8080;" not in tls, "l'API n'est jamais servie en clair"
+    assert 'add_header Strict-Transport-Security "max-age=31536000" always;' in conf
+
+
+def test_modsecurity_audit_log_never_contains_request_bodies():
+    import yaml
+
+    env = yaml.safe_load(COMPOSE)["services"]["waf"]["environment"]
+    parts = env["MODSEC_AUDIT_LOG_PARTS"]
+    assert not set(parts) & set("CIJ"), "pas de corps de requête (mots de passe)"
+    assert {"A", "B", "H", "Z"} <= set(parts), "ce que lit waf-exporter (uri, règles)"
