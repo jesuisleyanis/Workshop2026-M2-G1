@@ -26,6 +26,6 @@ docs/dossier/build.sh --html-only    # sans Chrome : ouvrir dossier.html et « I
 - Pas de surclaim : ce qui n'est pas mesuré est marqué **[M]** (tableau des MTTD/MTTR du §8, à remplir après la recette J4).
 - Cohérence avec le code : proxy Docker = HAProxy (pas Tecnativa), métriques et événements = noms du contrat,
   compteurs de tests = ceux de `make test`.
-- Les lignes « à compléter » du §13 (contributions) sont à renseigner par l'équipe avant la remise.
+- Le §13 (contributions) est établi à partir des commits (`git shortlog -sn`, scopes) : à relire par chaque membre.
 - Contrôle de pagination après chaque modification : `build.sh` affiche le nombre de pages (page de garde et annexes comprises :
   viser ≤ 12 pages au total avec ~10 pages de corps).

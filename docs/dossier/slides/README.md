@@ -16,8 +16,7 @@ cd docs/dossier/slides && npm install && node build.js      # -> ../../../Worksh
 
 ## Contrôles effectués / à faire
 
-- Validation OOXML (schémas, relations, graphique natif) : OK au 19 octobre 2026.
-- Contrôle géométrique des débordements de texte (python-pptx, heuristique) : OK.
+- Validation OOXML (schémas, relations, graphique natif) : OK au 19 octobre 2026 ; archive relue au 22 octobre (11 slides).
+- Contrôle géométrique des débordements de texte (python-pptx, heuristique) : OK au 22 octobre, cadres limites sur les slides 3 et 7 à vérifier à l'œil.
 - **Relecture visuelle dans PowerPoint ou LibreOffice à faire** (non disponible sur le poste de génération) :
-  vérifier l'ajustement des textes, puis remplacer les `[M]` (slide 8) par les mesures de recette et compléter
-  les contributions (slide 10) avant la remise.
+  vérifier l'ajustement des textes, puis remplacer les `[M]` (slide 9) par les p95 de la recette avant la remise.

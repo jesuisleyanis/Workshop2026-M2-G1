@@ -7,13 +7,13 @@
 ## 0. Pré-vol (la veille / le matin)
 
 - [ ] `ROADMAP.md` à jour : plus aucune ligne ⬜ sur le périmètre remis (ou reportée explicitement ⏭️).
-- [ ] Les `[M]` du dossier (§11) et des slides (slide 8) **remplacés** par les MTTD/MTTR mesurés en recette.
+- [ ] Les `[M]` du dossier (§8 et §11) et des slides (slide 9) **remplacés** par les p95 mesurés en recette (≥ 10 rejeux).
 - [ ] Clip Chrono enregistré (`docs/dossier/clip/README.md`) → `Workshop2026-M2-G1-VidChrono.mp4`.
 
 ## 1. Tests verts (Definition of Done)
 
 ```bash
-make test            # 12 composants Python + front + dashboard, tout vert
+make test            # 13 composants Python + front + back-office + dashboard, tout vert (1 667 tests au 22/10)
 ```
 
 - [ ] `make test` = OK (aucun composant rouge). Procédure venv : `README.md § Tests`.
@@ -28,7 +28,7 @@ make verify                    # transaction de contrôle -> exit 0
 ```
 
 - [ ] Chaîne `avant → attaque → détection → remédiation → après` rejouée **sans intervention humaine**.
-- [ ] MTTD/MTTR relevés et reportés (dossier §11, slides, clip).
+- [ ] MTTD/MTTR relevés et reportés (dossier §8 et §11, slide 9, clip).
 - [ ] `make down` propre.
 
 ## 3. Arbre propre, PUIS régénération des livrables (même commit)

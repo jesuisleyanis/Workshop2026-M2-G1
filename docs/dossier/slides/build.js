@@ -109,14 +109,14 @@ arrow(s, 2.0, 1.575, 2.55, 1.575, C.accent2);
 box(s, 2.55, 1.3, 1.9, 0.55, "WAF · ModSecurity + CRS\n[edge — seul exposé]", C.text1, C.background1, 10);
 arrow(s, 3.5, 1.85, 3.5, 2.2);
 box(s, 2.3, 2.2, 0.75, 0.5, "front", C.accent5);
-box(s, 3.1, 2.2, 1.0, 0.5, "payment-api", C.accent5);
+box(s, 3.1, 2.2, 1.0, 0.5, "payment-api ×3", C.accent5);
 box(s, 4.15, 2.2, 0.75, 0.5, "auth", C.accent5);
 arrow(s, 3.6, 2.7, 3.6, 3.05);
 box(s, 2.7, 3.05, 1.8, 0.5, "PostgreSQL [data interne]", C.text2, C.background1, 10);
 // Colonne droite : chaîne de reprise
 box(s, 5.6, 1.3, 1.85, 0.55, "Prometheus · Loki · Grafana\n[obs]", C.accent5, C.background1, 10);
 arrow(s, 6.525, 1.85, 6.525, 2.2, C.accent3);
-box(s, 5.6, 2.2, 1.85, 0.55, "collector → detector\nIsolationForest (ML)", C.accent3, C.background1, 10);
+box(s, 5.6, 2.2, 1.85, 0.55, "collector → detector (1 s)\nIsolationForest (ML)", C.accent3, C.background1, 10);
 arrow(s, 6.525, 2.75, 6.525, 3.05, C.accent3);
 box(s, 5.6, 3.05, 1.85, 0.55, "Moteur de remédiation\n[app, jamais exposé]", C.accent1, C.background1, 10);
 arrow(s, 7.45, 3.325, 7.9, 3.325, C.accent1);
@@ -126,9 +126,9 @@ box(s, 5.6, 3.95, 1.85, 0.5, "Dashboard (SSE, MTTD/MTTR)", C.text1, C.background
 arrow(s, 5.6, 3.325, 4.5, 3.325, C.accent1); // moteur -> plateforme (actions)
 T(s, "actions : blocage IP, redémarrage, restauration", { x: 4.35, y: 3.6, w: 1.6, h: 0.5, fontSize: 9, color: C.text2, align: "center" });
 T(s, [
-  { text: "4 réseaux Compose (edge / app / data interne / obs) ; audit.sh échoue si un autre service que le WAF publie un port.", options: { bullet: true, breakLine: true, paraSpaceAfter: 3 } },
+  { text: "Réseaux séparés (edge, app, data interne, obs, ai, iot) ; audit.sh échoue si un service autre que le WAF publie un port.", options: { bullet: true, breakLine: true, paraSpaceAfter: 3 } },
   { text: "Contrats d'interfaces figés en J1 (logs JSON, métriques, AnomalyEvent, table de décision) et vérifiés par des tests.", options: { bullet: true, breakLine: true, paraSpaceAfter: 3 } },
-  { text: "Assistant RAG (Ollama ≤ 8B) séparé de l'automate ; chemin SOC (Alertmanager) secondaire, authentifié.", options: { bullet: true } },
+  { text: "Back-office joignable depuis l'hôte seul ; assistant RAG isolé de l'automate.", options: { bullet: true } },
 ], { x: 0.5, y: 4.0, w: 4.9, h: 1.1, fontSize: 11, color: C.text2 });
 s.addNotes("Lire de gauche à droite : le chemin métier (attaquant, WAF, services, base interne) et la chaîne de reprise (observabilité, ML, moteur, actions, dashboard). Python/FastAPI partout, React/Tailwind pour les fronts.");
 
@@ -139,8 +139,8 @@ s.addText("La démo en cinq temps, d'une seule commande", { placeholder: "title"
 const steps = [
   ["1", "Avant", "verify_tx : une transaction fictive traverse WAF → API → base (code 0).", C.accent1],
   ["2", "Attaque", "service_flood depuis le PC Attaquant : rafale bornée (≤ 80 req/s, 30 s), kill-switch.", C.accent2],
-  ["3", "Détection", "vecteur de 9 features toutes les 15 s, score IsolationForest > seuil → AnomalyEvent.", C.accent3],
-  ["4", "Remédiation", "table de décision : blocage IP (WAF) → redémarrage payment-api via le proxy ; verify_tx après chaque action.", C.accent1],
+  ["3", "Détection", "vecteur de 9 features chaque seconde, score IsolationForest tenu au-dessus du seuil → AnomalyEvent avec l'IP source.", C.accent3],
+  ["4", "Remédiation", "table de décision : vérification d'abord, puis blocage IP (WAF) → redémarrage progressif de payment-api ; verify_tx après chaque action.", C.accent1],
   ["5", "Après", "verify_tx OK → incident clos ; timeline, MTTD et MTTR affichés sur le dashboard.", C.accent1],
 ];
 steps.forEach(([n, title, body, color], i) => {
@@ -162,14 +162,14 @@ s.addNotes("C'est la séquence du Clip Chrono et de la démo live. Annoncer que 
 pres.addSection({ title: "Technique" });
 s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Technique" });
 s.addText("Détection : un modèle décide, pas des if", { placeholder: "title" });
-card(s, 0.5, 1.3, 4.3, 1.8, "Données et modèle", "Prometheus → 9 features / 15 s (req/s, latence p95, 4xx, 5xx, échecs de login, blocages WAF, CPU, RAM, erreurs DB). IsolationForest, 200 arbres ; seuil 0,6296 = quantile 99,9 % de la baseline ; artefact v1.0.0, SHA-256 vérifié au chargement.", C.accent3);
-card(s, 0.5, 3.25, 4.3, 1.8, "Limites assumées", "Baseline et attaques synthétiques : avant production, 2–4 semaines de trafic réel et revue du seuil. Le type d'incident est une heuristique de routage : le modèle décide qu'il y a anomalie, la table décide quoi faire. Faux positif = un redémarrage inutile, borné par le cooldown.", C.accent4, { bodySize: 11 });
+card(s, 0.5, 1.3, 4.3, 1.8, "Données et modèle", "9 features chaque seconde (débit, latence, 4xx/5xx, échecs de login, blocages WAF, CPU/RAM, erreurs DB). IsolationForest entraîné sur des séries réelles ; seuil calibré 0,708, 0,65 en démo ; empreinte vérifiée.", C.accent3);
+card(s, 0.5, 3.25, 4.3, 1.8, "Limites assumées", "Calibré avant les 3 répliques : recapture à refaire. Seuil de démo plus sensible (~2 fausses alertes/h). Le modèle décide qu'il y a anomalie, la table décide quoi faire.", C.accent4, { bodySize: 11 });
 s.addTable([
-  [{ text: "Scénario", options: { bold: true, fill: { color: THEME.colors.lt2 } } }, { text: "Détection (modèle seul)", options: { bold: true, fill: { color: THEME.colors.lt2 } } }],
-  ["service_flood", "100 %"], ["auth_abuse", "98,6 %"], ["web_attack", "95,7 %"], ["data_corruption", "100 %"],
-  [{ text: "Faux positifs (2 000 fenêtres normales)", options: { bold: true } }, { text: "0", options: { bold: true, color: THEME.colors.accent1 } }],
+  [{ text: "Scénario (3 passages)", options: { bold: true, fill: { color: THEME.colors.lt2 } } }, { text: "Délai modèle, pire cas", options: { bold: true, fill: { color: THEME.colors.lt2 } } }],
+  ["service_flood", "9 s"], ["auth_abuse", "7 s"], ["web_attack (garde-fou)", "4 s"], ["data_corruption (garde-fou)", "9 s"],
+  [{ text: "Faux positifs (3 601 fenêtres, seuil 0,708)", options: { bold: true } }, { text: "0", options: { bold: true, color: THEME.colors.accent1 } }],
 ], { x: 5.1, y: 1.3, w: 4.4, colW: [2.6, 1.8], fontSize: 12, color: THEME.colors.dk1, border: { type: "solid", color: THEME.colors.accent6, pt: 0.75 }, rowH: 0.36, margin: 0.05 });
-T(s, "Jeu d'évaluation synthétique (ml/training/artifacts/v1.0.0/baseline_stats.json). 100 % avec le garde-fou statistique (z ≥ 12,97), documenté comme filet, pas comme décideur.", { x: 5.1, y: 3.6, w: 4.4, h: 0.9, fontSize: 11, color: C.text2, italic: true });
+T(s, "Calibration sur captures réelles (ml/training/data/calibration.json) : 12 passages sur 12 détectés. Avant ce travail : 25 à 37 s (p95). Sur la stack : flood détecté en 2 s.", { x: 5.1, y: 3.6, w: 4.4, h: 0.9, fontSize: 11, color: C.text2, italic: true });
 s.addNotes("Répondre au §3.3 du sujet : données, préparation (z-score avec plancher), modèle, résultats, limites. Le seuil n'est pas une constante : il est dérivé de la distribution des scores.");
 
 // ================================================================ 6. Remédiation et privilèges
@@ -178,14 +178,14 @@ s.addText("Remédiation autonome, privilèges bornés", { placeholder: "title" }
 const hdr = (t) => ({ text: t, options: { bold: true, fill: { color: THEME.colors.lt2 } } });
 s.addTable([
   [hdr("incident_type"), hdr("Actions (dans l'ordre)"), hdr("Famille")],
-  ["service_flood", "waf_block_ip → restart_service(payment-api)", "Disponibilité"],
+  ["service_flood", "vérif. d'abord, puis waf_block_ip → restart_service(payment-api)", "Disponibilité"],
   ["auth_abuse", "waf_block_ip → tighten_rate_limit(auth, ×0,5)", "Accès"],
-  ["web_attack", "confirm_waf_block (Loki) → waf_blacklist_ip", "Confinement"],
+  ["web_attack", "waf_blacklist_ip → confirm_waf_block (Loki)", "Confinement"],
   [{ text: "data_corruption", options: { bold: true } }, { text: "restore_pg_dump(latest) — seul", options: { bold: true } }, { text: "Intégrité", options: { bold: true, color: THEME.colors.accent2 } }],
   ["unknown", "dry_run_report puis escalade", "Aucune action destructive"],
 ], { x: 0.5, y: 1.3, w: 5.6, colW: [1.45, 2.95, 1.2], fontSize: 11, color: THEME.colors.dk1, border: { type: "solid", color: THEME.colors.accent6, pt: 0.75 }, rowH: 0.34, margin: 0.05 });
 T(s, "Chaque action modifiante est suivie de verify_tx (5 essais / 3 s) ; cooldown 60 s, 3 tentatives, puis escalade notify_operator. Idempotence, incident actif dédoublonné, dry_run forçable.", { x: 0.5, y: 3.55, w: 5.6, h: 0.75, fontSize: 11, color: C.text2 });
-card(s, 6.4, 1.3, 3.1, 3.7, "Privilèges (point jury)", "• Socket Docker en lecture seule dans un proxy HAProxy : 5 couples méthode/chemin autorisés (ping, list, inspect, restart, HUP), jamais exec/create.\n• Bearer interne (SOPS, fail closed), aucun port publié, jamais sur edge.\n• Playbooks nommés, exécutés dans le conteneur ; listes blanches ; IP de l'hôte jamais bloquée.\n• Non-root, cap_drop ALL, no-new-privileges.\n• Token volé = au pire 3 redémarrages tracés.", C.accent1, { bodySize: 11 });
+card(s, 6.4, 1.3, 3.1, 3.7, "Privilèges (point jury)", "• Socket Docker derrière HAProxy : 5 appels autorisés (ping, list, inspect, restart, HUP), jamais exec/create.\n• Bearer interne (SOPS), aucun port publié, jamais sur edge.\n• Listes blanches ; réseaux internes jamais bloqués ; blocages expirants (1 h) ; déblocage par jeton opérateur.\n• Non-root, cap_drop ALL, no-new-privileges.\n• Token volé = au pire 3 redémarrages tracés.", C.accent1, { bodySize: 11 });
 s.addNotes("La table YAML est la seule source de vérité ; le moteur ne contient que des invariants de sécurité. Expliquer pourquoi le socket brut serait root sur l'hôte et pourquoi les variables des proxys génériques sont trop larges.");
 
 // ================================================================ 7. Sécurité & Red Team
@@ -205,38 +205,57 @@ sc.forEach(([n, d, color], i) => {
   T(s, d, { x: 0.95, y: y + 0.3, w: 3.9, h: 0.4, fontSize: 11, color: C.text2 });
 });
 T(s, "Périmètre strict : cible = la stack du projet sur RESILIENCE-G1, ≤ 100 req/s, ≤ 60 s, arrêt automatique, kill-switch, reset. Pannes non malveillantes (chaos) en complément.", { x: 0.5, y: 4.4, w: 4.4, h: 0.7, fontSize: 10, color: C.text2, italic: true });
-card(s, 5.2, 1.25, 4.3, 3.75, "Mesures défensives", "• WAF Nginx + ModSecurity + OWASP CRS, image officielle épinglée, non-root, seul point exposé, deny-list IP rechargeable à chaud.\n• Secrets : SOPS + age, clé privée hors git, gitleaks en pre-commit, archive re-scannée (noms et contenu).\n• Durcissement : non-root, cap_drop ALL, no-new-privileges, read_only, limites CPU/RAM, healthchecks ; Postgres non-root sans capability.\n• Fonction SOC : logs JSON normalisés → Loki ; 4 règles Grafana + miroir Prometheus → Alertmanager → moteur (authentifié).\n• Écarts assumés : pas de MFA, JWT symétrique partagé, TLS auto-signé, sauvegardes sur le même hôte.", C.accent1, { bodySize: 11 });
+card(s, 5.2, 1.25, 4.3, 3.75, "Mesures défensives", "• WAF Nginx + ModSecurity + OWASP CRS, image officielle épinglée, non-root, seul point exposé, deny-list IP rechargeable à chaud.\n• Secrets : SOPS + age, clé privée hors git, gitleaks en pre-commit, archive re-scannée (noms et contenu).\n• Durcissement : non-root, cap_drop ALL, no-new-privileges, read_only, limites CPU/RAM, healthchecks ; Postgres non-root sans capability.\n• Fonction SOC : logs JSON normalisés → Loki ; 4 règles Grafana + miroir Prometheus → Alertmanager → moteur (authentifié).\n• Écarts assumés : pas de MFA client (step-up sur les gros virements), JWT symétrique partagé, TLS auto-signé, sauvegardes sur le même hôte.", C.accent1, { bodySize: 11 });
 s.addNotes("Le WAF est la seule porte ; le reste est interne. Dire les écarts avant que le jury ne les trouve.");
+
+// ================================================================ 7 bis. Consigne Additionnelle 1
+s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Technique" });
+s.addText("Consigne 1 : back-office par le visage", { placeholder: "title" });
+const ca = [
+  ["1", "Identifiant", "réponse identique, compte existant ou non (anti-énumération).", C.accent5],
+  ["2", "Visage", "3 poses dans un ordre tiré par le serveur ; pose et identité vérifiées (dlib).", C.accent3],
+  ["3", "Mot de passe", "et rôle operator/admin ; 2 échecs → verrouillage 5 min.", C.accent1],
+];
+ca.forEach(([n, title, body, color], i) => {
+  const y = 1.3 + i * 0.95;
+  s.addShape(pres.ShapeType.ellipse, { x: 0.5, y, w: 0.5, h: 0.5, fill: { color }, line: { color }, objectName: `ca step ${n}` });
+  T(s, n, { x: 0.5, y, w: 0.5, h: 0.5, fontSize: 18, bold: true, color: C.background1, align: "center", valign: "middle" });
+  T(s, title, { x: 1.15, y: y - 0.05, w: 3.6, h: 0.35, fontSize: 14, bold: true });
+  T(s, body, { x: 1.15, y: y + 0.28, w: 3.6, h: 0.5, fontSize: 11, color: C.text2 });
+});
+T(s, "La LED ESP8266 (MQTT, fail-open) rend l'état de l'authentification : 5 motifs.", { x: 0.5, y: 4.2, w: 4.3, h: 0.7, fontSize: 11, color: C.text2, italic: true });
+card(s, 5.1, 1.25, 4.4, 3.75, "Choix et garde-fous", "• Facteur sur l'accès privilégié seulement : verify_tx, détection, remédiation et Clip ne dépendent ni de la caméra ni du broker.\n• Caméra de l'hôte garantie : back-office et /auth, /admin servis par un listener WAF lié à 127.0.0.1:9443.\n• Biométrie : 3 gabarits + vignettes basse résolution chiffrés AES-256-GCM (clé SOPS), consultation journalisée, effacement total (ADR 0007).\n• Habilitations : rôles, enrôlement/révocation, bootstrap du 1er admin, dernier admin protégé ; break-glass au PCA.\n• Reste à recetter : build dlib, caméra réelle, ESP8266.", C.accent1, { bodySize: 11 });
+s.addNotes("Réponse à la consigne additionnelle du 20/10. Insister sur le garde-fou : le facteur visage ne peut pas auto-saboter la démo de reprise. Dire le résiduel (3 poses rejouées dans l'ordre affiché) avant que le jury le trouve.");
 
 // ================================================================ 8. Résultats des essais
 pres.addSection({ title: "Résultats" });
 s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Résultats" });
 s.addText("Résultats : prouvé, et encore à mesurer", { placeholder: "title" });
 s.addChart(pres.ChartType.bar, [{
-  name: "Tests automatisés verts (19 oct. 2026)",
-  labels: ["dashboard", "remediation", "assistant", "payment-api", "ml", "front", "auth", "attacks", "waf", "scripts", "infra", "libs"],
-  values: [121, 105, 97, 54, 50, 44, 35, 30, 25, 16, 11, 10],
+  name: "Tests automatisés verts (22 oct. 2026)",
+  labels: ["payment-api", "auth", "remediation", "dashboard", "front", "backoffice", "assistant", "ml", "face-id", "infra", "scripts", "waf", "attacks", "libs"],
+  values: [247, 228, 176, 152, 138, 134, 132, 108, 94, 76, 65, 50, 36, 31],
 }], {
   x: 0.5, y: 1.25, w: 5.3, h: 3.8, barDir: "bar", chartColors: [THEME.colors.accent3],
-  showTitle: true, title: "Tests automatisés verts par composant (598 au total)", titleFontSize: 12, titleColor: THEME.colors.dk1, titleFontFace: "+mn-lt",
+  showTitle: true, title: "Tests automatisés verts par composant (1 667 au total)", titleFontSize: 12, titleColor: THEME.colors.dk1, titleFontFace: "+mn-lt",
   showValue: true, dataLabelPosition: "outEnd", dataLabelFontSize: 10, dataLabelColor: THEME.colors.dk2, dataLabelFontFace: "+mn-lt",
   catAxisLabelFontSize: 10, catAxisLabelColor: THEME.colors.dk2, catAxisLabelFontFace: "+mn-lt", catGridLine: { style: "none" },
   valAxisLabelFontSize: 9, valAxisLabelColor: THEME.colors.accent5, valAxisLabelFontFace: "+mn-lt", valGridLine: { color: THEME.colors.accent6, size: 0.5 },
-  valAxisMaxVal: 140, showLegend: false, catAxisOrientation: "maxMin",
+  valAxisMaxVal: 280, showLegend: false, catAxisOrientation: "maxMin",
 });
 s.addTable([
-  [hdr("Scénario"), hdr("RTO perçu p95"), hdr("Cible")],
-  ["service_flood", "[M]", "≤ 60 s"], ["auth_abuse", "[M]", "≤ 60 s"], ["web_attack", "[M]", "immédiat"], ["data_corruption", "[M]", "≤ 2 min"],
-], { x: 6.1, y: 1.25, w: 3.4, colW: [1.4, 1.1, 0.9], fontSize: 11, color: THEME.colors.dk1, border: { type: "solid", color: THEME.colors.accent6, pt: 0.75 }, rowH: 0.34, margin: 0.05 });
-T(s, "[M] = mesuré en recette J4 (≥ 10 rejeux par scénario). RTO perçu = délai de détection + MTTR. Règle : si la cible n'est pas tenue, on révise la cible, pas la mesure.", { x: 6.1, y: 3.05, w: 3.4, h: 0.95, fontSize: 10, color: C.text2, italic: true });
-T(s, "Tests e2e (7) rejouent les 5 temps contre la stack réelle, dont data_corruption KO → OK. Chaque maillon du plan d'exécution est testé isolément (y compris l'exécution réelle du playbook WAF).", { x: 6.1, y: 4.05, w: 3.4, h: 1.0, fontSize: 10, color: C.text2 });
-s.addNotes("Honnêteté : les tests prouvent les contrats et la logique ; les MTTR viennent de la recette sur la machine hôte. Remplacer les [M] avant la soutenance.");
+  [hdr("Scénario"), hdr("Mesuré (1 rejeu)"), hdr("p95"), hdr("Cible")],
+  ["service_flood", "clos en 1,0 s", "[M]", "≤ 60 s"], ["auth_abuse", "clos en 1,3 s", "[M]", "≤ 60 s"], ["web_attack", "[M]", "[M]", "immédiat"], ["data_corruption", "[M]", "[M]", "≤ 2 min"],
+], { x: 6.1, y: 1.25, w: 3.4, colW: [1.15, 0.95, 0.5, 0.8], fontSize: 11, color: THEME.colors.dk1, border: { type: "solid", color: THEME.colors.accent6, pt: 0.75 }, rowH: 0.34, margin: 0.05 });
+T(s, "Rejeux du 21/10 sur la stack (détection → incident clos). [M] = p95 sur ≥ 10 rejeux en recette J4. Règle : si la cible n'est pas tenue, on révise la cible, pas la mesure.", { x: 6.1, y: 3.05, w: 3.4, h: 0.95, fontSize: 10, color: C.text2, italic: true });
+T(s, "Bascule : 188/188 requêtes servies en tuant une réplique de payment-api. Tests e2e (7) : les 5 temps contre la stack réelle, dont data_corruption KO → OK.", { x: 6.1, y: 4.05, w: 3.4, h: 1.0, fontSize: 10, color: C.text2 });
+s.addNotes("Honnêteté : les tests prouvent les contrats et la logique ; les temps viennent des rejeux sur la stack. Raconter la découverte : avant le 21/10, aucun incident n'avait jamais été clos. Remplacer les [M] par les p95 de la recette avant la soutenance.");
 
 // ================================================================ 9. Gouvernance
 pres.addSection({ title: "Gouvernance" });
 s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Gouvernance" });
 s.addText("Gouvernance reliée au démonstrateur", { placeholder: "title" });
-card(s, 0.5, 1.25, 2.9, 3.75, "EBIOS RM", "6 scénarios opérationnels = les 4 attaques + secret exposé + abus de l'automate.\n\nRisque initial : 5 Élevés (12). Résiduel : 0 Élevé ; 5 Moyens proposés à l'acceptation de la direction avec un indicateur chacun ; abus de l'automate ramené à Faible (3) par le proxy restreint.\n\nCoût d'arrêt : ~60 €/min direct, mais les coûts réglementaires croissent par seuils de durée — l'automatisation change la classe de l'incident.", C.accent4, { bodySize: 11 });
+card(s, 0.5, 1.25, 2.9, 3.75, "EBIOS RM", "9 scénarios : les 4 attaques, secret exposé, abus de l'automate, et 3 liés au visage.\n\nRésiduel : 0 Élevé ; les Moyens sont proposés à l'acceptation de la direction avec un indicateur chacun ; abus de l'automate ramené à Faible (3) par le proxy restreint.\n\nCoût d'arrêt : ~60 €/min direct, mais les coûts réglementaires croissent par seuils de durée — l'automatisation change la classe de l'incident.", C.accent4, { bodySize: 11 });
 card(s, 3.55, 1.25, 2.9, 3.75, "PCA / PRA", "Paiement : RTO ≤ 60 s, RPO 0 (redémarrage, pas de restauration).\nDonnées : RTO ≤ 2 min, RPO ≤ 5 min (dump périodique) — perte bornée, à accepter explicitement.\nSinistre majeur : reconstruction manuelle ≤ 60 min, RPO ≤ 1 h — plus zero-touch.\n\nL'humain décide avant (table versionnée, RTO/RPO), l'automate exécute pendant, l'humain analyse après (RACI).", C.accent1, { bodySize: 11 });
 card(s, 6.6, 1.25, 2.9, 3.75, "NIS2 / DORA", "DORA = référentiel principal (entité financière) ; NIS2 art. 21 en grille croisée. Aucune conformité revendiquée : démontré / partiel / non démontrable en 4 jours.\n\nArbitrages : reprise hybride (validation humaine avant restauration destructive en production) ; WAL + réplica pour un RPO ~0 ; ré-entraîner sur trafic réel ; Vault + JWT asymétrique ; SIEM avec rétention.\n\nFeuille de route 30 / 90 / 180 jours.", C.accent3, { bodySize: 11 });
 s.addNotes("Axe 4 : chaque recommandation s'appuie sur un élément vérifiable du dépôt (invariants, journal, métriques). Insister sur la distinction classe d'incident / coût direct.");
@@ -247,7 +266,7 @@ s = pres.addSlide({ masterName: "DARK", sectionTitle: "Conclusion" });
 s.addText("En contexte industriel", { placeholder: "title" });
 s.addText([
   { text: "Réplication et second site · modèle entraîné sur trafic réel, dérive surveillée · validation humaine avant restauration destructive · expiration des mesures · CI, SIEM, MFA, rotation des secrets.", options: { breakLine: true, paraSpaceAfter: 6 } },
-  { text: "Contributions : commits « type(scope) » + ROADMAP.md (propriétaire et preuve par tâche). Dév/Infra/Transformation : Yanis · Cyber : Louis · autres piliers : à compléter.", options: { color: C.accent5 } },
+  { text: "Contributions (détail : dossier §13) — Yanis Capelle : dév., intégration, gouvernance · Valentin Furcy : IA/Data, infra · Louis Nectoux : cybersécurité, back-office facial · Enzo Palermo : IoT, SOPS · Aurélien Serre : assistant RAG.", options: { color: C.accent5 } },
 ], { placeholder: "body" });
 T(s, "Place à la démonstration.", { x: 0.6, y: 4.5, w: 8.8, h: 0.5, fontSize: 20, bold: true, color: C.accent1 });
 s.addNotes("Clôturer sur les limites (crédibilité) puis enchaîner sur la démo live : 3 minutes, attaque depuis le PC Attaquant, personne ne touche au clavier côté hôte.");
