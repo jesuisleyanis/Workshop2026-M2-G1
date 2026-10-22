@@ -234,7 +234,7 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | L2 / C5 | `PIP_NO_CACHE_DIR` : tout re-télécharger à chaque changement de dépendances | `RUN --mount=type=cache,target=/root/.cache/pip` (étapes builder, image finale inchangée) | ✅ test ; build réel des 6 images racine OK (froid 4 min 08, rebuild à chaud 35 s) |
 | L3 / C4 | `up` entraînait le modèle sur l'hôte (sklearn local requis) alors que le build detector ré-entraîne | `model` retiré de `up*`, passe par l'image `ml-tools` ; cibles `build`, `start`, `start-full`, `retrain-detector` | ✅ test |
 | L4 / C6 | `depends_on` sans attente de santé | `condition: service_healthy` vers toute dépendance qui a un healthcheck | ✅ test + `docker compose config` |
-| L4 / C7 | Dashboard/Grafana publiés nulle part : visibilité du temps 5 de la démo | **Décision équipe** : `127.0.0.1:<port>` ou route WAF authentifiée | ⬜ à trancher |
+| L4 / C7 | Dashboard/Grafana publiés nulle part : visibilité du temps 5 de la démo | **Tranché** : `make ui` publie le seul dashboard sur `127.0.0.1:8081` (loopback du PC hôte, jamais le hotspot ; surcouche `docker-compose.ui-local.yml`) ; Grafana reste non publié (onglets ouverts depuis le PC hôte). Écritures du dashboard soumises au jeton opérateur (voir ci-dessous) | ✅ `test_local_ui_overlay_publishes_only_on_loopback` ; 🟨 validation live à faire sur machine Docker |
 | — | `test_mosquitto_is_limited_to_iot_profile_and_hotspot` rouge (`1883:1883` au lieu de `192.168.137.1:1883:1883`) | Mosquitto publié sur l'IP du hotspot uniquement (lot 5 ci-dessous) | ✅ tests verts |
 
 ### Détection rapide et corrections de la chaîne de reprise
@@ -262,6 +262,22 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | 8 | Une seule instance de payment-api : capacité limitée, un redémarrage = coupure | 3 répliques (`PAYMENT_API_REPLICAS`) derrière le WAF (`least_conn`, `max_fails`, `resolve`, bascule sans rejeu des POST) ; Prometheus découvre chaque réplique (DNS) ; `restart_service` progressif ; connexion bornée à 2 s, 3 essais | ✅ déployé : répartition 28/24/26 ; **bascule : 188/188 requêtes OK en tuant une réplique** (une requête à 2 s le temps de basculer) |
 | 9 | IP de l'attaquant masquée par Docker Desktop : blocage d'IP impossible, limitations de débit globales | Mode « IP réelle » (`REAL_IP=1`) : proxy natif Windows **Caddy** (`infra/caddy/`) qui écrase `X-Forwarded-For` ; WAF publié en 127.0.0.1 seulement et `realip` limité aux passerelles Docker ; mode par défaut inchangé (aucune confiance) | ✅ tests + script d'entrée (valeur piégée refusée) ; **simulé sur la stack** : auth_abuse depuis 192.168.137.99 détecté en 4 s, IP bloquée, incident clos en 4,2 s, autres clients non affectés ; 🟨 Caddy à installer sur le PC hôte |
 | 6 | Chemin SOC lent (`rate[1m]`, `for: 30s`, `group_wait: 5s`) | `rate[30s]`, `for: 10s`, évaluation 5 s, `group_wait: 1s` (Grafana ⇔ Prometheus miroir) | ✅ `test_soc_rules.py`, `promtool check rules` |
+
+### Intégration de `perf/lancement-stack` dans main (revue du 22/10)
+
+> Lignes ajoutées à la fusion : ce que la branche livrait sans ligne de suivi, et les correctifs de la revue.
+> « 🟨 live » = testé hors Docker uniquement ; à rejouer sur le PC hôte (poste de revue sans Docker).
+
+| # | Élément | Résolution | Statut / preuve |
+|---|---|---|---|
+| 10 | Carte « IP bloquées » du dashboard | `GET /waf/blocked-ips` (deny-list réellement appliquée par le WAF, enrichie par le journal) ; carte relevée toutes les 3 s via le proxy nginx (lecture, jeton de service) | ✅ `test_blocklist.py`, `test_api.py`, `BlockedIpsCard.test.tsx` ; 🟨 live |
+| 10 | Bouton « Débloquer » (IP par IP) | `DELETE /waf/blocked-ips/{ip}` : retrait atomique + rechargement du WAF via le proxy Docker. **Revue** : nginx injectait le jeton de service sur cette écriture (tout conteneur `app` / processus local pouvait débloquer sans secret) → **jeton opérateur** `REMEDIATION_OPERATOR_TOKEN` distinct, saisi par l'humain (sessionStorage, effacé sur 401/403), relayé et jamais injecté par nginx ; jeton de service refusé (403) | ✅ `test_unblock.py` (401/403/503/200), `infra/tests/test_dashboard_proxy.py`, `test_ensure_local_secrets.py`, `BlockedIpsCard.test.tsx` ; 🟨 live |
+| 10 | `make unblock` (vider toute la liste noire entre deux séries) | écrit depuis le conteneur de remédiation (propriétaire du volume `waf-deny`), puis `nginx -s reload` ; `attacks/reset.sh` aligné | ✅ `test_make_unblock_empties_the_deny_file_the_waf_actually_reads` (statique) ; 🟨 live |
+| 10 | État du front absent du dashboard ; 3 répliques de payment-api affichées séparément | front relevé par Prometheus (`/metrics` vide, sonde `up{job="front"}`, refusé par le WAF) ; répliques : `up` seulement si toutes répondent, sinon « n/N répliques injoignables » | ✅ `prometheus.test.ts`, `test_waf_config.py` ; 🟨 live |
+| 10 | `make seed` plantait sur l'hôte quand `.env` + une venv avec `resilience_db` faisaient choisir le seed direct (`postgres` n'existe que sur le réseau Docker) | sonde de connexion avant toute écriture ; DB injoignable → délégation au conteneur `payment-api` | ✅ `scripts/tests/test_seed.py` ; 🟨 live |
+| 10 | Tests IPv4-mappées dépendants du patch Python (`::ffff:a00:7` vs `::ffff:10.0.0.7` en 3.12.15) | forme **canonique** dans le code : `::ffff:a.b.c.d` repliée sur `a.b.c.d` (detector `dominant_ip`, deny-list `blocklist._ip`), comme `actions/waf.py` ; une IP interne en notation mappée ne contourne plus `SOURCE_IP_EXCLUDE` (contrat §3 `source_ip`) | ✅ `test_source_ip.py`, `test_blocklist.py` |
+| 10 | WAF dépendant de `backoffice` *healthy* : un back-office en échec empêchait tout le paiement de démarrer | `service_started` (dépendance facultative, comme face-id/mosquitto pour auth) | ✅ `test_waf_does_not_wait_for_a_healthy_backoffice` |
+| 10 | `httpx==0.28.1` en double dans `services/auth/requirements.txt` | dédoublonné ; garde-fou sur tous les `requirements*.txt` | ✅ `test_requirements_files_pin_each_package_once` |
 
 ## Risques projet (vivant)
 

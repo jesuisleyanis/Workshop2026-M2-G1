@@ -1,7 +1,12 @@
 """API du moteur de remédiation (FastAPI, port interne 8005, réseau `app` UNIQUEMENT).
 
-Authentification : `Authorization: Bearer <REMEDIATION_TOKEN>` sur tout sauf les sondes
-(/health, /ready, /metrics — joignables seulement depuis les réseaux internes).
+Authentification (deux jetons distincts, comparaison à temps constant, fail closed) :
+- jeton de SERVICE `REMEDIATION_TOKEN` : POST /events, POST /events/alertmanager et toutes les lectures
+  (GET /incidents*, /stream, /decision-table, /waf/blocked-ips) — detector, Alertmanager, nginx du dashboard ;
+- jeton OPÉRATEUR `REMEDIATION_OPERATOR_TOKEN` : écritures déclenchées par un humain
+  (DELETE /waf/blocked-ips/{ip}). Le jeton de service y est refusé (403) : le nginx du dashboard, qui
+  l'injecte pour les lectures, ne peut rien écrire à la place de l'opérateur.
+Sondes (/health, /ready, /metrics) sans jeton — joignables seulement depuis les réseaux internes.
 Le service n'est jamais publié (`ports:`) ni rattaché au réseau `edge`.
 """
 
@@ -75,6 +80,9 @@ def create_app(
                         extra={"event": "remediation_failed"})
         if not settings.token_configured:
             log.error("REMEDIATION_TOKEN absent ou trop court : /events refusera tout (fail closed)")
+        if not settings.operator_token_configured:
+            log.warning("REMEDIATION_OPERATOR_TOKEN absent, trop court ou égal au jeton de service : "
+                        "actions opérateur refusées (fail closed)")
         yield
         await engine.shutdown()
         await http.aclose()
@@ -125,21 +133,42 @@ def create_app(
             f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()[:5]), request)
 
     # --------------------------------------------------------------- authentification
+    def _bearer(authorization: str | None) -> str | None:
+        scheme, _, presented = (authorization or "").partition(" ")
+        return presented.strip() if scheme.lower() == "bearer" else None
+
+    def _matches(presented: str | None, expected: str | None) -> bool:
+        return presented is not None and hmac.compare_digest(presented.encode(), (expected or "").encode())
+
+    def _denied(request: Request, status: int, message: str) -> HTTPException:
+        log.warning(message, extra={
+            "request_id": getattr(request.state, "request_id", None),
+            "client_ip": request.client.host if request.client else None,
+            "http_method": request.method, "http_path": request.url.path, "http_status": status})
+        if status == 401:
+            return HTTPException(401, "unauthorized", headers={"WWW-Authenticate": "Bearer"})
+        return HTTPException(status, "operator_token_required")
+
     def require_token(request: Request, authorization: str | None = Header(default=None)) -> None:
-        """Bearer statique partagé (SOPS). Comparaison à temps constant ; fail closed."""
+        """Jeton de SERVICE (SOPS). Comparaison à temps constant ; fail closed."""
         if not settings.token_configured:
             raise HTTPException(503, "auth_not_configured")
-        scheme, _, presented = (authorization or "").partition(" ")
-        ok = scheme.lower() == "bearer" and hmac.compare_digest(
-            presented.strip().encode(), (settings.token or "").encode())
-        if not ok:
-            log.warning("Accès refusé : token absent ou invalide", extra={
-                "request_id": getattr(request.state, "request_id", None),
-                "client_ip": request.client.host if request.client else None,
-                "http_method": request.method, "http_path": request.url.path, "http_status": 401})
-            raise HTTPException(401, "unauthorized", headers={"WWW-Authenticate": "Bearer"})
+        if not _matches(_bearer(authorization), settings.token):
+            raise _denied(request, 401, "Accès refusé : token absent ou invalide")
+
+    def require_operator(request: Request, authorization: str | None = Header(default=None)) -> None:
+        """Jeton OPÉRATEUR (humain). Le jeton de service est explicitement refusé (403) ; fail closed."""
+        if not settings.operator_token_configured:
+            raise HTTPException(503, "auth_not_configured")
+        presented = _bearer(authorization)
+        if _matches(presented, settings.operator_token):
+            return
+        if settings.token_configured and _matches(presented, settings.token):
+            raise _denied(request, 403, "Action opérateur refusée : jeton de service présenté")
+        raise _denied(request, 401, "Action opérateur refusée : jeton opérateur absent ou invalide")
 
     auth = Depends(require_token)
+    operator = Depends(require_operator)
 
     # --------------------------------------------------------------- sondes
     @app.get("/health")
@@ -200,11 +229,12 @@ def create_app(
         """IP actuellement en liste noire du WAF (lecture seule), enrichies par le journal."""
         return {"blocked": list_blocked_ips(settings.waf_deny_file, journal.last_blocks())}
 
-    @app.delete("/waf/blocked-ips/{ip}", dependencies=[auth])
+    @app.delete("/waf/blocked-ips/{ip}", dependencies=[operator])
     async def unblock_ip(ip: str, request: Request):
         """Déblocage par l'opérateur (bouton du dashboard) : retire l'IP de la deny-list, recharge le WAF.
 
         Hors boucle de reprise (aucun incident en dépend) : action d'administration, tracée dans les logs.
+        Jeton OPÉRATEUR exigé : le jeton de service (détenu par le nginx du dashboard) est refusé.
         """
         try:
             removed = remove_ip(settings.waf_deny_file, ip)
@@ -245,7 +275,7 @@ def create_app(
     return app
 
 
-_CODES = {400: "bad_request", 401: "unauthorized", 403: "forbidden", 404: "not_found",
+_CODES = {400: "bad_request", 401: "unauthorized", 403: "operator_token_required", 404: "not_found",
           503: "auth_not_configured"}
 
 

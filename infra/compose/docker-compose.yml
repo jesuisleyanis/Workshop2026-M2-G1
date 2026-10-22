@@ -388,6 +388,9 @@ services:
     environment:
       DOCKER_PROXY_URL: http://docker-socket-proxy:2375
       REMEDIATION_TOKEN: ${REMEDIATION_TOKEN}
+      # Jeton OPÉRATEUR (écritures humaines depuis le dashboard : déblocage d'IP) : connu du SEUL moteur.
+      # Jamais transmis au dashboard (son nginx relaie celui que l'opérateur saisit), ni à l'assistant.
+      REMEDIATION_OPERATOR_TOKEN: ${REMEDIATION_OPERATOR_TOKEN}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
       AUTH_URL: http://auth:8002
       # verify_tx : rejoué à travers le WAF (réseau app, cert auto-signé) avec le jeu fictif seedé
@@ -427,7 +430,8 @@ services:
     <<: *hardening
     build: { context: ../../dashboard }
     # Le navigateur ne parle qu'au nginx du dashboard (same-origin, CSP connect-src 'self') :
-    # /remediation/stream -> remediation:8005/stream (Bearer injecté côté serveur),
+    # /remediation/stream -> remediation:8005/stream (Bearer de SERVICE injecté côté serveur, lectures) ;
+    # écritures (déblocage d'IP) : jeton OPÉRATEUR saisi par l'humain, relayé, jamais connu de ce conteneur.
     # /prometheus/api/v1/query -> prometheus:9090 (score ML + santé, GET lecture seule).
     # VITE_* sont des build-args Vite, pas des variables runtime : la base /remediation est le défaut du build.
     networks: [app]

@@ -77,18 +77,18 @@ POST /events/alertmanager ──► alertmanager.py (webhook → AnomalyEvent) �
 
 ## Endpoints
 
-API sur le port **8005** (interne, réseau `app` ; jamais publié). Sauf sondes, tout exige `Authorization: Bearer <REMEDIATION_TOKEN>`.
+API sur le port **8005** (interne, réseau `app` ; jamais publié). Sauf sondes, tout exige un `Authorization: Bearer <jeton>` ; colonne *Auth* : **service** = `REMEDIATION_TOKEN` (machine-à-machine : detector, Alertmanager, nginx du dashboard pour ses lectures) ; **opérateur** = `REMEDIATION_OPERATOR_TOKEN` (écriture déclenchée par un humain, saisie dans le dashboard ; le jeton de service y est refusé en `403 operator_token_required`, l'absence de jeton en `401`, un jeton opérateur non configuré / trop court / égal au jeton de service en `503`).
 
 | Méthode | Chemin | Auth | Description |
 |---|---|---|---|
-| `POST` | `/events` | oui | Reçoit un `AnomalyEvent` (+ `source_ip` optionnel). `202` `{incident_id, decision, dry_run, detail}` avec `decision` ∈ `started`, `duplicate`, `replayed`, `cooldown`. `422` si le corps est invalide. |
-| `POST` | `/events/alertmanager` | oui | **Webhook Alertmanager** (chemin SOC, secondaire — #13). Corps = webhook v4 `{alerts:[…]}` ; chaque alerte `firing` portant un label `incident_type` (§3) est traduite en `AnomalyEvent` (`alertmanager.py`) et soumise comme `/events`. `202` `{accepted:[{alertname, incident_id, decision, dry_run, detail}], skipped:[{alertname, reason}]}`. `422` si le corps n'est pas un webhook. |
-| `GET` | `/incidents?limit=50` | oui | Derniers incidents (`limit` 1 à 500). |
-| `GET` | `/incidents/{incident_id}` | oui | Détail : incident + `actions` + `verifications` + `timeline`. `404 incident_not_found`. |
-| `GET` | `/decision-table` | oui | Table de décision chargée (JSON). |
-| `GET` | `/waf/blocked-ips` | oui | IP réellement en liste noire du WAF (fichier `WAF_DENY_FILE`), enrichies par le journal : `{blocked: [{ip, blocked_at, list, incident_id, incident_type}]}`. Lecture seule (carte « IP bloquées » du dashboard). |
-| `DELETE` | `/waf/blocked-ips/{ip}` | oui | Déblocage par l'opérateur (bouton du dashboard) : retire l'IP de la deny-list (écriture atomique) puis recharge le WAF (SIGHUP via le proxy). `400 invalid_ip`, `404 ip_not_blocked`, `502 waf_reload_failed`. Tracé dans les logs (`remediation_action`). Hors boucle de reprise. |
-| `GET` | `/stream` | oui | Timeline temps réel (SSE). Voir ci-dessous. |
+| `POST` | `/events` | service | Reçoit un `AnomalyEvent` (+ `source_ip` optionnel). `202` `{incident_id, decision, dry_run, detail}` avec `decision` ∈ `started`, `duplicate`, `replayed`, `cooldown`. `422` si le corps est invalide. |
+| `POST` | `/events/alertmanager` | service | **Webhook Alertmanager** (chemin SOC, secondaire — #13). Corps = webhook v4 `{alerts:[…]}` ; chaque alerte `firing` portant un label `incident_type` (§3) est traduite en `AnomalyEvent` (`alertmanager.py`) et soumise comme `/events`. `202` `{accepted:[{alertname, incident_id, decision, dry_run, detail}], skipped:[{alertname, reason}]}`. `422` si le corps n'est pas un webhook. |
+| `GET` | `/incidents?limit=50` | service | Derniers incidents (`limit` 1 à 500). |
+| `GET` | `/incidents/{incident_id}` | service | Détail : incident + `actions` + `verifications` + `timeline`. `404 incident_not_found`. |
+| `GET` | `/decision-table` | service | Table de décision chargée (JSON). |
+| `GET` | `/waf/blocked-ips` | service | IP réellement en liste noire du WAF (fichier `WAF_DENY_FILE`), enrichies par le journal : `{blocked: [{ip, blocked_at, list, incident_id, incident_type}]}`. Lecture seule (carte « IP bloquées » du dashboard). |
+| `DELETE` | `/waf/blocked-ips/{ip}` | **opérateur** | Déblocage par l'opérateur (bouton du dashboard) : retire l'IP de la deny-list (écriture atomique) puis recharge le WAF (SIGHUP via le proxy). `400 invalid_ip`, `404 ip_not_blocked`, `502 waf_reload_failed`. Tracé dans les logs (`remediation_action`). Hors boucle de reprise. |
+| `GET` | `/stream` | service | Timeline temps réel (SSE). Voir ci-dessous. |
 | `GET` | `/health` | non | Liveness : `{"status": "ok"}`. |
 | `GET` | `/ready` | non | Readiness : `200`/`503` avec `checks` = `decision_table`, `journal`, `auth_configured`, `docker_socket_proxy` (ping du proxy). |
 | `GET` | `/metrics` | non | Métriques Prometheus (`resilience_remediation_actions_total`, `resilience_mttd_seconds`, `resilience_mttr_seconds`, métriques HTTP). |
@@ -128,7 +128,8 @@ Lues par `config.py` (`Settings.from_env`). **Aucun secret n'a de valeur par dé
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `REMEDIATION_TOKEN` / `REMEDIATION_TOKEN_FILE` | — (obligatoire, ≥ 16 car.) | Bearer exigé sur l'API. Absent/court = routes protégées en `503` (fail closed). |
+| `REMEDIATION_TOKEN` / `REMEDIATION_TOKEN_FILE` | — (obligatoire, ≥ 16 car.) | Jeton de **service** exigé sur l'API (sauf routes opérateur). Absent/court = routes protégées en `503` (fail closed). |
+| `REMEDIATION_OPERATOR_TOKEN` / `REMEDIATION_OPERATOR_TOKEN_FILE` | — (≥ 16 car., ≠ `REMEDIATION_TOKEN`) | Jeton **opérateur** des écritures humaines (`DELETE /waf/blocked-ips/{ip}`). Absent, court ou égal au jeton de service = ces routes en `503` (fail closed), le reste de l'API fonctionne. Généré dans `.env.local` par `make decrypt` (`scripts/ensure-local-secrets.sh`) tant qu'il n'est pas dans SOPS. |
 | `INTERNAL_TOKEN` / `INTERNAL_TOKEN_FILE` | — | Token de l'API interne du service `auth` (`tighten_rate_limit`) ; absent = l'action échoue. |
 | `DOCKER_PROXY_URL` | `http://docker-socket-proxy:2375` | URL du docker-socket-proxy. |
 | `DOCKER_PROXY_ALLOW_RECREATE` | `false` | Autorise `recreate_service` (nécessite un proxy élargi). |

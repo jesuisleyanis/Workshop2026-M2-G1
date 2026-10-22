@@ -1,4 +1,12 @@
 # Variables substituées au démarrage : REMEDIATION_UPSTREAM, REMEDIATION_AUTH_HEADER, PROMETHEUS_UPSTREAM, DNS_RESOLVER.
+#
+# Deux jetons, deux régimes (remediation/main.py) :
+# - LECTURES (flux SSE, liste des IP bloquées) : nginx injecte le jeton de SERVICE (REMEDIATION_AUTH_HEADER),
+#   il n'atteint jamais le navigateur ;
+# - ÉCRITURES (déblocage d'IP) : nginx n'injecte AUCUN jeton. Il relaie l'en-tête Authorization saisi par
+#   l'opérateur (jeton OPÉRATEUR, REMEDIATION_OPERATOR_TOKEN, inconnu de ce conteneur). Le moteur refuse le
+#   jeton de service sur ces routes (403) : un conteneur voisin ou un processus local qui parle à ce nginx
+#   ne peut rien écrire sans le secret de l'opérateur (infra/tests/test_dashboard_proxy.py).
 server {
   listen 8080;
   server_name _;
@@ -16,11 +24,12 @@ server {
     return 200 "ok\n";
   }
 
-  # Flux SSE du moteur de remédiation. UNIQUEMENT ce chemin (lecture seule) est exposé :
-  # l'API /events du moteur reste inaccessible depuis le navigateur. Le jeton éventuel est
-  # injecté ici côté serveur ; il n'atteint jamais le bundle JS.
+  # Flux SSE du moteur de remédiation (lecture seule). Seuls les chemins nommés ci-dessous sont
+  # exposés : l'API /events du moteur reste inaccessible depuis le navigateur. Le jeton de service
+  # est injecté ici côté serveur ; il n'atteint jamais le bundle JS.
   location = /remediation/stream {
     include /etc/nginx/security-headers.conf;
+    limit_except GET { deny all; }  # le jeton de service injecté ici ne sert qu'à LIRE
     set $remediation_upstream "http://${REMEDIATION_UPSTREAM}";
     rewrite ^/remediation/stream$ /stream break;
     proxy_pass $remediation_upstream;
@@ -38,8 +47,7 @@ server {
     add_header Cache-Control "no-cache" always;
   }
 
-  # Carte « IP bloquées » : liste noire du WAF en LECTURE SEULE (GET), jeton injecté côté serveur.
-  # Aucune autre route du moteur n'est exposée (pas de déblocage depuis le navigateur).
+  # Carte « IP bloquées » : liste noire du WAF en LECTURE SEULE (GET), jeton de service injecté côté serveur.
   location = /remediation/waf/blocked-ips {
     include /etc/nginx/security-headers.conf;
     limit_except GET { deny all; }
@@ -53,10 +61,10 @@ server {
     add_header Cache-Control "no-store" always;
   }
 
-  # Bouton « Débloquer » de la carte : SEULE action d'écriture du dashboard. DELETE uniquement + en-tête
-  # X-Resilience-Dashboard obligatoire : une page tierce ouverte dans le même navigateur ne peut envoyer
-  # ni l'un ni l'autre sans pré-vol CORS, auquel nginx ne répond jamais (anti-CSRF ; le dashboard est sur
-  # 127.0.0.1 sans authentification). IP littérale validée dans le chemin.
+  # Bouton « Débloquer » de la carte : action d'écriture, soumise au jeton OPÉRATEUR saisi dans le
+  # dashboard (relayé tel quel, jamais injecté ici). DELETE uniquement + en-tête X-Resilience-Dashboard
+  # obligatoire : une page tierce ouverte dans le même navigateur ne peut envoyer ni l'un ni l'autre sans
+  # pré-vol CORS, auquel nginx ne répond jamais (anti-CSRF). IP littérale validée dans le chemin.
   location ~ "^/remediation/waf/blocked-ips/([0-9A-Fa-f:.]{2,45})$" {
     include /etc/nginx/security-headers.conf;
     limit_except DELETE { deny all; }
@@ -65,7 +73,7 @@ server {
     rewrite ^/remediation(/.*)$ $1 break;
     proxy_pass $remediation_upstream;
     proxy_http_version 1.1;
-    proxy_set_header Authorization "${REMEDIATION_AUTH_HEADER}";
+    proxy_set_header Authorization $http_authorization;  # jeton OPÉRATEUR du client, sinon rien -> 401
     proxy_set_header Host $host;
     proxy_read_timeout 10s;
     add_header Cache-Control "no-store" always;

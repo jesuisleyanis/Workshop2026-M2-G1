@@ -42,8 +42,12 @@ def _secret(env: Mapping[str, str], name: str) -> str | None:
 
 @dataclass(frozen=True)
 class Settings:
-    # --- Authentification de l'API (POST /events, /stream, /incidents) ---
+    # --- Authentification de l'API ---
+    # Jeton de SERVICE (machine-à-machine) : POST /events*, lectures (/stream, /incidents, ...).
     token: str | None = None  # REMEDIATION_TOKEN
+    # Jeton OPÉRATEUR (humain, saisi dans le dashboard) : seules les écritures déclenchées par un humain.
+    # Distinct du jeton de service, que le nginx du dashboard détient pour les lectures.
+    operator_token: str | None = None  # REMEDIATION_OPERATOR_TOKEN
     # --- Appels sortants ---
     internal_token: str | None = None  # INTERNAL_TOKEN (API interne du service auth)
     docker_proxy_url: str = "http://docker-socket-proxy:2375"
@@ -77,12 +81,20 @@ class Settings:
     def token_configured(self) -> bool:
         return bool(self.token) and len(self.token or "") >= MIN_TOKEN_LENGTH
 
+    @property
+    def operator_token_configured(self) -> bool:
+        """Fail closed : absent, trop court ou ÉGAL au jeton de service = routes opérateur fermées
+        (sinon quiconque détient le jeton de service, dont le nginx du dashboard, serait opérateur)."""
+        tok = self.operator_token or ""
+        return len(tok) >= MIN_TOKEN_LENGTH and tok != (self.token or "")
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
         e = os.environ if env is None else env
         d = cls()
         return cls(
             token=_secret(e, "REMEDIATION_TOKEN"),
+            operator_token=_secret(e, "REMEDIATION_OPERATOR_TOKEN"),
             internal_token=_secret(e, "INTERNAL_TOKEN"),
             docker_proxy_url=e.get("DOCKER_PROXY_URL", d.docker_proxy_url).rstrip("/"),
             docker_allow_recreate=_bool(e.get("DOCKER_PROXY_ALLOW_RECREATE")),

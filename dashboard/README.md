@@ -70,8 +70,10 @@ src/
     ServicesGrid               santé des services
     BlockedIpsCard             IP en liste noire du WAF (GET /remediation/waf/blocked-ips, relève 3 s) + bouton
                                « Débloquer » (DELETE /remediation/waf/blocked-ips/<ip>, confirmation) : SEULE action
-                               d'écriture du dashboard ; nginx exige DELETE + en-tête X-Resilience-Dashboard (anti-CSRF :
-                               une page tierce ne peut pas les envoyer sans pré-vol CORS, jamais accordé)
+                               d'écriture du dashboard, soumise au JETON OPÉRATEUR (REMEDIATION_OPERATOR_TOKEN du .env,
+                               saisi au 1er usage, sessionStorage, effacé sur 401/403) ; nginx n'injecte aucun jeton sur
+                               cette route, exige DELETE + en-tête X-Resilience-Dashboard (anti-CSRF)
+    OperatorTokenForm          saisie masquée du jeton opérateur (lib/operatorToken.ts : stockage, 401/403/503)
     GrafanaLinks, Panel        liens Grafana / Explore ; carte, pastilles, tonalités
   test/                        setup, fixtures (exemple du contrat, séquence d'incident, FakeEventSource)
 mock/remediation-mock.mjs      faux moteur SSE (hors image Docker)

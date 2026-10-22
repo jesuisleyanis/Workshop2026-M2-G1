@@ -77,7 +77,8 @@ dans un terminal dédié — voir `infra/caddy/README.md`. Sans Caddy, ce mode r
 **Répliques de payment-api** : 3 par défaut derrière le WAF (répartition + bascule) ; `PAYMENT_API_REPLICAS=2 make up-full` pour changer. Voir `services/payment-api/README.md`.
 
 **Dashboard de supervision** : `make ui` puis http://127.0.0.1:8081 (publié sur le loopback du PC hôte
-uniquement, jamais sur le hotspot ; un `make up*` ultérieur le dépublie, relancer `make ui`).
+uniquement, jamais sur le hotspot ; un `make up*` ultérieur le dépublie, relancer `make ui`). Le bouton
+« Débloquer » de la carte « IP bloquées » demande le **jeton opérateur** : clé `REMEDIATION_OPERATOR_TOKEN` du `.env`.
 
 Accès : front via le WAF sur `https://localhost` (certificat auto-signé). Seul le WAF publie des ports HTTP ;
 dashboard, Grafana et API internes ne sont pas publiés (voir [`dashboard/README.md`](../dashboard/README.md) pour une
@@ -94,7 +95,7 @@ publication `127.0.0.1` en dev).
 | Scénario seul (dev) | `make attack SC=<scenario>` | `service_flood`, `auth_abuse`, `web_attack`, `data_corruption` |
 | Kill-switch | `make stop-attack` | arrête tous les scénarios |
 | Remettre la cible « avant » | `make reset` | |
-| **Débloquer les IP bloquées par la remédiation** (entre deux séries d'attaques) | `make unblock` (avec `REAL_IP=1` si la stack tourne dans ce mode) | liste noire du WAF vidée |
+| **Débloquer les IP bloquées par la remédiation** (entre deux séries d'attaques) | `make unblock` (avec `REAL_IP=1` si la stack tourne dans ce mode), ou IP par IP : bouton « Débloquer » du dashboard (jeton opérateur) | liste noire du WAF vidée |
 | Audit de durcissement | `make audit` | |
 | Archive du rendu | `make package` | `Workshop2026-M2-G1-Code.zip` sans secrets |
 | **Latence de détection** (preuve chiffrée) | `make bench` (`BENCH_ARGS="--runs 5 --quiet 600"`) | p50/p95/max attaque → détection → 1re action, faux positifs ; JSON `bench-detection.json` |

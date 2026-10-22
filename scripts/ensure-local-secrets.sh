@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Complète le .env déchiffré avec les secrets du back-office facial absents de SOPS.
+# Complète le .env déchiffré avec les secrets locaux absents de SOPS.
 #
-# FACE_INTERNAL_TOKEN, FACE_DATA_KEY et BACKOFFICE_BOOTSTRAP_TOKEN sont propres au PC Hôte :
+# FACE_INTERNAL_TOKEN, FACE_DATA_KEY, BACKOFFICE_BOOTSTRAP_TOKEN (back-office facial) et
+# REMEDIATION_OPERATOR_TOKEN (jeton opérateur du dashboard) sont propres au PC Hôte :
 # s'ils ne sont pas (encore) dans security/sops/secrets.enc.env, ils sont générés UNE fois
 # dans .env.local (0600, non commité) puis recopiés dans .env à chaque `make decrypt`.
 # FACE_DATA_KEY doit rester stable : la perdre rend les enrôlements illisibles (réenrôlement).
@@ -16,7 +17,7 @@ set -euo pipefail
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 ENV_FILE="${ROOT}/.env"
 LOCAL_FILE="${ROOT}/.env.local"
-SECRET_KEYS=(FACE_INTERNAL_TOKEN FACE_DATA_KEY BACKOFFICE_BOOTSTRAP_TOKEN)
+SECRET_KEYS=(FACE_INTERNAL_TOKEN FACE_DATA_KEY BACKOFFICE_BOOTSTRAP_TOKEN REMEDIATION_OPERATOR_TOKEN)
 LOCAL_OVERRIDES=(MQTT_BIND_ADDR)
 
 rand_b64_32() {
@@ -78,8 +79,9 @@ for key in "${LOCAL_OVERRIDES[@]}"; do
   fi
 done
 
-[[ "${generated}" -eq 1 ]] && echo "Secrets locaux du back-office générés dans ${LOCAL_FILE} (non commité)."
+[[ "${generated}" -eq 1 ]] && echo "Secrets locaux générés dans ${LOCAL_FILE} (non commité)."
 if [[ -z "$(value_of BACKOFFICE_BOOTSTRAP_TOKEN "${ENV_FILE}")" ]]; then
   echo "ERREUR : BACKOFFICE_BOOTSTRAP_TOKEN absent." >&2; exit 1
 fi
 echo "Jeton d'initialisation du back-office : clé BACKOFFICE_BOOTSTRAP_TOKEN dans .env (ou .env.local)."
+echo "Jeton opérateur du dashboard (déblocage d'IP) : clé REMEDIATION_OPERATOR_TOKEN dans .env (ou .env.local)."

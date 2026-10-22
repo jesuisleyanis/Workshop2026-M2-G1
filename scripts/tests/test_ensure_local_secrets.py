@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "ensure-local-secrets.sh"
-KEYS = ("FACE_INTERNAL_TOKEN", "FACE_DATA_KEY", "BACKOFFICE_BOOTSTRAP_TOKEN")
+KEYS = ("FACE_INTERNAL_TOKEN", "FACE_DATA_KEY", "BACKOFFICE_BOOTSTRAP_TOKEN", "REMEDIATION_OPERATOR_TOKEN")
 
 bash = shutil.which("bash")
 pytestmark = pytest.mark.skipif(bash is None, reason="bash requis")
@@ -130,3 +130,12 @@ def test_env_is_created_private_when_absent(tmp_path):
     _run(tmp_path)
     assert (tmp_path / ".env").stat().st_mode & 0o077 == 0
     assert (tmp_path / ".env.local").stat().st_mode & 0o077 == 0
+
+
+def test_operator_token_is_generated_strong_and_distinct_from_the_service_token(tmp_path):
+    # Le moteur refuse un jeton opérateur < 16 caractères ou égal à REMEDIATION_TOKEN (fail closed).
+    (tmp_path / ".env").write_text("REMEDIATION_TOKEN=service-token-from-sops\n", encoding="utf-8")
+    _run(tmp_path)
+    env = _parse(tmp_path / ".env")
+    op = env["REMEDIATION_OPERATOR_TOKEN"][0]
+    assert len(op) >= 32 and op != env["REMEDIATION_TOKEN"][0]

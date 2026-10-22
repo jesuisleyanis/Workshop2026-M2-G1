@@ -92,9 +92,10 @@ Principe : le moteur est un composant **puissant par nature** (il redémarre des
 - **Liste blanche de services** : `restart_service` / `recreate_service` n'agissent que sur `RESTARTABLE_SERVICES` (défaut `payment-api, auth, front`). Le moteur ne touche ni `postgres`, ni le proxy, ni lui-même, même si la table le demandait (`ActionError`).
 - Le nom de service et l'image sont validés par regex ; les conteneurs sont résolus par label Compose `com.docker.compose.service`.
 
-### 5.2 API authentifiée (`REMEDIATION_TOKEN`)
+### 5.2 API authentifiée (`REMEDIATION_TOKEN` + `REMEDIATION_OPERATOR_TOKEN`)
 
-- Toutes les routes métier (`POST /events`, `GET /incidents`, `GET /incidents/{id}`, `GET /decision-table`, `GET /stream`) exigent `Authorization: Bearer <REMEDIATION_TOKEN>`.
+- Les routes machine-à-machine et de lecture (`POST /events`, `POST /events/alertmanager`, `GET /incidents`, `GET /incidents/{id}`, `GET /decision-table`, `GET /stream`, `GET /waf/blocked-ips`) exigent le jeton de **service** `Authorization: Bearer <REMEDIATION_TOKEN>`.
+- Les **écritures déclenchées par un humain** (`DELETE /waf/blocked-ips/{ip}`, déblocage depuis le dashboard) exigent le jeton **opérateur** `Bearer <REMEDIATION_OPERATOR_TOKEN>`, distinct : le jeton de service y est refusé (`403 operator_token_required`), car le nginx du dashboard le détient pour ses lectures — sinon tout conteneur du réseau `app` ou processus local parlant à ce nginx écrirait sans secret. Le jeton opérateur n'ouvre aucune autre route (moindre privilège). Absent, < 16 caractères ou égal au jeton de service : routes opérateur en `503 auth_not_configured` (fail closed), le reste de l'API fonctionne.
 - Comparaison à **temps constant** (`hmac.compare_digest`). Token en query string **refusé** (seul le header est lu).
 - **Fail closed** : si `REMEDIATION_TOKEN` est absent ou plus court que 16 caractères, toutes les routes protégées répondent `503 auth_not_configured` ; `/ready` passe à 503 ; une erreur est loguée au démarrage. Il n'y a **aucune valeur par défaut** pour les secrets.
 - Échec d'authentification : `401 unauthorized` + `WWW-Authenticate: Bearer`, et log `warning` (request_id, IP cliente, méthode, chemin) — sans jamais journaliser le token.
@@ -104,7 +105,7 @@ Principe : le moteur est un composant **puissant par nature** (il redémarre des
 ### 5.3 Jamais exposé sur le réseau `edge`
 
 - Le service est rattaché au **seul réseau `app`** (interne) et n'a **aucun `ports:`**. Seul le WAF est exposé (80/443). Le conteneur écoute sur `0.0.0.0:8005` *à l'intérieur de son namespace réseau* (nécessaire aux autres services du réseau `app`) ; l'exposition réelle est décidée par Compose, pas par le code.
-- Le navigateur ne parle jamais directement au moteur : le dashboard le joint via un reverse-proxy nginx qui n'expose que `GET /remediation/stream` (lecture seule) et injecte lui-même l'en-tête `Authorization` (`REMEDIATION_AUTH_HEADER`). Le token n'est donc jamais embarqué dans le bundle front.
+- Le navigateur ne parle jamais directement au moteur : le dashboard le joint via un reverse-proxy nginx qui n'expose que `GET /remediation/stream` et `GET /remediation/waf/blocked-ips` (lectures : jeton de service injecté par nginx, `REMEDIATION_AUTH_HEADER`, jamais dans le bundle) et `DELETE /remediation/waf/blocked-ips/<ip>` (écriture : nginx n'injecte **rien** et relaie le jeton opérateur saisi par l'humain).
 
 ### 5.4 Durcissement du conteneur
 
@@ -179,6 +180,7 @@ Pourquoi : redémarrer un service après une corruption de données **ne corrige
 | A10 | Le client Docker n'émet que les verbes du profil restart par défaut ; `recreate` refusé sans profil élargi ; rollback si la recréation échoue. | `test_actions.py` |
 | A11 | Playbook non listé refusé ; paramètres dangereux rejetés ; contrat de sortie de `verify_tx` respecté. | `test_actions.py` |
 | A12 | Toute route métier sans token ou avec mauvais token → 401 ; token en query refusé ; sans `REMEDIATION_TOKEN` configuré → fail closed (503). | `test_api.py` |
+| A12b | Route opérateur (déblocage) : sans jeton → 401 ; jeton de service → 403 ; jeton opérateur → 200 ; jeton opérateur absent/court/égal au jeton de service → 503 ; le jeton opérateur n'ouvre pas les routes de service. Le nginx du dashboard n'injecte aucun jeton sur une route d'écriture. | `test_unblock.py`, `infra/tests/test_dashboard_proxy.py` |
 | A13 | `/ready` passe à 503 si le docker-socket-proxy est injoignable ; `/health` et `/ready` sans authentification. | `test_api.py` |
 | A14 | La timeline SSE rejoue l'historique, supporte `Last-Event-ID`, diffuse en temps réel et envoie un keepalive. | `test_api.py`, `test_sse.py` |
 | A15 | Logs et métriques conformes aux contrats §1 et §2. | `test_engine.py`, `test_api.py` |

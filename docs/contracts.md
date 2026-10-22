@@ -436,6 +436,14 @@ Montants en **centimes entiers**. Aucune nouvelle route n'ajoute de label de mé
 
 - **Auth (API métier) :** JWT Bearer (`Authorization: Bearer <token>`), signé HS256, clé via SOPS. Durée 15 min. Concerne `auth` et `payment-api`.
 - **Auth (API interne du moteur de remédiation) :** **Bearer statique interne** — `Authorization: Bearer <REMEDIATION_TOKEN>` (token via SOPS). Ce service n'est **jamais exposé** sur `edge` ; il ne manipule pas d'identité utilisateur, donc un JWT serait superflu. Idem `INTERNAL_TOKEN` pour `auth` → `/internal/*`. Décision actée (ADR 0002).
+  - **Deux jetons distincts** (comparaison à temps constant, fail closed) :
+
+    | Jeton | Routes | Porteurs |
+    |---|---|---|
+    | service `REMEDIATION_TOKEN` | `POST /events`, `POST /events/alertmanager`, `GET /incidents`, `GET /incidents/{id}`, `GET /decision-table`, `GET /stream`, `GET /waf/blocked-ips` | detector, Alertmanager, nginx du dashboard (lectures, injecté côté serveur) |
+    | opérateur `REMEDIATION_OPERATOR_TOKEN` | `DELETE /waf/blocked-ips/{ip}` (écritures déclenchées par un humain) | l'opérateur, qui le saisit dans le dashboard ; relayé par nginx, **jamais injecté** |
+
+    Sur une route opérateur : pas de jeton → `401 unauthorized` ; jeton de service → `403 operator_token_required` ; jeton opérateur non configuré, < 16 caractères ou égal au jeton de service → `503 auth_not_configured`. Le jeton opérateur n'ouvre aucune route de service.
 - **Health :** chaque service expose `GET /health` (liveness, 200 si process up) et `GET /ready` (readiness, 200 si dépendances OK — DB joignable, etc.).
 - **Erreurs :** corps JSON `{ "error": { "code": "string", "message": "string", "request_id": "..." } }`.
 - **Codes retour scripts :** `verify_tx` et les scripts de démo renvoient `0` (succès) / `1` (échec) — contrat réutilisé par la boucle de remédiation et la CI future.

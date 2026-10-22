@@ -14,7 +14,8 @@
 |---|---|---|
 | `JWT_SECRET` | signature des JWT | auth |
 | `POSTGRES_PASSWORD` | mot de passe DB | postgres, payment-api, auth |
-| `REMEDIATION_TOKEN` | auth de `POST /events` | detector → remediation |
+| `REMEDIATION_TOKEN` | auth de `POST /events` et des lectures (jeton de service) | detector, Alertmanager, nginx du dashboard → remediation |
+| `REMEDIATION_OPERATOR_TOKEN` | jeton **opérateur** des écritures humaines (déblocage d'IP depuis le dashboard), ≠ `REMEDIATION_TOKEN` ; généré dans `.env.local` par `make decrypt` tant qu'il n'est pas dans SOPS | opérateur (saisi dans le dashboard) → remediation |
 | `INTERNAL_TOKEN` | auth de `/internal/*` | remediation → auth |
 | `SEED_PASSWORD` | mot de passe des comptes fictifs du seed | `make seed`, `scripts/verify_tx`, remediation (verify) |
 | `FACE_INTERNAL_TOKEN` | jeton d'appel interne auth → face-id | auth, face-id |

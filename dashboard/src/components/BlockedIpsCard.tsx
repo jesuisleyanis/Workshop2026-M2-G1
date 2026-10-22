@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { BlockedIpsState } from '../hooks/useBlockedIps'
 import { formatTime } from '../lib/format'
+import { operatorErrorMessage, readOperatorToken, saveOperatorToken, type OperatorOutcome } from '../lib/operatorToken'
+import { OperatorTokenForm } from './OperatorTokenForm'
 import { Panel, Pill, type Tone } from './Panel'
 
 const LIST_UI: Record<'temporary' | 'permanent' | 'unknown', { text: string; tone: Tone }> = {
@@ -10,24 +12,43 @@ const LIST_UI: Record<'temporary' | 'permanent' | 'unknown', { text: string; ton
 }
 
 interface Props extends BlockedIpsState {
-  /** Débloque l'IP ; absent = carte en lecture seule. */
-  onUnblock?: (ip: string) => Promise<boolean>
+  /** Débloque l'IP avec le jeton OPÉRATEUR ; absent = carte en lecture seule. */
+  onUnblock?: (ip: string, operatorToken: string) => Promise<OperatorOutcome>
   /** Confirmation avant déblocage (injectable pour les tests). */
   confirm?: (message: string) => boolean
 }
 
-/** Carte « IP bloquées » : liste noire réellement appliquée par le WAF, déblocage par IP. */
+/**
+ * Carte « IP bloquées » : liste noire réellement appliquée par le WAF, déblocage par IP.
+ * Le déblocage est une écriture : jeton OPÉRATEUR demandé au premier usage (sessionStorage), effacé sur 401/403.
+ */
 export function BlockedIpsCard({ items, error, onUnblock, confirm = (m) => window.confirm(m) }: Props) {
   const [pending, setPending] = useState<string | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
+  const [asking, setAsking] = useState<string | null>(null) // IP en attente de saisie du jeton
 
-  const unblock = async (ip: string) => {
-    if (!onUnblock || !confirm(`Débloquer ${ip} ? Ses requêtes seront de nouveau acceptées par le WAF.`)) return
+  const run = async (ip: string, token: string) => {
+    if (!onUnblock) return
     setPending(ip)
     setFailed(null)
-    const ok = await onUnblock(ip)
+    const outcome = await onUnblock(ip, token)
     setPending(null)
-    if (!ok) setFailed(ip)
+    if (outcome !== 'ok') setFailed(operatorErrorMessage(outcome, `Déblocage de ${ip}`))
+  }
+
+  const unblock = (ip: string) => {
+    if (!onUnblock || !confirm(`Débloquer ${ip} ? Ses requêtes seront de nouveau acceptées par le WAF.`)) return
+    setFailed(null)
+    const token = readOperatorToken()
+    if (token) void run(ip, token)
+    else setAsking(ip)
+  }
+
+  const submitToken = (token: string) => {
+    const ip = asking
+    setAsking(null)
+    saveOperatorToken(token)
+    if (ip) void run(ip, token)
   }
 
   const aside =
@@ -43,9 +64,10 @@ export function BlockedIpsCard({ items, error, onUnblock, confirm = (m) => windo
     <Panel title="IP bloquées" subtitle="Liste noire du WAF (remédiation)" aside={aside}>
       {failed && (
         <p role="alert" className="text-xs text-ko">
-          Échec du déblocage de {failed} (moteur injoignable ?) — réessayer.
+          {failed}
         </p>
       )}
+      {asking && <OperatorTokenForm action={`débloquer ${asking}`} onSubmit={submitToken} onCancel={() => setAsking(null)} />}
       {items !== null && items.length === 0 ? (
         <p className="text-[13px] text-mute-2">Aucune IP bloquée.</p>
       ) : (
@@ -66,8 +88,8 @@ export function BlockedIpsCard({ items, error, onUnblock, confirm = (m) => windo
                   {onUnblock && (
                     <button
                       type="button"
-                      onClick={() => void unblock(b.ip)}
-                      disabled={pending !== null}
+                      onClick={() => unblock(b.ip)}
+                      disabled={pending !== null || asking !== null}
                       aria-label={`Débloquer ${b.ip}`}
                       className="h-[26px] cursor-pointer rounded-full border border-[#333339] px-2.5 text-xs hover:bg-[#1b1b1e] disabled:cursor-wait disabled:opacity-50"
                     >

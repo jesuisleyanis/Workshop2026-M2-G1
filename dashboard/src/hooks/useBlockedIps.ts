@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { parseBlockedIps, type BlockedIp } from '../lib/blocklist'
+import { operatorAuthHeader, operatorOutcome, type OperatorOutcome } from '../lib/operatorToken'
 
 export interface BlockedIpsState {
   /** null tant qu'aucune réponse valide n'est arrivée. */
@@ -9,18 +10,25 @@ export interface BlockedIpsState {
 }
 
 export interface BlockedIps extends BlockedIpsState {
-  /** Débloque une IP (bouton de la carte) ; true si le moteur l'a retirée. La liste est relue ensuite. */
-  unblock: (ip: string) => Promise<boolean>
+  /**
+   * Débloque une IP (bouton de la carte) avec le jeton OPÉRATEUR ; 'ok' si le moteur l'a retirée.
+   * 401/403 effacent le jeton mémorisé. La liste est relue ensuite.
+   */
+  unblock: (ip: string, operatorToken: string) => Promise<OperatorOutcome>
 }
 
-type FetchFn = (url: string, init?: { method?: string; headers?: Record<string, string> }) => Promise<{ ok: boolean; json(): Promise<unknown> }>
+type FetchFn = (
+  url: string,
+  init?: { method?: string; headers?: Record<string, string> },
+) => Promise<{ ok: boolean; status?: number; json(): Promise<unknown> }>
 
 const defaultFetch: FetchFn = (url, init) => fetch(url, { ...init, headers: { Accept: 'application/json', ...init?.headers } })
 
 /**
  * Relève la liste noire du WAF toutes les `intervalMs` via le proxy same-origin du dashboard.
  * Une erreur garde la dernière liste connue (pas de clignotement) et réessaie au tour suivant.
- * `unblock` : DELETE <url>/<ip> avec l'en-tête X-Resilience-Dashboard exigé par nginx (anti-CSRF).
+ * `unblock` : DELETE <url>/<ip> avec l'en-tête X-Resilience-Dashboard exigé par nginx (anti-CSRF) et le
+ * jeton OPÉRATEUR en Authorization (relayé tel quel par nginx, qui n'injecte rien sur les écritures).
  */
 export function useBlockedIps(url: string | null, intervalMs = 3000, fetchImpl: FetchFn = defaultFetch): BlockedIps {
   const [state, setState] = useState<BlockedIpsState>({ items: null, error: false })
@@ -50,14 +58,15 @@ export function useBlockedIps(url: string | null, intervalMs = 3000, fetchImpl: 
   }, [url, intervalMs, fetchImpl])
 
   const unblock = useCallback(
-    async (ip: string) => {
-      if (!url) return false
-      const ok = await fetchImpl(`${url}/${ip}`, { method: 'DELETE', headers: { 'X-Resilience-Dashboard': '1' } }).then(
-        (r) => r.ok,
-        () => false,
+    async (ip: string, operatorToken: string): Promise<OperatorOutcome> => {
+      if (!url) return 'error'
+      const headers = { 'X-Resilience-Dashboard': '1', ...operatorAuthHeader(operatorToken) }
+      const outcome = await fetchImpl(`${url}/${ip}`, { method: 'DELETE', headers }).then(
+        (r) => operatorOutcome(r.status ?? (r.ok ? 200 : 500)),
+        (): OperatorOutcome => 'error',
       )
       await tickRef.current() // relecture immédiate : la carte reflète le WAF, pas l'intention
-      return ok
+      return outcome
     },
     [url, fetchImpl],
   )
