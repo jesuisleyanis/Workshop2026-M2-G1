@@ -377,9 +377,9 @@ services:
     <<: [*hardening, *pylimits]
     build: { context: ../.., dockerfile: remediation/Dockerfile }
     # app : API + proxy Docker + WAF (verify_tx) ; data : pg_restore (correction de corruption) ;
-    # obs : lecture Loki de `confirm_waf_block` (CDC remédiation, dépendance Loki), réseau interne.
-    # Jamais sur edge, aucun `ports:`. IP FIXE sur app : seule source exemptée du rate-limit de /login
-    # (verify_tx), cf. RATE_LIMIT_EXEMPT_IPS d'auth.
+    # obs : lecture de Loki (confirm_waf_block, repli `from_loki` de waf_blacklist_ip) — Loki n'écoute
+    # que sur ce réseau interne. Jamais sur edge, aucun `ports:`. IP FIXE sur app : seule source exemptée
+    # du rate-limit de /login (verify_tx), cf. RATE_LIMIT_EXEMPT_IPS d'auth.
     networks:
       app:
         ipv4_address: 172.31.0.20

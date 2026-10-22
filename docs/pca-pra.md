@@ -137,7 +137,7 @@ Action : `restore_pg_dump` (`remediation/actions/postgres.py`), paramètre `back
 
 ### 5.3 `web_attack`
 
-`confirm_waf_block` (lecture seule Loki : `{service="waf"} |= "waf_blocked"` sur 120 s, filtré par IP) puis `waf_blacklist_ip` (liste `permanent`). Aucune restauration de service nécessaire : le CRS a répondu 403 avant l'application. Retour arrière : retirer la ligne de `blocked_ips.conf` + reload (ou `attacks/reset.sh`).
+Compromission tentée, pas perte de disponibilité : **pas de `verify_first`** (ModSecurity renvoie déjà 403, `verify_tx` passerait d'emblée et l'attaquant ne serait jamais bloqué). `waf_blacklist_ip` (liste `permanent`, `source: from_event_or_loki` : IP désignée par le detector, sinon la source la plus fréquente des `waf_blocked` des 120 s dans Loki), puis `confirm_waf_block(require: true)` (lecture seule Loki `{service="waf-exporter", event="waf_blocked"}`). IP non bloquable (passerelle Docker protégée) : clos sur preuve du blocage WAF ; aucun blocage observé : escalade. Aucune restauration de service nécessaire : le CRS a répondu 403 avant l'application. Retour arrière : retirer la ligne de `blocked_ips.conf` + reload (ou `attacks/reset.sh`).
 
 ### 5.4 PRA : reconstruction sur une autre machine (manuel, non éprouvé)
 

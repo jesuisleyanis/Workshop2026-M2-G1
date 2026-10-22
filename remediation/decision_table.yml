@@ -25,11 +25,16 @@ rules:
     verify: verify_tx
     escalation: notify_operator
 
+  # Compromission TENTÉE (pas une perte de disponibilité) : ModSecurity rejette déjà les requêtes (403),
+  # donc verify_tx passe d'emblée. PAS de verify_first : il clôturerait sans jamais bloquer l'attaquant.
+  # 1) liste noire permanente de l'IP (celle du detector, sinon la source dominante des waf_blocked) ;
+  # 2) preuve en lecture seule que le WAF a contenu l'attaque. Dernière action : verify_tx est joué même
+  #    si l'IP n'est pas bloquable (passerelle Docker, adresse protégée), mais `require` fait échouer la
+  #    tentative si AUCUN blocage n'est observé (rien ne prouve que l'attaque soit contenue -> escalade).
   - incident_type: web_attack
-    verify_first: true          # requêtes déjà rejetées par ModSecurity -> attaque contenue
     actions:
-      - { type: confirm_waf_block, params: {} }
-      - { type: waf_blacklist_ip,  params: { source: "from_event" } }
+      - { type: waf_blacklist_ip,  params: { source: "from_event_or_loki" } }
+      - { type: confirm_waf_block, params: { require: true } }
     verify: verify_tx
     escalation: notify_operator
 

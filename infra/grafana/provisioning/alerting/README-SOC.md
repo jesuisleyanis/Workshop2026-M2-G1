@@ -66,7 +66,9 @@ Conséquences :
   chemin SOC passe par la résolution puis le nouveau déclenchement de l'alerte (nouveau `startsAt`) ;
   le détecteur ML, chemin principal, n'a pas cette limite.
 - Les règles SOC sont des agrégats : pas de label `source_ip`. Les actions `waf_block_ip` échouent
-  proprement (« aucune IP source ») et la règle enchaîne sur l'action suivante (restart, rate-limit, restore).
+  proprement (« aucune IP source ») et la règle enchaîne sur l'action suivante (restart, rate-limit). `web_attack`
+  n'en dépend pas : sans `source_ip`, `waf_blacklist_ip` lit l'IP dans Loki (`source: from_event_or_loki`,
+  événements `waf_blocked`).
 
 ## Validation
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import stat
+from pathlib import Path
 
 import httpx
 import pytest
@@ -12,7 +13,7 @@ from actions.base import ActionContext, ActionError, ActionParamError
 from actions.docker_proxy import DockerProxy, DockerProxyError
 from actions.runner import AnsibleRunnerAdapter
 from broker_helpers import capture_logs
-from conftest import FakeNetwork, FakeRunner, make_event, make_settings
+from conftest import FakeNetwork, FakeRunner, make_event, make_settings, waf_blocked_entry
 from journal import Journal
 from verify import ScriptVerifier
 
@@ -254,3 +255,125 @@ async def test_rolling_restart_stops_if_a_replica_never_recovers(monkeypatch):
         await build_action("restart_service", {"service": "payment-api"}).execute(ctx_for(client(net)))
     restarts = [p for m, p in net.docker_calls() if p.endswith("/restart")]
     assert restarts == ["/containers/cid-payment-api-1/restart"]  # on n'abat pas les autres répliques
+
+
+# ------------------------------------------------------------------ source `from_loki` (web_attack)
+async def test_from_loki_blocks_the_most_frequent_waf_blocked_source():
+    net = FakeNetwork()
+    net.loki_values = [waf_blocked_entry("198.51.100.9")] + [waf_blocked_entry("203.0.113.50")] * 4
+    ctx = ctx_for(client(net), event=make_event("web_attack", source_ip=None))
+    res = await build_action("waf_blacklist_ip", {"source": "from_loki"}).execute(ctx)
+    assert res.ok and res.data["ip"] == "203.0.113.50" and res.data["list"] == "permanent"
+    assert ctx.runner.calls == [("waf_deny_ip.yml", {"deny_ip": "203.0.113.50", "deny_list": "permanent",
+                                                     "incident_id": "inc-1"})]
+    loki = [r for r in net.requests if r.url.host == "loki"]
+    assert len(loki) == 1 and loki[0].method == "GET"
+    assert loki[0].url.params["query"] == '{service="waf-exporter", event="waf_blocked"}'
+    assert net.docker_calls()[-1] == ("POST", "/containers/cid-waf/kill")  # rechargement par SIGHUP
+
+
+async def test_from_loki_ignores_garbage_lines_and_folds_ipv4_mapped():
+    net = FakeNetwork()
+    net.loki_values = [["1", "pas du json"], ["2", '{"client_ip": "pas-une-ip"}'], ["3", "[1]"], ["4"],
+                       waf_blocked_entry("::ffff:203.0.113.8"), waf_blocked_entry("203.0.113.8")]
+    ctx = ctx_for(client(net), event=make_event("web_attack", source_ip=None))
+    res = await build_action("waf_blacklist_ip", {"source": "from_loki"}).execute(ctx)
+    assert res.data["ip"] == "203.0.113.8"
+
+
+async def test_from_loki_never_blocks_protected_addresses():
+    for protected in ("192.168.137.1", "::ffff:192.168.137.1", "127.0.0.1"):
+        net = FakeNetwork()
+        net.loki_values = [waf_blocked_entry(protected)] * 3
+        ctx = ctx_for(client(net), event=make_event("web_attack", source_ip=None))
+        with pytest.raises(ActionError, match="protégée"):
+            await build_action("waf_blacklist_ip", {"source": "from_loki"}).execute(ctx)
+        assert ctx.runner.calls == [] and net.docker_calls() == []
+
+
+async def test_from_loki_without_events_or_with_loki_down_fails_cleanly():
+    net = FakeNetwork()
+    net.loki_values = []
+    ctx = ctx_for(client(net), event=make_event("web_attack", source_ip=None))
+    with pytest.raises(ActionError, match="aucun événement waf_blocked"):
+        await build_action("waf_blacklist_ip", {"source": "from_loki"}).execute(ctx)
+
+    def down(request):
+        raise httpx.ConnectError("loki injoignable")
+
+    ctx2 = ctx_for(httpx.AsyncClient(transport=httpx.MockTransport(down)), event=make_event("web_attack"))
+    with pytest.raises(ActionError, match="logs WAF illisibles"):
+        await build_action("waf_blacklist_ip", {"source": "from_loki"}).execute(ctx2)
+    assert ctx.runner.calls == [] and ctx2.runner.calls == []
+
+
+async def test_from_loki_plan_does_not_query_loki():
+    net = FakeNetwork()
+    plan = await build_action("waf_blacklist_ip", {"source": "from_loki"}).plan(ctx_for(client(net)))
+    assert "Loki" in plan and net.requests == []
+
+
+def test_source_param_accepts_from_loki_and_still_rejects_networks():
+    build_action("waf_blacklist_ip", {"source": "from_loki"})
+    for bad in ("10.0.0.0/8", "from_header", "evil.example"):
+        with pytest.raises(ActionParamError):
+            build_action("waf_block_ip", {"source": bad})
+
+
+# ------------------------------------------------------------------ source `from_event_or_loki` (web_attack)
+async def test_from_event_or_loki_prefers_the_ip_designated_by_the_detector():
+    net = FakeNetwork()
+    net.loki_values = [waf_blocked_entry("203.0.113.50")] * 4
+    ctx = ctx_for(client(net), event=make_event("web_attack", source_ip="198.51.100.23"))
+    res = await build_action("waf_blacklist_ip", {"source": "from_event_or_loki"}).execute(ctx)
+    assert res.ok and res.data["ip"] == "198.51.100.23"
+    assert [r for r in net.requests if r.url.host == "loki"] == []  # pas de requête Loki inutile
+
+
+async def test_from_event_or_loki_falls_back_to_loki_without_source_ip():
+    net = FakeNetwork()
+    net.loki_values = [waf_blocked_entry("203.0.113.50")] * 4
+    ctx = ctx_for(client(net), event=make_event("web_attack", source_ip=None))
+    res = await build_action("waf_blacklist_ip", {"source": "from_event_or_loki"}).execute(ctx)
+    assert res.ok and res.data["ip"] == "203.0.113.50"
+
+
+async def test_from_event_or_loki_never_blocks_the_edge_gateway():
+    # Docker Desktop : tous les clients externes entrent avec l'IP de la passerelle d'`edge`. La bloquer
+    # couperait tout le monde (jury compris) alors que verify_tx, qui passe par `app`, resterait vert.
+    import yaml
+
+    compose = yaml.safe_load((Path(__file__).resolve().parents[2] / "infra/compose/docker-compose.yml")
+                             .read_text(encoding="utf-8"))
+    gateway = compose["networks"]["edge"]["ipam"]["config"][0]["gateway"]
+    never = tuple(compose["services"]["remediation"]["environment"]["NEVER_BLOCK_IPS"].split(","))
+    for event_ip, loki_ip in ((gateway, "203.0.113.50"), (None, gateway)):
+        net = FakeNetwork()
+        net.loki_values = [waf_blocked_entry(loki_ip)] * 4
+        ctx = ctx_for(client(net), event=make_event("web_attack", source_ip=event_ip),
+                      settings=make_settings(never_block_ips=never))
+        with pytest.raises(ActionError, match="protégée"):
+            await build_action("waf_blacklist_ip", {"source": "from_event_or_loki"}).execute(ctx)
+        assert ctx.runner.calls == [] and net.docker_calls() == []
+
+
+async def test_from_event_or_loki_plan_names_the_event_ip_without_querying_loki():
+    net = FakeNetwork()
+    action = build_action("waf_blacklist_ip", {"source": "from_event_or_loki"})
+    plan = await action.plan(ctx_for(client(net), event=make_event("web_attack", source_ip="198.51.100.23")))
+    assert "198.51.100.23" in plan
+    plan = await action.plan(ctx_for(client(net), event=make_event("web_attack", source_ip=None)))
+    assert "Loki" in plan and net.requests == []
+
+
+
+async def test_confirm_waf_block_require_fails_without_any_blocked_event():
+    net = FakeNetwork()
+    net.loki_values = []
+    with pytest.raises(ActionError, match="attaque non contenue"):
+        await build_action("confirm_waf_block", {"require": True}).execute(ctx_for(client(net)))
+    net.loki_values = [waf_blocked_entry("203.0.113.7")]
+    res = await build_action("confirm_waf_block", {"require": True}).execute(ctx_for(client(net)))
+    assert res.ok and res.data["confirmed"] is True
+    with pytest.raises(ActionParamError):
+        build_action("confirm_waf_block", {"require": "oui"})

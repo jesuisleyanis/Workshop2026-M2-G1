@@ -237,6 +237,7 @@ defaults:
 
 rules:
   - incident_type: service_flood
+    verify_first: true          # disponibilité : flood déjà écrêté par le WAF -> pas de restart
     actions:
       - { type: waf_block_ip,     params: { source: "from_event" } }
       - { type: restart_service,  params: { service: "payment-api" } }
@@ -250,10 +251,10 @@ rules:
     verify: verify_tx
     escalation: notify_operator
 
-  - incident_type: web_attack
+  - incident_type: web_attack     # compromission tentée : pas de verify_first
     actions:
-      - { type: confirm_waf_block, params: {} }
-      - { type: waf_blacklist_ip,  params: { source: "from_event" } }
+      - { type: waf_blacklist_ip,  params: { source: "from_event_or_loki" } }
+      - { type: confirm_waf_block, params: { require: true } }
     verify: verify_tx
     escalation: notify_operator
 
@@ -271,10 +272,29 @@ rules:
 ```
 
 **`verify_first` (booléen optionnel, défaut `false`)** : `verify_tx` est joué AVANT toute action ; s'il passe,
-l'attaque est contenue par les protections préventives (limitation de débit et ModSecurity du WAF) et
-l'incident est clos sans action modifiante. Activé pour `service_flood` et `web_attack` (sinon : redémarrages
-en boucle pendant un flood déjà écrêté — 12 en 20 min le 21/10 — et `web_attack` jamais clos). Jamais pour
-`data_corruption` : une corruption ne se « contient » pas.
+l'attaque est contenue par les protections préventives (limitation de débit du WAF) et l'incident est clos sans
+action modifiante. Réservé à la **restauration de disponibilité** : activé pour `service_flood` seulement (sinon :
+redémarrages en boucle pendant un flood déjà écrêté — 12 en 20 min le 21/10). **Jamais** pour une compromission ou
+une corruption : `data_corruption` ne se « contient » pas, et pour `web_attack` ModSecurity renvoie déjà 403, donc
+`verify_tx` passerait d'emblée et l'attaquant ne serait **jamais** bloqué (décision du 22/10 ; CLAUDE.md :
+disponibilité ≠ compromission).
+
+Paramètre `source` des actions de blocage IP :
+- `from_event` : champ additif `source_ip` de l'événement (§3, IP dominante des logs WAF désignée par le detector) ;
+- `from_loki` : source la plus fréquente des événements `waf_blocked` des 120 dernières secondes (Loki
+  `{service="waf-exporter", event="waf_blocked"}`, `client_ip` = adresse client vue par ModSecurity, jamais un
+  en-tête non approuvé) ;
+- `from_event_or_loki` : `source_ip` si l'événement en porte une, sinon `from_loki` (règle `web_attack`) ;
+- une IP littérale.
+
+Dans tous les cas, garde-fou `NEVER_BLOCK_IPS` (IP **et** plages CIDR : réseaux `edge` et `app` entiers, dont la
+passerelle d'`edge` par laquelle Docker Desktop fait entrer tous les clients externes) + loopback/non
+spécifiée/multicast. Une IP non bloquable fait échouer l'action, pas la règle : l'action suivante s'exécute.
+
+Règle `web_attack` : `waf_blacklist_ip(from_event_or_loki)` puis `confirm_waf_block(require: true)`. Blocage
+réussi → `verify_tx` → clos. IP introuvable ou protégée → la preuve Loki que le WAF a bloqué (dernière action)
+déclenche `verify_tx` → clos, l'échec du blocage restant tracé. Aucun blocage observé → `confirm_waf_block` échoue
+(rien ne prouve que l'attaque soit contenue) → nouvelle tentative puis escalade.
 
 ### Catalogue d'actions (implémentées dans `remediation/actions/`)
 
@@ -285,7 +305,7 @@ en boucle pendant un flood déjà écrêté — 12 en 20 min le 21/10 — et `we
 | `waf_block_ip` / `waf_blacklist_ip` | Ansible → reload Nginx (fichier de deny) | écriture conf WAF + reload |
 | `tighten_rate_limit` | appel API interne du service auth | aucun (API applicative) |
 | `restore_pg_dump` | Ansible → `pg_restore` depuis backup planifié | accès réseau `data` |
-| `confirm_waf_block` | lecture logs, pas d'action | aucun |
+| `confirm_waf_block` | lecture logs Loki (`{service="waf-exporter", event="waf_blocked"}`), pas d'action ; `require: true` = échec si aucun blocage observé | lecture Loki (réseau `obs`) |
 | `dry_run_report` | journalisation seule | aucun |
 | `notify_operator` | webhook dashboard / log `remediation_failed` | aucun |
 

@@ -22,6 +22,11 @@ from models import IncomingEvent
 from timeline import Broker
 from verify import VerifyResult
 
+def waf_blocked_entry(ip: str) -> list[str]:
+    """Une entrée Loki [horodatage, ligne] d'un événement waf_blocked (contrat §1, émis par waf-exporter)."""
+    return ["1", json.dumps({"level": "WARNING", "service": "waf", "event": "waf_blocked", "client_ip": ip})]
+
+
 TOKEN = "t0ken-" + "x" * 32
 OPERATOR_TOKEN = "0perator-" + "z" * 32  # jeton opérateur (humain), distinct du jeton de service
 TABLE_PATH = Path(__file__).resolve().parent.parent / "decision_table.yml"
@@ -82,7 +87,7 @@ class FakeNetwork:
         self.requests: list[httpx.Request] = []
         self.restart_status = 204
         self.auth_status = 200
-        self.loki_values: list[list[str]] = [["1", "waf_blocked"]]
+        self.loki_values: list[list[str]] = [waf_blocked_entry("203.0.113.7")]
         self.replicas: dict[str, int] = {}  # service -> nombre de répliques (défaut 1)
         self.health = "healthy"  # état renvoyé par GET /containers/{id}/json
 

@@ -146,6 +146,9 @@ def test_incident_type_routing_end_to_end(loaded):
         asyncio.run(det.process(vec))
         event = AnomalyEvent.model_validate(json.loads(fake.requests[0].content))
         assert event.incident_type.value == expected
+        if expected == "web_attack":
+            # preuve Loki : label `service` = service Compose émetteur (Promtail) -> waf-exporter
+            assert event.evidence.loki_query.startswith('{service="waf-exporter"}')
 
 
 def test_cooldown_dedupes_persistent_anomaly(loaded):
