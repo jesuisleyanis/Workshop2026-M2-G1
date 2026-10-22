@@ -26,9 +26,10 @@ void setup() {
 
 void loop() {
     const uint32_t now = millis();
-    led.tick(now);
     wifi.tick(now);
     const bool connected = wifi.connected();
+    led.setWifiConnected(connected, now);
+    led.tick(now);
     http.tick(connected);
     mqtt.tick(now, connected);
     led.tick(millis());
