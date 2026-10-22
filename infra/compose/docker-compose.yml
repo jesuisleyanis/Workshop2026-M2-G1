@@ -100,7 +100,9 @@ services:
       front: { condition: service_started }
       payment-api: { condition: service_healthy }
       auth: { condition: service_healthy }
-      backoffice: { condition: service_healthy }
+      # Démarré suffit (nom DNS résolu au chargement de nginx.conf) : un back-office lent ou en échec
+      # (face-id, MQTT…) ne doit jamais empêcher le WAF, donc tout le paiement, de démarrer.
+      backoffice: { condition: service_started }
     mem_limit: 256m
     healthcheck:
       # /healthz est servi par le WAF lui-même (sans upstream) ; cert auto-signé -> -k.

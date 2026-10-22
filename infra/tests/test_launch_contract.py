@@ -169,8 +169,9 @@ def test_build_stages_use_the_pip_cache_mount() -> None:
 # ---------------------------------------------------------------- démarrage ordonné
 # Dépendances FACULTATIVES : la chaîne de paiement (WAF -> auth) ne doit jamais attendre le chargement
 # du modèle de reconnaissance faciale (si face-id n'est pas prêt, auth répond 503 au seul back-office),
-# ni le broker de la LED (`required: false`, LED fail-open, ADR 0006).
-OPTIONAL_DEPS = {("auth", "face-id"), ("auth", "mosquitto")}
+# ni le broker de la LED (`required: false`, LED fail-open, ADR 0006), ni le back-office (le WAF, donc
+# tout le paiement, démarre même si le back-office est lent ou en échec : 502 sur :9443 seulement).
+OPTIONAL_DEPS = {("auth", "face-id"), ("auth", "mosquitto"), ("waf", "backoffice")}
 
 
 def test_dependencies_with_a_healthcheck_are_awaited_healthy() -> None:
@@ -186,6 +187,11 @@ def test_dependencies_with_a_healthcheck_are_awaited_healthy() -> None:
             assert deps[dep].get("condition") == "service_healthy", (
                 f"{name} -> {dep} : service_healthy attendu"
             )
+
+
+def test_waf_does_not_wait_for_a_healthy_backoffice() -> None:
+    # Un back-office qui ne devient jamais healthy ne doit pas bloquer le démarrage du WAF (paiement).
+    assert SERVICES["waf"]["depends_on"]["backoffice"]["condition"] == "service_started"
 
 
 def test_local_ui_overlay_publishes_only_on_loopback():
@@ -256,3 +262,33 @@ def test_caddy_overwrites_x_forwarded_for_and_targets_the_loopback_waf():
     assert "header_up X-Forwarded-For {remote_host}" in caddy  # écrase la valeur du client
     assert "reverse_proxy https://127.0.0.1:8443" in caddy and '"127.0.0.1:8443:8443"' in overlay
     assert "admin off" in caddy and "https://192.168.137.1" in caddy
+
+
+# ---------------------------------------------------------------- dépendances Python
+def test_requirements_files_pin_each_package_once() -> None:
+    # Un paquet listé deux fois finit tôt ou tard épinglé à deux versions différentes (pip échoue au build).
+    for req in sorted(ROOT.glob("**/requirements*.txt")):
+        if "node_modules" in req.parts:
+            continue
+        names: list[str] = []
+        for line in req.read_text(encoding="utf-8").splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line or line.startswith("-"):
+                continue
+            names.append(re.split(r"[<>=!~\[; ]", line, maxsplit=1)[0].lower().replace("_", "-"))
+        dups = {n for n in names if names.count(n) > 1}
+        assert not dups, f"{req.relative_to(ROOT)} : doublons {sorted(dups)}"
+
+
+# ---------------------------------------------------------------- make unblock
+def test_make_unblock_empties_the_deny_file_the_waf_actually_reads() -> None:
+    # La deny-list appartient à la remédiation (volume waf-deny) : écrite depuis SON conteneur, au chemin
+    # lu par GET /waf/blocked-ips (WAF_DENY_FILE), puis WAF rechargé. Sinon `make unblock` ne débloque rien.
+    recipe = re.search(r"^unblock:.*\n((?:\t.*\n)+)", MAKEFILE, re.MULTILINE)
+    assert recipe, "cible make unblock absente"
+    body = recipe.group(1)
+    assert "exec -T remediation" in body and "/etc/resilience/waf-deny/blocked_ips.conf" in body
+    assert "exec -T waf nginx -s reload" in body
+    assert any(str(v).startswith("waf-deny:/etc/resilience/waf-deny:") for v in SERVICES["remediation"]["volumes"])
+    config = (ROOT / "remediation" / "config.py").read_text(encoding="utf-8")
+    assert '"/etc/resilience/waf-deny/blocked_ips.conf"' in config
