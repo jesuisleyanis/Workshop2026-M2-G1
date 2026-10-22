@@ -54,6 +54,7 @@ Le schéma DB, le hash bcrypt et le seed viennent de [`libs/python/resilience_db
 | `RATE_LIMIT_EXEMPT_IPS` | non | vide | IP **exactes** exemptées de la limite de `/login` : la vérification automatique (`verify_tx` de la remédiation, IP fixe `172.31.0.20` en compose). Jamais de plage |
 | `RATE_LIMIT_RESTORE_SECONDS` | non | `300` | Retour automatique à `LOGIN_RATE_LIMIT` après le dernier durcissement (`tighten_rate_limit`) ; `0` = jamais |
 | `TRUSTED_PROXY_HOPS` | non | `1` | Nombre de proxys de confiance devant le service (lecture de `X-Forwarded-For` depuis la droite) |
+| `TRUSTED_PROXIES` | non | vide | IP/CIDR des proxys dont `X-Forwarded-For` est cru (compose : le WAF, IP fixe `172.31.0.10` sur `app`). Pair TCP hors liste → son IP est utilisée et l'en-tête ignoré. Vide = aucune confiance. Entrée invalide = refus de démarrer |
 | `RUN_MIGRATIONS` | non | `true` | Applique Alembic au démarrage (verrou : sûr si payment-api démarre en parallèle) |
 | `REGISTER_INITIAL_BALANCE_CENTS` | non | `0` | Solde initial du compte créé par `/register` |
 | `ENABLE_DOCS` | non | `false` | Expose `/docs` et `/openapi.json` (dev uniquement) |
@@ -167,6 +168,7 @@ pytest services/auth
 
 - **Remédiation** (`auth_abuse`) : `POST /internal/tighten-rate-limit` avec `X-Internal-Token` et `{"factor": 0.5}`. Retour à la normale : `POST /internal/reset-rate-limit`. Ces routes ne doivent **pas** être routées par le WAF.
 - **Prérequis WAF** : transmettre l'IP source réelle dans `X-Forwarded-For` (le service lit l'entrée la plus à droite). Si plusieurs proxys sont chaînés devant le service, ajuster `TRUSTED_PROXY_HOPS`.
+- **Proxy de confiance** : l'en-tête n'est lu que si le pair TCP direct figure dans `TRUSTED_PROXIES` (le WAF). Un conteneur du réseau `app` qui joint `auth:8002` en direct avec `X-Forwarded-For: 172.31.0.20` est donc limité sous sa propre IP : l'exemption de `verify_tx` ne s'usurpe pas (test `test_verification_ip_is_exempt_but_attackers_are_not`).
 - **Logs d'alerte Loki** : `{service="auth"} | json | event="auth_login_failed"`, `event="auth_rate_limited"`.
 
 ## Écarts et points d'attention

@@ -281,6 +281,14 @@ Décisions d'architecture structurantes : voir `docs/adr/`. Résumé rapide :
 | 10 | WAF dépendant de `backoffice` *healthy* : un back-office en échec empêchait tout le paiement de démarrer | `service_started` (dépendance facultative, comme face-id/mosquitto pour auth) | ✅ `test_waf_does_not_wait_for_a_healthy_backoffice` |
 | 10 | `httpx==0.28.1` en double dans `services/auth/requirements.txt` | dédoublonné ; garde-fou sur tous les `requirements*.txt` | ✅ `test_requirements_files_pin_each_package_once` |
 
+### Suites de la revue (branche `fix/review-followups`)
+
+> « 🟨 live » = vérifié par les tests hors Docker uniquement (poste de revue sans Docker) ; à rejouer sur le PC hôte.
+
+| # | Écart | Résolution | Statut / preuve |
+|---|---|---|---|
+| R1 | Exemption du rate-limit de `/login` usurpable : `X-Forwarded-For` cru quel que soit le pair, un conteneur du réseau `app` joignant `auth:8002` en direct avec `XFF: 172.31.0.20` brute-forçait sans limite (même motif dans payment-api : IP des logs → ML) | `TRUSTED_PROXIES` (auth + payment-api) : XFF lu seulement si le pair TCP est le WAF, IP fixe `172.31.0.10` sur `app` ; plage dynamique `ip_range 172.31.0.128/25` (IP fixes jamais prises) ; entrée invalide = refus de démarrer | ✅ `test_auth_ratelimit.py` (spoof direct → 429, XFF non fiable ignoré, CIDR), `test_payment_contracts.py::test_xff_is_only_trusted_from_the_waf`, `test_services_trust_x_forwarded_for_only_from_the_waf_fixed_ip` ; 🟨 live (IP fixe du WAF, `verify_tx` toujours exempté) |
+
 ## Risques projet (vivant)
 
 | Risque | Impact | Parade | Statut |

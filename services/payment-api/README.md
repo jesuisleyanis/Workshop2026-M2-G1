@@ -50,6 +50,7 @@ Le schéma (`users`, `accounts`, `transactions`), la config de connexion, les mi
 | `POSTGRES_PASSWORD` (ou `_FILE`) | oui | — | Mot de passe DB (`POSTGRES_HOST/PORT/DB/USER` : voir resilience_db ; défauts `postgres`/`5432`/`resilience`/`resilience`) |
 | `DATABASE_URL` | non | — | Surcharge complète de l'URL DB (tests : `sqlite://`) |
 | `TRUSTED_PROXY_HOPS` | non | `1` | Proxys de confiance devant le service (lecture de `X-Forwarded-For` depuis la droite) |
+| `TRUSTED_PROXIES` | non | vide | IP/CIDR des proxys dont `X-Forwarded-For` est cru (compose : le WAF, IP fixe `172.31.0.10` sur `app`). Pair TCP hors liste → son IP est utilisée et l'en-tête ignoré. Vide = aucune confiance. Entrée invalide = refus de démarrer |
 | `RUN_MIGRATIONS` | non | `true` | Applique Alembic au démarrage (verrou : sûr si auth démarre en parallèle) |
 | `ENABLE_DOCS` | non | `false` | Expose `/docs` (dev uniquement) |
 | `LOG_LEVEL` | non | `INFO` | Niveau de log |

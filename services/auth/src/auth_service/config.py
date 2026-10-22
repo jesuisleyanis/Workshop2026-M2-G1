@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 from resilience_db.config import read_secret
 
+from auth_service.observability import parse_trusted_proxies
+
 SERVICE_NAME = "auth"
 MIN_SECRET_LENGTH = 32
 _RATE_RE = re.compile(r"^(\d+)/(second|minute|hour|day)$")
@@ -34,6 +36,9 @@ class Settings:
     login_rate_limit: str = "10/minute"
     register_rate_limit: str = "10/minute"
     trusted_proxy_hops: int = 1
+    # Proxys de confiance (IP/CIDR) dont on accepte X-Forwarded-For : le WAF seul (IP fixe sur `app`,
+    # cf. compose). Vide = aucune confiance, l'IP cliente est celle du pair TCP (anti-usurpation).
+    trusted_proxies: tuple[str, ...] = ()
     run_migrations: bool = True
     enable_docs: bool = False
     register_initial_balance_cents: int = 0
@@ -77,6 +82,10 @@ class Settings:
             raise RuntimeError("REGISTER_RATE_LIMIT invalide (format attendu : '10/minute')")
         if not _RATE_RE.match(self.backoffice_rate_limit):
             raise RuntimeError("BACKOFFICE_RATE_LIMIT invalide (format attendu : '30/minute')")
+        try:
+            parse_trusted_proxies(self.trusted_proxies)
+        except ValueError as exc:
+            raise RuntimeError(f"TRUSTED_PROXIES invalide : {exc}") from exc
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -86,6 +95,9 @@ class Settings:
             login_rate_limit=os.environ.get("LOGIN_RATE_LIMIT", "10/minute"),
             register_rate_limit=os.environ.get("REGISTER_RATE_LIMIT", "10/minute"),
             trusted_proxy_hops=int(os.environ.get("TRUSTED_PROXY_HOPS", "1")),
+            trusted_proxies=tuple(
+                p.strip() for p in os.environ.get("TRUSTED_PROXIES", "").split(",") if p.strip()
+            ),
             run_migrations=_bool("RUN_MIGRATIONS", True),
             enable_docs=_bool("ENABLE_DOCS", False),
             register_initial_balance_cents=int(

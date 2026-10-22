@@ -36,7 +36,7 @@ Tous les services (payment-api, auth, remediation, detector, collector) émetten
 | Champ | Quand | Description |
 |---|---|---|
 | `user` | requêtes authentifiées | Identifiant de l'utilisateur (jamais le mot de passe) |
-| `client_ip` | requêtes HTTP entrantes | IP source (telle que vue derrière le WAF, via `X-Forwarded-For`) |
+| `client_ip` | requêtes HTTP entrantes | IP source (telle que vue derrière le WAF, via `X-Forwarded-For`, en-tête cru **seulement** si le pair TCP est un proxy de confiance `TRUSTED_PROXIES` ; sinon IP du pair) |
 | `http_method` | requêtes HTTP | `GET`, `POST`… |
 | `http_path` | requêtes HTTP | `/transactions` |
 | `http_status` | réponses HTTP | `200`, `401`, `500` |

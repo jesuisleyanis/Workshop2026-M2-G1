@@ -39,6 +39,7 @@ from auth_service.observability import (
     client_ip_var,
     error_response,
     log_event,
+    parse_trusted_proxies,
 )
 from auth_service.ratelimit import DynamicRateLimit
 from auth_service.schemas import (
@@ -144,7 +145,11 @@ def create_app(
     app.state.limiter = limiter
     app.state.rate = rate
     app.state.session_factory = session_factory
-    app.add_middleware(RequestContextMiddleware, trusted_proxy_hops=settings.trusted_proxy_hops)
+    app.add_middleware(
+        RequestContextMiddleware,
+        trusted_proxy_hops=settings.trusted_proxy_hops,
+        trusted_proxies=parse_trusted_proxies(settings.trusted_proxies),
+    )
     instrument(app, SERVICE_NAME)
 
     # ---------------------------------------------------------------- dépendances

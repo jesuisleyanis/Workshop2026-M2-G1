@@ -7,6 +7,7 @@ homonyme de auth) en attendant d'être remonté dans la lib partagée.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import time
 import uuid
@@ -23,13 +24,42 @@ started_var: ContextVar[float | None] = ContextVar("started", default=None)
 user_var: ContextVar[str | None] = ContextVar("user", default=None)
 
 
-def client_ip_from(headers: Headers, peer: str | None, hops: int) -> str | None:
+TrustedProxies = tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]
+
+
+def parse_trusted_proxies(spec: str | tuple[str, ...] | list[str]) -> TrustedProxies:
+    """IPs/CIDR des proxys de confiance (TRUSTED_PROXIES, séparés par des virgules).
+
+    Lève ValueError sur une entrée invalide : une faute de frappe ne doit jamais élargir
+    silencieusement la confiance (ni la supprimer sans qu'on le voie au démarrage).
+    """
+    items = spec.split(",") if isinstance(spec, str) else list(spec)
+    return tuple(ipaddress.ip_network(i.strip(), strict=False) for i in items if i.strip())
+
+
+def _is_trusted(peer: str | None, trusted: TrustedProxies) -> bool:
+    if not peer or not trusted:
+        return False
+    try:
+        addr = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    return any(addr in net for net in trusted)
+
+
+def client_ip_from(
+    headers: Headers, peer: str | None, hops: int, trusted: TrustedProxies = ()
+) -> str | None:
     """IP cliente telle que vue derrière le WAF.
 
-    On lit X-Forwarded-For en partant de la DROITE (entrée ajoutée par le proxy de
-    confiance le plus proche) : la partie gauche est contrôlée par le client et ne doit
-    jamais être crue. `hops` = nombre de proxys de confiance devant le service.
+    X-Forwarded-For n'est cru QUE si le pair TCP direct est un proxy de confiance (le WAF,
+    `trusted`) : sinon n'importe quel conteneur du réseau `app` joignant le service en direct
+    choisirait son IP (ex. celle exemptée du rate-limit de /login). On le lit alors en partant
+    de la DROITE (entrée ajoutée par le proxy le plus proche) : la partie gauche est contrôlée
+    par le client. `hops` = nombre de proxys de confiance devant le service.
     """
+    if not _is_trusted(peer, trusted):
+        return peer
     xff = headers.get("x-forwarded-for")
     if xff:
         parts = [p.strip() for p in xff.split(",") if p.strip()]
@@ -55,9 +85,12 @@ class RequestContextMiddleware:
     externe) doit encore voir le request_id.
     """
 
-    def __init__(self, app, trusted_proxy_hops: int = 1) -> None:
+    def __init__(
+        self, app, trusted_proxy_hops: int = 1, trusted_proxies: TrustedProxies = ()
+    ) -> None:
         self.app = app
         self.hops = trusted_proxy_hops
+        self.trusted = trusted_proxies
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
@@ -68,7 +101,7 @@ class RequestContextMiddleware:
         rid = _valid_uuid(headers.get("x-request-id")) or str(uuid.uuid4())
         peer = scope["client"][0] if scope.get("client") else None
         request_id_var.set(rid)
-        client_ip_var.set(client_ip_from(headers, peer, self.hops))
+        client_ip_var.set(client_ip_from(headers, peer, self.hops, self.trusted))
         http_method_var.set(scope["method"])
         http_path_var.set(scope["path"])
         started_var.set(time.perf_counter())

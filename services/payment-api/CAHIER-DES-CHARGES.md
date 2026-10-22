@@ -70,7 +70,7 @@ Erreurs : `{"error":{"code","message","request_id"}}`. Montants en **centimes en
 - **JWT obligatoire** sur toutes les routes métier via **une dépendance commune** (`current_user`) : absent, mal formé, signature invalide, expiré, `sub` manquant, utilisateur inconnu ⇒ `401` (`missing_token` / `invalid_token` / `token_expired`) + `WWW-Authenticate`.
 - Algorithme **épinglé à HS256** (jeton `alg: none` rejeté), `exp` et `sub` requis, secret ≥ 32 caractères exigé au démarrage.
 - Isolation entre utilisateurs (comptes et historique filtrés par propriétaire).
-- Logs : jamais de jeton, de secret ni de SQL ; `X-Request-ID` entrant accepté seulement s'il s'agit d'un UUID (anti log-forging) ; IP cliente lue depuis la droite de `X-Forwarded-For` (`TRUSTED_PROXY_HOPS`).
+- Logs : jamais de jeton, de secret ni de SQL ; `X-Request-ID` entrant accepté seulement s'il s'agit d'un UUID (anti log-forging) ; IP cliente lue depuis la droite de `X-Forwarded-For` (`TRUSTED_PROXY_HOPS`), **seulement** si le pair TCP direct est un proxy de confiance (`TRUSTED_PROXIES` = le WAF) ; sinon IP du pair (un conteneur du réseau `app` ne choisit pas l'IP qui alimente les logs, donc le ML).
 - Sonde `/ready` **n'alimente pas** `resilience_db_errors_total` (les healthchecks ne doivent pas fabriquer un signal d'anomalie).
 - Conteneur : slim, non-root (uid 10001), compatible `read_only` + `cap_drop: ALL`, healthcheck, docs OpenAPI désactivées par défaut.
 

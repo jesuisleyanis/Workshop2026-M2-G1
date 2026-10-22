@@ -368,10 +368,8 @@ def test_cooldown_logs_auth_cooldown_event(client, log_lines):
 
 def test_cooldown_does_not_affect_another_client_ip(client):
     _face(client, _identify(client), BAD)
-    other = client.post(
-        "/api/v1/auth/identify",
-        json={"username": "op01"},
-        headers={"X-Forwarded-For": "203.0.113.9"},
+    other = TestClient(client.app, client=("203.0.113.9", 50000)).post(
+        "/api/v1/auth/identify", json={"username": "op01"}
     )
     assert other.status_code == 200
 

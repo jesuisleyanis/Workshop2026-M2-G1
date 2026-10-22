@@ -35,6 +35,9 @@ networks:
       config:
         - subnet: 172.31.0.0/24
           gateway: 172.31.0.1
+          # Allocation dynamique limitée à la moitié haute : les IP FIXES (WAF .10, remédiation .20)
+          # ne peuvent jamais être prises par un autre conteneur démarré avant elles.
+          ip_range: 172.31.0.128/25
   data:
     internal: true
   obs:
@@ -67,7 +70,11 @@ services:
   waf:
     <<: *hardening
     build: { context: ../../security/waf }
-    networks: [edge, app]
+    # IP FIXE sur app : seul pair dont auth et payment-api croient X-Forwarded-For (TRUSTED_PROXIES).
+    networks:
+      edge: {}
+      app:
+        ipv4_address: 172.31.0.10
     # Image non-root (nginx unprivileged) : écoute 8080/8443/9443 ; 80/443 publiés côté hôte.
     # 9443 = listener HÔTE (back-office + /api/v1/auth/ + /api/v1/admin/) : loopback uniquement.
     ports:
@@ -178,6 +185,8 @@ services:
       POSTGRES_USER: resilience
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
+      # X-Forwarded-For cru UNIQUEMENT s'il vient du WAF (IP fixe) : sinon IP du pair TCP.
+      TRUSTED_PROXIES: "172.31.0.10"
     depends_on:
       postgres: { condition: service_healthy }
     read_only: true
@@ -199,6 +208,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      # X-Forwarded-For cru UNIQUEMENT s'il vient du WAF (IP fixe) : un conteneur du réseau app qui
+      # joint auth:8002 en direct ne peut pas se faire passer pour l'IP exemptée ci-dessous.
+      TRUSTED_PROXIES: "172.31.0.10"
       # verify_tx de la remédiation (IP fixe) : jamais limité, sinon tighten_rate_limit fait échouer
       # la preuve de reprise. Durcissement levé automatiquement 5 min après le dernier tighten.
       RATE_LIMIT_EXEMPT_IPS: "172.31.0.20"

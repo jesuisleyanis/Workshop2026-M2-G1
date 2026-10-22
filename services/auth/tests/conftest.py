@@ -5,7 +5,7 @@ import json
 import logging
 
 import pytest
-from authkit import INTERNAL_TOKEN, JWT_SECRET, PASSWORD
+from authkit import INTERNAL_TOKEN, JWT_SECRET, PASSWORD, WAF_IP, WAF_PEER
 from fastapi.testclient import TestClient
 from resilience_db import Base, make_engine, make_session_factory
 
@@ -20,6 +20,7 @@ def settings():
         internal_token=INTERNAL_TOKEN,
         login_rate_limit="3/minute",
         run_migrations=False,
+        trusted_proxies=(WAF_IP,),
     )
 
 
@@ -38,6 +39,12 @@ def app(settings, engine):
 @pytest.fixture
 def client(app):
     return TestClient(app)
+
+
+@pytest.fixture
+def waf_client(app):
+    """Requêtes relayées par le WAF (pair de confiance) : leur X-Forwarded-For est cru."""
+    return TestClient(app, client=WAF_PEER)
 
 
 @pytest.fixture

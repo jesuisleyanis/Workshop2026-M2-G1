@@ -6,7 +6,7 @@ import logging
 
 import pytest
 from fastapi.testclient import TestClient
-from paykit import JWT_SECRET, bearer, make_token
+from paykit import JWT_SECRET, WAF_IP, WAF_PEER, bearer, make_token
 from resilience_db import Account, Base, User, make_engine, make_session_factory
 
 from payment_api.config import SERVICE_NAME, Settings
@@ -15,7 +15,7 @@ from payment_api.main import create_app
 
 @pytest.fixture
 def settings():
-    return Settings(jwt_secret=JWT_SECRET, run_migrations=False)
+    return Settings(jwt_secret=JWT_SECRET, run_migrations=False, trusted_proxies=(WAF_IP,))
 
 
 @pytest.fixture
@@ -54,6 +54,12 @@ def app(settings, engine, world):
 @pytest.fixture
 def client(app):
     return TestClient(app)
+
+
+@pytest.fixture
+def waf_client(app):
+    """Requêtes relayées par le WAF (pair de confiance) : leur X-Forwarded-For est cru."""
+    return TestClient(app, client=WAF_PEER)
 
 
 @pytest.fixture

@@ -35,6 +35,12 @@ doit être recréé (`docker compose down -v` puis `make up`) ; les playbooks (`
 `pg_backup.yml`) passent par `docker exec … psql -U resilience`, qui s'exécute donc en uid 70 — rien
 à adapter. Validation live (volume vierge → `healthy`) à rejouer sur une machine avec Docker.
 
+## IP cliente derrière le WAF — confiance X-Forwarded-For
+
+- `auth` et `payment-api` ne lisent `X-Forwarded-For` **que si le pair TCP direct est le WAF** (`TRUSTED_PROXIES`, IP fixe `172.31.0.10` sur `app`) ; sinon l'IP retenue est celle du pair. Sans ce contrôle, un conteneur du réseau `app` joignant `auth:8002` en direct avec `X-Forwarded-For: 172.31.0.20` usurpait l'IP de `verify_tx`, exemptée du rate-limit de `/login`, et pouvait brute-forcer sans limite.
+- Les IP fixes du réseau `app` (WAF `.10`, remédiation `.20`) sont **hors** de la plage d'allocation dynamique (`ip_range: 172.31.0.128/25`) : aucun autre conteneur ne peut les obtenir.
+- Tests : `services/auth/tests/test_auth_ratelimit.py`, `services/payment-api/tests/test_payment_contracts.py`, `infra/tests/test_launch_contract.py::test_services_trust_x_forwarded_for_only_from_the_waf_fixed_ip`.
+
 ## Moteur de remédiation — modèle de privilèges (critique)
 
 - **Jamais** de montage direct de `/var/run/docker.sock` dans le conteneur de remédiation : ce serait un accès root-équivalent sur l'hôte.

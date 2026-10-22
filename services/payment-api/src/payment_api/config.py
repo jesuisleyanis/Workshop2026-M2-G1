@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from resilience_db.config import read_secret
 
+from payment_api.observability import parse_trusted_proxies
+
 SERVICE_NAME = "payment-api"
 MIN_SECRET_LENGTH = 32
 MIN_STATUS_CACHE_S, MAX_STATUS_CACHE_S = 0.5, 30.0
@@ -20,6 +22,9 @@ def _bool(name: str, default: bool) -> bool:
 class Settings:
     jwt_secret: str
     trusted_proxy_hops: int = 1
+    # Proxys de confiance (IP/CIDR) dont on accepte X-Forwarded-For : le WAF seul (IP fixe sur `app`,
+    # cf. compose). Vide = aucune confiance, l'IP cliente est celle du pair TCP (anti-usurpation).
+    trusted_proxies: tuple[str, ...] = ()
     run_migrations: bool = True
     enable_docs: bool = False
     log_level: str = "INFO"
@@ -42,12 +47,19 @@ class Settings:
             raise RuntimeError(
                 f"STATUS_CACHE_S hors bornes [{MIN_STATUS_CACHE_S}, {MAX_STATUS_CACHE_S}]"
             )
+        try:
+            parse_trusted_proxies(self.trusted_proxies)
+        except ValueError as exc:
+            raise RuntimeError(f"TRUSTED_PROXIES invalide : {exc}") from exc
 
     @classmethod
     def from_env(cls) -> Settings:
         return cls(
             jwt_secret=read_secret("JWT_SECRET"),
             trusted_proxy_hops=int(os.environ.get("TRUSTED_PROXY_HOPS", "1")),
+            trusted_proxies=tuple(
+                p.strip() for p in os.environ.get("TRUSTED_PROXIES", "").split(",") if p.strip()
+            ),
             run_migrations=_bool("RUN_MIGRATIONS", True),
             enable_docs=_bool("ENABLE_DOCS", False),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),

@@ -233,6 +233,22 @@ def test_only_the_remediation_fixed_ip_is_exempt_from_the_login_rate_limit():
     assert ip != gateway
 
 
+def test_services_trust_x_forwarded_for_only_from_the_waf_fixed_ip():
+    # Sinon un conteneur du réseau app joint auth:8002 en direct avec `X-Forwarded-For: <IP exemptée>`
+    # et brute-force /login sans limite.
+    import ipaddress
+
+    waf_ip = SERVICES["waf"]["networks"]["app"]["ipv4_address"]
+    for svc in ("auth", "payment-api"):
+        assert SERVICES[svc]["environment"]["TRUSTED_PROXIES"] == waf_ip, svc
+    exempt = SERVICES["auth"]["environment"]["RATE_LIMIT_EXEMPT_IPS"]
+    assert waf_ip != exempt
+    # IP fixes hors de la plage d'allocation dynamique : jamais prises par un autre conteneur.
+    dyn = ipaddress.ip_network(COMPOSE["networks"]["app"]["ipam"]["config"][0]["ip_range"])
+    for ip in (waf_ip, SERVICES["remediation"]["networks"]["app"]["ipv4_address"]):
+        assert ipaddress.ip_address(ip) not in dyn, ip
+
+
 # ---------------------------------------------------------------- mode « IP réelle » (Caddy natif)
 def test_by_default_the_waf_never_trusts_x_forwarded_for():
     # Sans proxy de confiance devant lui, croire X-Forwarded-For = un client choisit son IP
