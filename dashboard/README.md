@@ -68,7 +68,10 @@ src/
     IncidentTimeline           4 cartes, statut textuel, décalages +N s
     IncidentDetails            ActionsPanel, SignalsPanel, PlaybooksPanel, EvidencePanel
     ServicesGrid               santé des services
-    BlockedIpsCard             IP en liste noire du WAF (GET /remediation/waf/blocked-ips, lecture seule, relève 3 s)
+    BlockedIpsCard             IP en liste noire du WAF (GET /remediation/waf/blocked-ips, relève 3 s) + bouton
+                               « Débloquer » (DELETE /remediation/waf/blocked-ips/<ip>, confirmation) : SEULE action
+                               d'écriture du dashboard ; nginx exige DELETE + en-tête X-Resilience-Dashboard (anti-CSRF :
+                               une page tierce ne peut pas les envoyer sans pré-vol CORS, jamais accordé)
     GrafanaLinks, Panel        liens Grafana / Explore ; carte, pastilles, tonalités
   test/                        setup, fixtures (exemple du contrat, séquence d'incident, FakeEventSource)
 mock/remediation-mock.mjs      faux moteur SSE (hors image Docker)

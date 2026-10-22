@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { render, renderHook, screen, waitFor } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { BlockedIpsCard } from './BlockedIpsCard'
 import { useBlockedIps } from '../hooks/useBlockedIps'
 import { parseBlockedIps } from '../lib/blocklist'
@@ -60,6 +61,50 @@ describe('liste noire du WAF (carte « IP bloquées »)', () => {
 
   it('pas de relève sans URL (simulation, tests)', () => {
     const { result } = renderHook(() => useBlockedIps(null))
-    expect(result.current).toEqual({ items: null, error: false })
+    expect(result.current.items).toBeNull()
+    expect(result.current.error).toBe(false)
+  })
+
+  it('bouton Débloquer : confirmation, appel, puis plus de bouton actif pendant le déblocage', async () => {
+    const onUnblock = vi.fn(async () => true)
+    const confirm = vi.fn(() => true)
+    render(<BlockedIpsCard items={parseBlockedIps(RAW)} error={false} onUnblock={onUnblock} confirm={confirm} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Débloquer 192.168.137.115' }))
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('192.168.137.115'))
+    expect(onUnblock).toHaveBeenCalledWith('192.168.137.115')
+  })
+
+  it('annulation : rien n’est envoyé ; échec : message d’erreur', async () => {
+    const onUnblock = vi.fn(async () => false)
+    const { rerender } = render(<BlockedIpsCard items={parseBlockedIps(RAW)} error={false} onUnblock={onUnblock} confirm={() => false} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Débloquer 203.0.113.9' }))
+    expect(onUnblock).not.toHaveBeenCalled()
+    rerender(<BlockedIpsCard items={parseBlockedIps(RAW)} error={false} onUnblock={onUnblock} confirm={() => true} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Débloquer 203.0.113.9' }))
+    expect(screen.getByRole('alert').textContent).toContain('203.0.113.9')
+  })
+
+  it('lecture seule sans onUnblock : aucun bouton', () => {
+    render(<BlockedIpsCard items={parseBlockedIps(RAW)} error={false} />)
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  it('le hook envoie DELETE avec l’en-tête anti-CSRF puis relit la liste', async () => {
+    const calls: { url: string; method?: string; headers?: Record<string, string> }[] = []
+    const fetchImpl = async (url: string, init?: { method?: string; headers?: Record<string, string> }) => {
+      calls.push({ url, method: init?.method, headers: init?.headers })
+      return { ok: true, json: async () => ({ blocked: [] }) }
+    }
+    const { result } = renderHook(() => useBlockedIps('/remediation/waf/blocked-ips', 60_000, fetchImpl))
+    await waitFor(() => expect(result.current.items).toEqual([]))
+    let ok = false
+    await act(async () => {
+      ok = await result.current.unblock('192.168.137.115')
+    })
+    expect(ok).toBe(true)
+    const del = calls.find((c) => c.method === 'DELETE')
+    expect(del?.url).toBe('/remediation/waf/blocked-ips/192.168.137.115')
+    expect(del?.headers).toEqual({ 'X-Resilience-Dashboard': '1' })
+    expect(calls.at(-1)?.method).toBeUndefined() // relecture GET après le déblocage
   })
 })

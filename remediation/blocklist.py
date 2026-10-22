@@ -58,3 +58,26 @@ def list_blocked_ips(deny_file: str | Path, blocks: list[dict[str, Any]]) -> lis
         })
     out.sort(key=lambda e: e["blocked_at"] or "", reverse=True)
     return out
+
+
+def remove_ip(path: str | Path, ip: str) -> bool:
+    """Retire `ip` de la deny-list (déblocage par l'opérateur). True si elle y figurait.
+
+    Écriture atomique (fichier temporaire + rename dans le même répertoire) : le WAF ne relit jamais
+    un fichier à moitié écrit. Commentaires et autres IP conservés tels quels.
+    """
+    target = _ip(ip)
+    if target is None:
+        raise ValueError(f"IP invalide : {ip!r}")
+    p = Path(path)
+    try:
+        lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+    except FileNotFoundError:
+        return False
+    kept = [ln for ln in lines if _ip(ln.split("#", 1)[0].strip().split(" ")[0] or "-") != target]
+    if len(kept) == len(lines):
+        return False
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text("".join(kept), encoding="utf-8")
+    tmp.replace(p)
+    return True

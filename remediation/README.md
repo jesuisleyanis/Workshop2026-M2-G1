@@ -87,6 +87,7 @@ API sur le port **8005** (interne, réseau `app` ; jamais publié). Sauf sondes,
 | `GET` | `/incidents/{incident_id}` | oui | Détail : incident + `actions` + `verifications` + `timeline`. `404 incident_not_found`. |
 | `GET` | `/decision-table` | oui | Table de décision chargée (JSON). |
 | `GET` | `/waf/blocked-ips` | oui | IP réellement en liste noire du WAF (fichier `WAF_DENY_FILE`), enrichies par le journal : `{blocked: [{ip, blocked_at, list, incident_id, incident_type}]}`. Lecture seule (carte « IP bloquées » du dashboard). |
+| `DELETE` | `/waf/blocked-ips/{ip}` | oui | Déblocage par l'opérateur (bouton du dashboard) : retire l'IP de la deny-list (écriture atomique) puis recharge le WAF (SIGHUP via le proxy). `400 invalid_ip`, `404 ip_not_blocked`, `502 waf_reload_failed`. Tracé dans les logs (`remediation_action`). Hors boucle de reprise. |
 | `GET` | `/stream` | oui | Timeline temps réel (SSE). Voir ci-dessous. |
 | `GET` | `/health` | non | Liveness : `{"status": "ok"}`. |
 | `GET` | `/ready` | non | Readiness : `200`/`503` avec `checks` = `decision_table`, `journal`, `auth_configured`, `docker_socket_proxy` (ping du proxy). |

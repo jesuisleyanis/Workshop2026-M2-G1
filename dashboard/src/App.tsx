@@ -188,7 +188,7 @@ function Console({ streamUrl, eventSourceFactory, simulated, fallback, onNeverOp
           </div>
           <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-[18px]">
             <ServicesGrid services={state.services} />
-            <BlockedIpsCard {...blocked} />
+            <BlockedIpsCard items={blocked.items} error={blocked.error} onUnblock={blocked.unblock} />
             <SignalsPanel incident={incident} />
             <PlaybooksPanel incident={incident} />
             <EvidencePanel incident={incident} grafanaBase={grafanaBase} />
