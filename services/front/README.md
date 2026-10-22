@@ -68,7 +68,7 @@ src/
     LimitBar.tsx             barre « Plafond restant » (#46, D10)
     Switch.tsx               interrupteur accessible role=switch (réglages de carte, #47)
     StepUpDialog.tsx         confirmation renforcée par mot de passe d'un gros virement (#51, D15)
-    icons.tsx                pictogrammes SVG inline
+    icons.tsx                pictogrammes SVG inline + `Logo` (R stylisé de la banque, aussi en `public/favicon.svg`)
   pages/                     Login, Home, Stats, Send (formulaire desktop + assistant mobile, glisser pour envoyer),
                              History (+ feuille de filtres mobile, export CSV), TxDetail, Rib, Beneficiaries, Limits, Cards, Scheduled, Notifications,
                              Statements + StatementPrint (relevés #50), Profile

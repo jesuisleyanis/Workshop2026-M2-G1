@@ -56,3 +56,12 @@ export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
     </svg>
   )
 }
+
+/** Logo de la banque (R stylisé), vectorisé depuis le logo fourni ; prend la couleur du texte. */
+export function Logo({ size = 18 }: { size?: number }) {
+  return (
+    <svg aria-hidden viewBox="50 50 680 680" width={size} height={size} fill="currentColor">
+      <path d="M90 90H505A192 192 0 0 1 577 462L437 323H505A40.5 40.5 0 0 0 505 242H235A145 152 0 0 1 90 90ZM120 323H262Q330 323 385 378L682 675H545Q475 675 420 620Z" />
+    </svg>
+  )
+}

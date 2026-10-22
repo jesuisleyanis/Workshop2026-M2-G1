@@ -4,7 +4,7 @@ import { accountGradient, accountName, maskCard, signed, type TxView } from '../
 import { userMessage } from '../lib/errorMessages'
 import { formatMoney, formatTime } from '../lib/format'
 import type { Account } from '../types/api'
-import { Icon, type IconName } from './icons'
+import { Icon, Logo, type IconName } from './icons'
 
 export function Brand({ inverted = false }: { inverted?: boolean }) {
   return (
@@ -13,7 +13,7 @@ export function Brand({ inverted = false }: { inverted?: boolean }) {
         aria-hidden
         className={`grid h-[34px] w-[34px] place-items-center rounded-[11px] text-base font-bold ${inverted ? 'bg-white text-ink' : 'bg-night text-white'}`}
       >
-        R
+        <Logo size={20} />
       </div>
       <span className="text-[17px] font-semibold tracking-[-0.02em]">Résilience</span>
     </div>
@@ -138,7 +138,7 @@ export function AccountCard({
           <span className="text-[13px] font-medium text-ink-4">{name}</span>
           <span className={`tnum font-semibold tracking-[-0.02em] ${amount}`}>{formatMoney(account.balance, account.currency)}</span>
         </span>
-        {size === 'lg' && <span className="grid h-[30px] w-[30px] flex-none place-items-center rounded-[10px] bg-white text-sm font-bold text-ink">R</span>}
+        {size === 'lg' && <span className="grid h-[30px] w-[30px] flex-none place-items-center rounded-[10px] bg-white text-ink"><Logo size={18} /></span>}
       </span>
       <span className="relative flex items-center justify-between">
         <span className="font-mono text-[13px] tracking-[0.05em] text-[#e4e6e9]">{maskCard(account)}</span>
