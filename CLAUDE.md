@@ -36,7 +36,7 @@ La commande `/avancer` guide ce cycle. Ne jamais marquer ✅ une tâche dont les
 ## Sécurité — points durs (sondés par le jury)
 
 - Le **moteur de remédiation** ne touche jamais le socket Docker brut : il passe par `docker-socket-proxy` avec verbes limités. Son API est authentifiée (token SOPS) et **non exposée** sur le réseau `edge`. Voir `remediation/CAHIER-DES-CHARGES.md`.
-- **Seul le WAF** est exposé en HTTP (80/443), plus un listener **hôte-seulement `127.0.0.1:9443`** (loopback) qui sert le back-office et `/api/v1/auth/*` + `/api/v1/admin/*` (404 sur 80/443, ADR 0007) ; le broker MQTT (`mosquitto`) est le seul autre port publié, **lié à l'interface hotspot** (`MQTT_BIND`). DB, secrets, API internes, management : réseaux `data`/`app`/`obs` internes, jamais `0.0.0.0`.
+- **Seul le WAF** est exposé en HTTP (80/443), plus un listener **hôte-seulement `127.0.0.1:9443`** (loopback) qui sert le back-office et `/api/v1/auth/*` + `/api/v1/admin/*` (404 sur 80/443, ADR 0007) ; le broker MQTT (`mosquitto`) est le seul autre port publié, **lié à l'interface hotspot** (`MQTT_BIND_ADDR`, profil `iot` : `make up-iot`). DB, secrets, API internes, management : réseaux `data`/`app`/`obs` internes, jamais `0.0.0.0`.
 - Conteneurs durcis : image slim, utilisateur non-root, `cap_drop: ALL`, `read_only` quand possible, limites CPU/RAM, healthchecks.
 - Distinguer **restauration de disponibilité** (`service_flood`) et **correction de compromission/corruption** (`data_corruption`) — ce sont des réponses différentes (sujet §2, §3.4).
 

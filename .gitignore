@@ -1,5 +1,6 @@
 # Secrets déchiffrés et clés — JAMAIS commités
 .env
+.env.local
 security/sops/secrets.env
 security/sops/.sops.yaml
 *.decrypted.env
