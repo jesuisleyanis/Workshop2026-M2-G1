@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 import httpx
@@ -33,6 +33,12 @@ class CollectError(RuntimeError):
 
 class NoData(RuntimeError):
     """Prometheus répond mais aucune des features n'a de valeur."""
+
+
+#: Services compose dont la charge (CPU, mémoire) compte comme signal : ceux que les attaques
+#: visent. Label posé par Docker et exposé par cAdvisor.
+PLATFORM_SERVICES = ("waf", "front", "payment-api", "auth", "postgres")
+PLATFORM = f'container_label_com_docker_compose_service=~"{"|".join(PLATFORM_SERVICES)}"'
 
 
 def build_queries(window: str = "30s") -> dict[str, str]:
@@ -56,19 +62,26 @@ def build_queries(window: str = "30s") -> dict[str, str]:
         "ratio_5xx": (
             f'sum(rate(resilience_http_requests_total{{status=~"5.."}}[{w}])) / {total}'
         ),
+        # Tentatives de login REFUSÉES : mauvais mot de passe ET refus du rate-limit. Sans le
+        # second terme, une attaque par force brute retombe à ~0 dès que le rate-limit répond 429
+        # (compteur à part, resilience_auth_rate_limited_total) et serait routée en service_flood.
+        # `or vector(0)` : un compteur sans série (aucun échec encore) ne masque pas l'autre.
         "auth_failed_per_s": (
-            f'sum(rate(resilience_auth_logins_total{{result="failed"}}[{w}]))'
+            f'(sum(rate(resilience_auth_logins_total{{result="failed"}}[{w}])) or vector(0))'
+            f" + (sum(rate(resilience_auth_rate_limited_total[{w}])) or vector(0))"
         ),
         "waf_blocked_per_s": f"sum(rate(resilience_waf_blocked_total[{w}]))",
-        # cAdvisor : % d'un coeur pour le conteneur le plus chargé
+        # cAdvisor : % d'un coeur pour le conteneur de la PLATEFORME le plus chargé. Pas
+        # l'observabilité (cAdvisor, Prometheus, Grafana) : leur charge propre n'est pas un
+        # signal d'attaque et dominait la feature (compactions, cAdvisor à 92 % de sa limite).
         "cpu_pct_max": (
-            f'100 * max(rate(container_cpu_usage_seconds_total{{name!=""}}[{w}]))'
+            f"100 * max(rate(container_cpu_usage_seconds_total{{{PLATFORM}}}[{w}]))"
         ),
-        # cAdvisor : % de la limite mémoire pour le conteneur le plus chargé
+        # cAdvisor : % de la limite mémoire pour le conteneur de la plateforme le plus chargé
         # (seuls les conteneurs avec limite définie comptent)
         "mem_pct_max": (
-            "100 * max(container_memory_working_set_bytes{name!=\"\"} "
-            "/ (container_spec_memory_limit_bytes{name!=\"\"} > 0))"
+            f"100 * max(container_memory_working_set_bytes{{{PLATFORM}}} "
+            f"/ (container_spec_memory_limit_bytes{{{PLATFORM}}} > 0))"
         ),
         "db_errors_per_s": f"sum(rate(resilience_db_errors_total[{w}]))",
     }
@@ -82,6 +95,7 @@ class Snapshot:
     ts: datetime
     missing: tuple[str, ...] = ()
     monotonic: float = field(default_factory=time.monotonic, compare=False)
+    seq: int = 0  # numéro de collecte (croissant) : le detector ne score jamais deux fois le même
 
     def to_json(self) -> dict:
         return {
@@ -90,6 +104,7 @@ class Snapshot:
             "ts": self.ts.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
             "missing": list(self.missing),
             "window_seconds": WINDOW_SECONDS,
+            "seq": self.seq,
         }
 
 
@@ -145,6 +160,11 @@ class Collector:
         self.last_error: str | None = None
         self.collections_ok = 0
         self.collections_failed = 0
+        self.seq = 0
+        # Réveille les attentes longues (detector) à chaque collecte ; créée à la demande car une
+        # Condition asyncio est liée à la boucle qui l'utilise (une seule en production).
+        self._new: asyncio.Condition | None = None
+        self._new_loop: asyncio.AbstractEventLoop | None = None
 
     async def collect(self) -> Snapshot:
         """Une collecte. Lève CollectError (Prometheus KO) ou NoData (rien à lire)."""
@@ -160,14 +180,38 @@ class Collector:
     async def tick(self) -> Snapshot | None:
         """Collecte + mise à jour de l'état ; ne lève jamais (la boucle doit survivre)."""
         try:
-            self.latest = await self.collect()
+            snap = await self.collect()
+            self.seq += 1
+            self.latest = replace(snap, seq=self.seq)
             self.last_error = None
             self.collections_ok += 1
+            cond = self._condition()
+            async with cond:
+                cond.notify_all()
             return self.latest
         except (CollectError, NoData) as exc:
             self.last_error = str(exc)
             self.collections_failed += 1
             return None
+
+    async def wait_newer(self, after: int, timeout: float) -> Snapshot | None:
+        """Attente longue : le premier snapshot frais de numéro > `after`, ou après `timeout`
+        secondes le dernier snapshot frais (éventuellement le même). Supprime la latence de
+        relève côté detector : il est servi dès la fin de la collecte."""
+        if self.seq <= after:
+            cond = self._condition()
+            async with cond:
+                try:
+                    await asyncio.wait_for(cond.wait_for(lambda: self.seq > after), timeout)
+                except asyncio.TimeoutError:
+                    pass
+        return self.fresh()
+
+    def _condition(self) -> asyncio.Condition:
+        loop = asyncio.get_running_loop()
+        if self._new is None or self._new_loop is not loop:
+            self._new, self._new_loop = asyncio.Condition(), loop
+        return self._new
 
     def fresh(self) -> Snapshot | None:
         """Le dernier snapshot s'il est assez récent, sinon None."""

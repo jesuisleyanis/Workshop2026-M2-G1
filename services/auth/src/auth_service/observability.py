@@ -76,7 +76,11 @@ class RequestContextMiddleware:
 
         async def send_with_id(message) -> None:
             if message["type"] == "http.response.start":
-                MutableHeaders(scope=message)["X-Request-ID"] = rid
+                out = MutableHeaders(scope=message)
+                out["X-Request-ID"] = rid
+                # Données bancaires / jetons : jamais en cache (navigateur, proxy). Le WAF pose ses
+                # en-têtes au niveau server, on ne les surcharge pas par location.
+                out.setdefault("Cache-Control", "no-store")
             await send(message)
 
         await self.app(scope, receive, send_with_id)
@@ -127,14 +131,28 @@ def log_event(
 class ApiError(Exception):
     """Erreur métier rendue au format REST du contrat."""
 
-    def __init__(self, status: int, code: str, message: str, headers: dict | None = None) -> None:
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        headers: dict | None = None,
+        details: list | None = None,
+    ) -> None:
         self.status, self.code, self.message, self.headers = status, code, message, headers
+        self.details = details  # relayé tel quel dans le corps (ex. enrollment_rejected)
         super().__init__(message)
 
 
 def error_response(
-    status: int, code: str, message: str, headers: dict | None = None
+    status: int,
+    code: str,
+    message: str,
+    headers: dict | None = None,
+    details: list | None = None,
 ) -> JSONResponse:
-    """Corps d'erreur du contrat : { "error": { code, message, request_id } }."""
+    """Corps d'erreur du contrat : { "error": { code, message, request_id[, details] } }."""
     body = {"error": {"code": code, "message": message, "request_id": request_id_var.get()}}
+    if details is not None:
+        body["error"]["details"] = details
     return JSONResponse(body, status_code=status, headers=headers)

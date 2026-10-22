@@ -1,19 +1,31 @@
 import { useState, type FormEvent } from 'react'
 import { ASSISTANT_API, MANUAL_ACTIONS_URL } from '../config'
+import { operatorAuthHeader, operatorErrorMessage, operatorOutcome, readOperatorToken, saveOperatorToken } from '../lib/operatorToken'
 import type { Incident } from '../types/events'
+import { OperatorTokenForm } from './OperatorTokenForm'
 import { Panel, Pill } from './Panel'
 
-/** POST JSON ; lève une Error lisible (`code : message` du format d'erreur commun, sinon HTTP xxx). */
-export async function postJson<T>(url: string, body: unknown): Promise<T> {
+/** Erreur HTTP lisible ; `status` conservé pour distinguer 401/403/503 (jeton opérateur). */
+export class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number | null,
+  ) {
+    super(message)
+  }
+}
+
+/** POST JSON ; lève une HttpError lisible (`code : message` du format d'erreur commun, sinon HTTP xxx). */
+export async function postJson<T>(url: string, body: unknown, headers: Record<string, string> = {}): Promise<T> {
   let r: Response
   try {
-    r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
   } catch {
-    throw new Error('Service injoignable')
+    throw new HttpError('Service injoignable', null)
   }
   const j = (await r.json().catch(() => null)) as { error?: { code?: string; message?: string } } | null
-  if (!r.ok) throw new Error(j?.error ? `${j.error.code ?? 'erreur'} : ${j.error.message ?? ''}` : `HTTP ${r.status}`)
-  if (j === null) throw new Error('Réponse invalide')
+  if (!r.ok) throw new HttpError(j?.error ? `${j.error.code ?? 'erreur'} : ${j.error.message ?? ''}` : `HTTP ${r.status}`, r.status)
+  if (j === null) throw new HttpError('Réponse invalide', r.status)
   return j as T
 }
 
@@ -90,7 +102,11 @@ interface Proposal {
 }
 type ManualResult = { incident_id: string; action: string; status: string; detail: string | null }
 
-/** Commande en langage naturel -> proposition de l'assistant -> exécution UNIQUEMENT après « Confirmer ». */
+/**
+ * Commande en langage naturel -> proposition de l'assistant -> exécution UNIQUEMENT après « Confirmer ».
+ * L'exécution est une écriture : jeton OPÉRATEUR (REMEDIATION_OPERATOR_TOKEN) demandé à la première
+ * confirmation, gardé en sessionStorage, effacé sur 401/403. L'assistant ne voit jamais ce jeton.
+ */
 export function OperatorCommandPanel() {
   const [command, setCommand] = useState('')
   const [reason, setReason] = useState('')
@@ -99,12 +115,14 @@ export function OperatorCommandPanel() {
   const [result, setResult] = useState<ManualResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [askToken, setAskToken] = useState(false)
 
   const clear = () => {
     setProposal(null)
     setInfo(null)
     setResult(null)
     setError(null)
+    setAskToken(false)
   }
 
   const submit = async (e: FormEvent) => {
@@ -122,19 +140,35 @@ export function OperatorCommandPanel() {
     }
   }
 
-  const confirm = async () => {
+  const execute = async (token: string) => {
     if (!proposal) return
     setBusy(true)
     setError(null)
     try {
       const body = { action: proposal.action, params: proposal.params, ...(reason.trim() ? { reason: reason.trim() } : {}) }
-      setResult(await postJson<ManualResult>(MANUAL_ACTIONS_URL, body))
+      setResult(await postJson<ManualResult>(MANUAL_ACTIONS_URL, body, operatorAuthHeader(token)))
       setProposal(null)
     } catch (err) {
-      setError((err as Error).message)
+      const status = err instanceof HttpError ? err.status : null
+      const outcome = status === null ? 'error' : operatorOutcome(status) // 401/403 : jeton oublié
+      setError(outcome === 'unauthorized' || outcome === 'forbidden' || outcome === 'unavailable'
+        ? operatorErrorMessage(outcome, 'Action')
+        : (err as Error).message)
     } finally {
       setBusy(false)
     }
+  }
+
+  const confirm = () => {
+    const token = readOperatorToken()
+    if (token) void execute(token)
+    else setAskToken(true)
+  }
+
+  const submitToken = (token: string) => {
+    setAskToken(false)
+    saveOperatorToken(token)
+    void execute(token)
   }
 
   return (
@@ -176,8 +210,11 @@ export function OperatorCommandPanel() {
               maxLength={200}
               className="h-[34px] rounded-lg border border-edge bg-card px-3 text-[13px]"
             />
+            {askToken && (
+              <OperatorTokenForm action={`exécuter ${proposal.action}`} onSubmit={submitToken} onCancel={() => setAskToken(false)} />
+            )}
             <div className="flex gap-2">
-              <button type="button" className={btn} disabled={busy} onClick={confirm}>
+              <button type="button" className={btn} disabled={busy || askToken} onClick={confirm}>
                 {busy ? 'Exécution…' : 'Confirmer'}
               </button>
               <button type="button" className={btn} disabled={busy} onClick={clear}>

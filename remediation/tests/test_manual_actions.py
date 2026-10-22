@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastapi.testclient import TestClient
-
 from actions.runner import PLAYBOOK_WAF_DENY
-from conftest import TOKEN, Env, capture_logs, make_settings, make_table
+from conftest import OPERATOR_TOKEN, TOKEN, Env, capture_logs, make_settings, make_table
 from export_journal import export
+from fastapi.testclient import TestClient
 from main import create_app
 
-AUTH = {"Authorization": f"Bearer {TOKEN}"}
+AUTH = {"Authorization": f"Bearer {TOKEN}"}  # jeton de SERVICE : lectures (incidents, flux)
+OP = {"Authorization": f"Bearer {OPERATOR_TOKEN}"}  # jeton OPÉRATEUR : seul admis sur POST /manual-actions
 
 
 def _client(env: Env, **settings) -> TestClient:
@@ -32,7 +32,7 @@ def client(env):
 
 def test_block_ip_success_journal_and_stream(client, env):
     with capture_logs("remediation") as logs:
-        r = client.post("/manual-actions", headers=AUTH, json={
+        r = client.post("/manual-actions", headers=OP, json={
             "action": "waf_block_ip", "params": {"source": "203.0.113.9"}, "reason": "IP vue dans les logs"})
     assert r.status_code == 200, r.text
     out = r.json()
@@ -55,7 +55,7 @@ def test_block_ip_success_journal_and_stream(client, env):
 
 
 def test_restart_service_success(client, env):
-    r = client.post("/manual-actions", headers=AUTH,
+    r = client.post("/manual-actions", headers=OP,
                     json={"action": "restart_service", "params": {"service": "payment-api"}})
     assert r.status_code == 200 and r.json()["status"] == "ok"
     assert ("POST", "/containers/cid-payment-api/restart") in env.net.docker_calls()
@@ -72,7 +72,7 @@ def test_restart_service_success(client, env):
     {"action": "waf_block_ip", "params": {"source": "1.2.3.4"}, "reason": "x" * 201},
 ])
 def test_invalid_or_forbidden_is_422_and_nothing_runs(client, env, body):
-    r = client.post("/manual-actions", headers=AUTH, json=body)
+    r = client.post("/manual-actions", headers=OP, json=body)
     assert r.status_code == 422 and "error" in r.json()
     assert env.runner.calls == [] and env.net.docker_calls() == []
     assert client.app.state.journal.list_incidents() == []
@@ -81,7 +81,7 @@ def test_invalid_or_forbidden_is_422_and_nothing_runs(client, env, body):
 @pytest.mark.parametrize("ip", ["192.168.137.1", "127.0.0.1", "::1", " 127.0.0.1 ",
                                 "::ffff:127.0.0.1", "::FFFF:192.168.137.1", "fe80::1%eth0"])
 def test_protected_ip_is_refused(client, env, ip):
-    r = client.post("/manual-actions", headers=AUTH, json={"action": "waf_block_ip", "params": {"source": ip}})
+    r = client.post("/manual-actions", headers=OP, json={"action": "waf_block_ip", "params": {"source": ip}})
     assert r.status_code == 422 and r.json()["error"]["code"] == "action_refused"
     assert env.runner.calls == [] and client.app.state.journal.list_incidents() == []
 
@@ -92,9 +92,41 @@ def test_without_token_is_401(client, env):
     assert env.runner.calls == []
 
 
+def test_service_token_is_refused_on_manual_actions(client, env):
+    # Le jeton de service est détenu par le nginx du dashboard (lectures) ; il ne doit jamais suffire à
+    # déclencher une action : sinon tout conteneur des réseaux app/ai parlant à ce nginx agirait sans secret.
+    for body in ({"action": "waf_block_ip", "params": {"source": "203.0.113.9"}},
+                 {"action": "restart_service", "params": {"service": "payment-api"}}):
+        r = client.post("/manual-actions", headers=AUTH, json=body)
+        assert r.status_code == 403 and r.json()["error"]["code"] == "operator_token_required"
+    assert env.runner.calls == [] and env.net.docker_calls() == []
+    assert client.app.state.journal.list_incidents() == []
+
+
+def test_manual_actions_fail_closed_without_operator_token(env):
+    with _client(env, operator_token=None) as c:
+        for headers in (AUTH, OP, {}):
+            r = c.post("/manual-actions", headers=headers,
+                       json={"action": "waf_block_ip", "params": {"source": "203.0.113.9"}})
+            assert r.status_code == 503
+    assert env.runner.calls == []
+
+
+def test_manual_action_never_feeds_the_mttd(client, env):
+    # Pas de détection derrière une action manuelle : MTTD absent du journal et de la jauge
+    # resilience_mttd_seconds (sinon ~0 s ferait baisser le MTTD affiché au jury).
+    from prometheus_client import REGISTRY
+
+    iid = client.post("/manual-actions", headers=OP, json={
+        "action": "waf_block_ip", "params": {"source": "203.0.113.9"}}).json()["incident_id"]
+    inc = client.get(f"/incidents/{iid}", headers=AUTH).json()
+    assert inc["status"] == "closed" and inc["mttd_seconds"] is None
+    assert REGISTRY.get_sample_value("resilience_mttd_seconds", {"incident_id": iid}) is None
+
+
 def test_dry_run_executes_nothing(env):
     with _client(env, dry_run=True) as c:
-        r = c.post("/manual-actions", headers=AUTH,
+        r = c.post("/manual-actions", headers=OP,
                    json={"action": "waf_block_ip", "params": {"source": "203.0.113.9"}})
         assert r.json()["status"] == "dry_run"
         assert c.get(f"/incidents/{r.json()['incident_id']}", headers=AUTH).json()["status"] == "dry_run"
@@ -104,7 +136,7 @@ def test_dry_run_executes_nothing(env):
 def test_manual_action_is_exported(env, tmp_path):
     db = tmp_path / "incidents.db"
     with _client(env, db_path=str(db)) as c:
-        iid = c.post("/manual-actions", headers=AUTH, json={
+        iid = c.post("/manual-actions", headers=OP, json={
             "action": "restart_service", "params": {"service": "auth"}, "reason": "test"}).json()["incident_id"]
     out = tmp_path / "incidents.json"
     assert export(str(db), str(out)) == 1

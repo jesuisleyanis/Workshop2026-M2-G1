@@ -168,6 +168,15 @@ class Journal:
         inc["timeline"] = self.timeline_since(0, incident_id, limit=1000)
         return inc
 
+    def last_blocks(self) -> list[dict[str, Any]]:
+        """Blocages WAF réussis (le plus récent d'abord) avec l'incident qui les a déclenchés."""
+        rows = self._query(
+            "SELECT a.ts, a.action_type, a.detail, a.incident_id, i.incident_type FROM actions a "
+            "JOIN incidents i ON i.incident_id = a.incident_id "
+            "WHERE a.action_type IN ('waf_block_ip', 'waf_blacklist_ip') AND a.result = 'success' "
+            "ORDER BY a.id DESC")
+        return [dict(r) for r in rows]
+
     def list_incidents(self, limit: int = 50) -> list[dict[str, Any]]:
         rows = self._query("SELECT * FROM incidents ORDER BY detected_at DESC, rowid DESC LIMIT ?", (limit,))
         return [self._incident_dict(r) for r in rows]

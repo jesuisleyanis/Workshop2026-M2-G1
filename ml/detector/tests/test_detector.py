@@ -96,8 +96,32 @@ def test_above_threshold_posts_schema_valid_event(loaded):
     # clés conformes au contrat §3
     assert set(payload) == {"schema_version", "event_id", "ts", "source", "service",
                             "anomaly_score", "threshold", "incident_type",
-                            "features_top", "evidence"}
+                            "features_top", "evidence", "source_ip"}
     assert payload["incident_type"] == "service_flood"
+    assert payload["source_ip"] is None  # aucun résolveur : champ additif absent (null)
+
+
+def test_event_carries_the_dominant_source_ip_from_the_resolver(loaded):
+    calls = []
+
+    class Resolver:
+        async def resolve(self, incident_type):
+            calls.append(incident_type)
+            return "192.168.137.42"
+
+    fake = FakeRemediation()
+    det = make_detector(loaded, fake, source_resolver=Resolver())
+    asyncio.run(det.process(flood_vector(loaded)))
+    assert calls == [IncidentType.SERVICE_FLOOD]  # résolu pour le type étiqueté
+    assert json.loads(fake.requests[0].content)["source_ip"] == "192.168.137.42"
+
+
+def test_no_resolution_attempted_below_threshold(loaded):
+    class Resolver:
+        async def resolve(self, incident_type):  # pragma: no cover - ne doit pas être appelé
+            raise AssertionError("pas d'anomalie -> pas de requête Loki")
+
+    asyncio.run(make_detector(loaded, FakeRemediation(), source_resolver=Resolver()).process(normal_vector(loaded)))
 
 
 def test_below_threshold_emits_nothing(loaded):
@@ -122,6 +146,9 @@ def test_incident_type_routing_end_to_end(loaded):
         asyncio.run(det.process(vec))
         event = AnomalyEvent.model_validate(json.loads(fake.requests[0].content))
         assert event.incident_type.value == expected
+        if expected == "web_attack":
+            # preuve Loki : label `service` = service Compose émetteur (Promtail) -> waf-exporter
+            assert event.evidence.loki_query.startswith('{service="waf-exporter"}')
 
 
 def test_cooldown_dedupes_persistent_anomaly(loaded):
@@ -292,3 +319,68 @@ def test_not_ready_without_model():
         assert client.get("/health").status_code == 200
         r = client.get("/ready")
         assert r.status_code == 503 and "modèle" in r.json()["problems"][0]
+
+
+# --- confirmation sur fenêtres courtes et attente longue (détection < 5 s) ---------------
+
+
+class ScriptedModel:
+    """Modèle dont on impose la suite de scores (la logique testée est celle du detector)."""
+
+    def __init__(self, loaded, scores, threshold=0.7, threshold_high=0.9, confirm=2):
+        self._scores, self.stats = list(scores), loaded.stats
+        self.threshold, self.threshold_high, self.confirm_windows = threshold, threshold_high, confirm
+        self.guardrail_z = 1e9  # garde-fou neutralisé : on teste la décision du modèle seule
+
+    def score(self, vector):
+        return self._scores.pop(0)
+
+
+def run_scores(loaded, scores, **kw):
+    fake = FakeRemediation()
+    det = Detector(ScriptedModel(loaded, scores, **kw), fake.client, cooldown=0.0)
+    decisions = [asyncio.run(det.process(normal_vector(loaded))) for _ in scores]
+    return [d.trigger for d in decisions], fake
+
+
+def test_two_consecutive_windows_above_threshold_confirm_the_anomaly(loaded):
+    triggers, fake = run_scores(loaded, [0.75, 0.6, 0.75, 0.76])
+    assert triggers == [None, None, None, "model"]  # une fenêtre isolée ne suffit pas
+    assert len(fake.requests) == 1
+
+
+def test_high_threshold_fires_on_a_single_window(loaded):
+    triggers, _ = run_scores(loaded, [0.5, 0.95])
+    assert triggers == [None, "model"]  # attaque franche : pas d'attente de confirmation
+
+
+def test_confirmation_defaults_to_the_calibration_and_can_be_disabled(loaded):
+    det = Detector(loaded, FakeRemediation().client)
+    assert det.confirm_windows == loaded.confirm_windows == 1  # modèle non calibré : pas de confirmation
+    assert det.threshold_high is None
+    triggers, _ = run_scores(loaded, [0.75], confirm=1, threshold_high=None)
+    assert triggers == ["model"]
+
+
+def test_runtime_never_scores_the_same_collection_twice_and_long_polls(loaded):
+    fake = FakeRemediation()
+    det = make_detector(loaded, fake)
+    seen = []
+
+    def collector(request):
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"feature_names": list(FEATURE_NAMES),
+                                         "vector": normal_vector(loaded), "seq": 7})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(collector))
+    rt = Runtime(det, "http://collector:8004", 1.0, http=http, wait=5.0)
+    scored = []
+    det.process = lambda v: scored.append(v) or asyncio.sleep(0)
+
+    async def two_polls():
+        await rt.poll_once()
+        await rt.poll_once()
+
+    asyncio.run(two_polls())
+    assert seen[0] == {} and seen[1] == {"after": "7", "wait": "5.0"}  # 1re relève, puis attente longue
+    assert len(scored) == 1  # même collecte (seq 7) : scorée une seule fois

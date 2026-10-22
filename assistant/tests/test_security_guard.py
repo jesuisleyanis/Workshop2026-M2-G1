@@ -204,3 +204,44 @@ def test_compose_assistant_is_isolated_from_remediation(services):
     # Reprise indépendante : rien n'attend l'assistant, le moteur ne le connaît pas.
     assert not [n for n, s in services.items() if "assistant" in _deps(s)]
     assert "assistant" not in str(services["remediation"].get("environment", "")).lower()
+
+
+def _nginx_locations(text: str) -> dict[str, str]:
+    """{motif: corps} des `location` d'une conf nginx (commentaires retirés, accolades imbriquées)."""
+    text = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+    out: dict[str, str] = {}
+    for m in re.finditer(r"location\s+(.+?)\s*\{[ \t]*$", text, re.MULTILINE):
+        depth, i = 1, m.end()
+        while depth:
+            depth += {"{": 1, "}": -1}.get(text[i], 0)
+            i += 1
+        out[m.group(1).strip()] = text[m.end():i - 1]
+    return out
+
+
+def test_ai_network_cannot_reach_a_remediation_write_without_operator_token(services):
+    """Depuis le réseau `ai` (assistant, ollama), seul relais vers le moteur : le nginx du dashboard
+    (sur `app` ET `ai`). Aucune de ses routes d'écriture vers le moteur ne doit porter de jeton : le
+    moteur exige alors le jeton OPÉRATEUR (POST /manual-actions, DELETE /waf/blocked-ips/{ip}), qu'aucun
+    conteneur ne détient (remediation/tests : test_manual_actions.py, test_unblock.py)."""
+    ai = {n for n, svc in services.items() if "ai" in (svc.get("networks") or [])}
+    rem_nets = set(services["remediation"]["networks"])
+    relays = {n for n in ai if set(services[n]["networks"]) & rem_nets}
+    assert relays == {"dashboard"}, relays  # assistant et ollama ne joignent jamais le moteur
+    holders = {n for n, svc in services.items()
+               if "REMEDIATION_OPERATOR_TOKEN" in str(svc.get("environment") or {})}
+    assert holders == {"remediation"}, holders
+    conf = (ROOT.parent / "dashboard" / "docker" / "dashboard.conf.template").read_text(encoding="utf-8")
+    writes = {}
+    for loc, body in _nginx_locations(conf).items():
+        if "remediation_upstream" not in body:
+            continue
+        m = re.search(r"limit_except\s+([A-Z ]+?)\s*\{", body)
+        methods = set(m.group(1).split()) if m else {"*"}
+        if methods & {"POST", "PUT", "PATCH", "DELETE", "*"}:
+            writes[loc] = body
+    assert any("manual-actions" in loc for loc in writes) and any("blocked-ips/" in loc for loc in writes)
+    for loc, body in writes.items():
+        assert "REMEDIATION_AUTH_HEADER" not in body and "Bearer" not in body, loc
+        for value in re.findall(r"proxy_set_header\s+Authorization\s+([^;]+);", body):
+            assert value.strip() == "$http_authorization", (loc, value)

@@ -78,17 +78,52 @@ echo "$(date -Iseconds) START ${SCENARIO} target=${TARGET} duration=${DURATION}s
 
 bounded_loop() {
   # Boucle bornée : envoie des requêtes jusqu'à la fin de la fenêtre, puis s'arrête seule.
-  local path="$1" method="${2:-GET}" body="${3:-}"
+  # Débit tenu par LOTS d'une seconde : un seul `curl --parallel` envoie RATE requêtes, puis on
+  # attend la seconde suivante. Un curl par requête plafonnait vers 5-8 req/s sous Git Bash
+  # (~100 ms de lancement + TLS chacun) : le « flood » se confondait avec le trafic normal.
+  local path="$1" method="${2:-GET}" body="${3:-}" token="${4:-}"
   local end=$(( $(date +%s) + DURATION ))
+  local auth=()
+  [[ -n "${token}" ]] && auth=(-H "Authorization: Bearer ${token}")
+  if curl --help all 2>/dev/null | grep -q -- '--parallel '; then
+    local urls=() i
+    for (( i = 0; i < RATE; i++ )); do urls+=("${TARGET}${path}"); done
+    local data=()
+    [[ "${method}" == "POST" ]] && data=(-X POST -H 'Content-Type: application/json' -d "${body}")
+    # Chaque lot part en tâche de fond : un lot de 40 met ~0,9 s (40 poignées de main TLS), l'attendre
+    # avant le suivant diviserait le débit par deux. --max-time 5 borne les lots simultanés à ~5.
+    local now
+    while now=$(date +%s); (( now < end )); do
+      curl -k -s --parallel --parallel-max "${RATE}" --max-time 5 \
+        ${auth[@]+"${auth[@]}"} ${data[@]+"${data[@]}"} "${urls[@]}" >/dev/null 2>&1 &
+      while (( $(date +%s) == now )); do sleep 0.05; done   # lot suivant à la seconde suivante
+    done
+    wait
+    return
+  fi
+  # Repli (curl < 7.66, sans --parallel) : une requête à la fois, débit réel plus faible.
   local interval; interval=$(awk "BEGIN{print 1/${RATE}}")
   while (( $(date +%s) < end )); do
     if [[ "${method}" == "POST" ]]; then
-      curl -k -s -o /dev/null -X POST -H 'Content-Type: application/json' -d "${body}" "${TARGET}${path}" || true
+      curl -k -s -o /dev/null -X POST -H 'Content-Type: application/json' ${auth[@]+"${auth[@]}"} \
+        -d "${body}" "${TARGET}${path}" || true
     else
       curl -k -s -o /dev/null "${TARGET}${path}" || true
     fi
     sleep "${interval}"
   done
+}
+
+# Session d'un client fictif (comptes de scripts/seed.py) : jeton puis id du 1er compte.
+# Pas de jq sur le PC Attaquant : extraction par motif, suffisante pour ces réponses plates.
+login_token() {
+  curl -k -s -X POST -H 'Content-Type: application/json' \
+    -d "{\"username\":\"$1\",\"password\":\"$2\"}" "${TARGET}/api/v1/login" \
+    | sed -n 's/.*"access_token" *: *"\([^"]*\)".*/\1/p' || true
+}
+first_account_id() {
+  curl -k -s -H "Authorization: Bearer $1" "${TARGET}/api/v1/accounts" \
+    | grep -o '"id" *: *[0-9]*' | head -n 1 | grep -o '[0-9]*$' || true
 }
 
 rand_ip() { printf '%d.%d.%d.%d' $((RANDOM%223+1)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)); }
@@ -163,7 +198,25 @@ slow_conn() {
 
 case "${SCENARIO}" in
   service_flood)
-    bounded_loop "/api/v1/transactions" POST '{"dst_account":"FR-FAKE-0002","amount_cents":100}' &
+    # Le flood doit atteindre la DB : jeton valide et ids de compte ENTIERS (contrat
+    # payment-api, StrictInt). Sans eux il ne produit que des 401/422 rejetés avant
+    # Postgres, une signature fausse pour le ML. 1 centime : le solde tient tout le flood.
+    # Comptes du jeu fictif (resilience_db.seed) : mot de passe commun SEED_PASSWORD (.env) —
+    # jamais en dur (les anciens `demo-pass-0N` n'existent plus : flood sans jeton = 401).
+    FLOOD_PASSWORD="${FLOOD_PASSWORD:-${SEED_PASSWORD:-}}"
+    if [[ -z "${FLOOD_PASSWORD}" ]]; then
+      echo "service_flood : SEED_PASSWORD absent (lancer via make attack, ou exporter SEED_PASSWORD / FLOOD_PASSWORD)" | tee -a "${RUNLOG}"
+      rm -f "${PIDFILE}"; exit 1
+    fi
+    TOKEN="$(login_token "${FLOOD_USER:-demo01}" "${FLOOD_PASSWORD}")"
+    SRC_ID="$( [[ -n "${TOKEN}" ]] && first_account_id "${TOKEN}" || true)"
+    DST_ID="${FLOOD_DST_ID:-$(first_account_id "$(login_token "${FLOOD_DST_USER:-demo02}" "${FLOOD_DST_PASSWORD:-${FLOOD_PASSWORD}}")")}"
+    if [[ -z "${SRC_ID}" || -z "${DST_ID}" ]]; then
+      echo "service_flood : login ou lecture des comptes impossible sur ${TARGET} (make seed ?)" | tee -a "${RUNLOG}"
+      rm -f "${PIDFILE}"; exit 1
+    fi
+    bounded_loop "/api/v1/transactions" POST \
+      "{\"src_account\":${SRC_ID},\"dst_account\":${DST_ID},\"amount_cents\":1}" "${TOKEN}" &
     echo $! >> "${PIDFILE}" ;;
   auth_abuse)
     bounded_loop "/api/v1/login" POST '{"username":"demo01","password":"wrong-password"}' &

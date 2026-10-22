@@ -70,6 +70,7 @@ def test_token_in_query_string_is_not_accepted(client):
 
 @pytest.mark.parametrize("method,path", [
     ("get", "/stream?follow=false"), ("get", "/incidents"), ("get", "/incidents/abc"), ("get", "/decision-table"),
+    ("get", "/waf/blocked-ips"),
 ])
 def test_every_non_probe_route_requires_the_token(client, method, path):
     assert getattr(client, method)(path).status_code == 401
@@ -205,3 +206,14 @@ def test_incoming_request_id_must_be_uuid_else_replaced(client):
     valid = str(_uuid.uuid4())
     r2 = client.get("/health", headers={"X-Request-ID": valid})
     assert r2.headers["X-Request-ID"] == valid
+
+
+def test_blocked_ips_endpoint_lists_the_deny_file_with_journal_context(env, tmp_path):
+    deny = tmp_path / "blocked_ips.conf"
+    deny.write_text("\n".join(["# géré par la remédiation", "203.0.113.7 1;", ""]), encoding="utf-8")
+    app = create_app(make_settings(waf_deny_file=str(deny)), table=env.engine.table, services=env.services)
+    with TestClient(app) as c:
+        r = c.get("/waf/blocked-ips", headers=AUTH)
+    assert r.status_code == 200
+    assert r.json() == {"blocked": [{"ip": "203.0.113.7", "blocked_at": None, "list": "unknown",
+                                     "incident_id": None, "incident_type": None}]}

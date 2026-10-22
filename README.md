@@ -86,14 +86,19 @@ cd Workshop2026-M2-G1
 # 1. Secrets : chiffrer security/sops/secrets.example.env -> secrets.enc.env (voir security/sops/README.md)
 # 2. Lever la stack (profil démo minimal) puis peupler les données fictives
 make up          # ou `make up-full` pour l'observabilité complète
+make up-iot      # sur le PC Hôte avec le PA actif : ajoute Mosquitto (profil iot)
 make seed        # comptes fictifs demo01..demo05 financés
 
 # Détails des cibles make : `make help` ; procédures scripts : scripts/README.md
 ```
 
+Toutes les commandes (lancer, entraîner le ML seul, démontrer, tester, dépanner) : [`docs/commandes.md`](docs/commandes.md).
+Plan d'optimisation du lancement : [`docs/plan-optimisation-lancement.md`](docs/plan-optimisation-lancement.md).
+
 ## Vérifier le système
 
-- **WAF (seul point exposé)** : `https://localhost` (80/443) — front « Banque Résilience » ; les API internes ne sont pas publiées.
+- **WAF (seul point HTTP exposé)** : `https://localhost` (80/443) — front « Banque Résilience » ; les API internes ne sont pas publiées. Le profil `iot` expose uniquement MQTT sur `192.168.137.1:1883`.
+- **Back-office (PC Hôte uniquement)** : `https://localhost:9443` — listener WAF lié à `127.0.0.1` (authentification visage + mot de passe, administration des agents ; ADR 0007). Pas à pas (lancement, premier admin, login facial, LED ESP8266, dépannage) : [`docs/RUNBOOK-BACKOFFICE-FACIAL.md`](docs/RUNBOOK-BACKOFFICE-FACIAL.md).
 - **Comptes de test fictifs** : `demo01` … `demo05`, mot de passe commun `SEED_PASSWORD` (SOPS, cf. `security/sops/secrets.example.env`).
 - **Transaction de contrôle** : `make verify` (code retour `0` = transaction fictive rejouée OK). Démo complète : `make demo` (5 temps). Détails : [`scripts/README.md`](scripts/README.md).
 
@@ -101,7 +106,8 @@ make seed        # comptes fictifs demo01..demo05 financés
 
 `make test` lance **un process pytest par composant** (`libs`, `services/*`, `ml`, `remediation`,
 `assistant`) puis les répertoires de tests de contrat (`security/waf/tests`, `attacks/tests`,
-`scripts/tests`, `infra/tests`, `tests/e2e`), et enfin Vitest (`services/front`, `dashboard`).
+`scripts/tests`, `infra/tests`, `tests/e2e`), et enfin Vitest (`services/front`, `services/backoffice`,
+`dashboard`). `services/face-id` fait partie des composants Python (backend `stub` : ni dlib ni modèle requis).
 Un seul process pour tout le dépôt n'est pas possible : chaque service déclare ses métriques
 Prometheus à l'import (`DuplicateTimeseries`).
 
@@ -111,14 +117,16 @@ installées, y compris les libs partagées `resilience_common` / `resilience_db`
 ```bash
 uv venv --python 3.12 .venv && source .venv/bin/activate     # ou python3.12 -m venv .venv
 uv pip install -e "libs/python/resilience_common[fastapi,test]" -e "libs/python/resilience_db[test]" \
-  -e services/auth -e services/payment-api \
+  -e services/auth -e services/payment-api -e services/face-id \
   -r remediation/requirements-dev.txt -r assistant/requirements-dev.txt
 ( cd ml && uv pip install -r requirements-dev.txt )   # chemin relatif ../libs dans le fichier
 make test                                             # ou : make test-py PYTHON=.venv/bin/python
 ```
 
-Les tests front exigent leurs dépendances (`npm ci` dans `services/front` et `dashboard`) : sans elles, `make test`
-échoue (c'est voulu : l'agrégat reflète l'état réel). `make test-py` ne lance que la partie Python.
+Les tests front exigent leurs dépendances (`npm ci` dans `services/front`, `services/backoffice` et `dashboard`) :
+sans elles, `make test` échoue (c'est voulu : l'agrégat reflète l'état réel). Le back-office exige **Node ≥ 22.15
+(ou 24)** : la version d'undici embarquée par jsdom ne se charge pas sur Node 20. `make test-py` ne lance que la
+partie Python, `make test-front` que Vitest.
 
 Chaque composant reste testable seul depuis son répertoire (`cd remediation && pytest`), voir son `README.md`.
 
@@ -175,8 +183,11 @@ Dossier de rendu : `Workshop2026-M2-G1`
 |---|---|
 | `Workshop2026-M2-G1-Dossier.pdf` | Dossier d'ingénierie et de gouvernance (8 à 12 pages hors annexes) |
 | `Workshop2026-M2-G1-Pres.pptx` | Support de présentation |
-| `Workshop2026-M2-G1-VidChrono.mp4` | Clip Chrono — 60 s max, sans coupe |
+| `Workshop2026-M2-G1-VidChrono.mp4` | Clip Chrono — 60 s max, sans coupe (kit de production : `docs/dossier/clip/`) |
 | `Workshop2026-M2-G1-Code.zip` | Archive du dépôt Git (sources, IaC, scripts, tests, doc, README) |
+
+Clip Chrono : storyboard + script d'assemblage + validation dans `docs/dossier/clip/` ; le `.mp4` s'enregistre
+en recette (voir son `README.md`). Procédure de **gel du code** J4 : [`docs/FREEZE-J4.md`](docs/FREEZE-J4.md).
 
 Génération de l'archive : `make package` (ou `scripts/package_deliverables.sh`). Le script lance d'abord
 `security/hardening/audit.sh`, exclut `.git`, dépendances (`node_modules`, venv), artefacts de build

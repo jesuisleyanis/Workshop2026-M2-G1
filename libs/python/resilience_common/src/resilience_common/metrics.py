@@ -48,6 +48,41 @@ anomaly_score = Gauge(
     labelnames=("service",),
 )
 
+# --- Consigne additionnelle 1 : reconnaissance de visage + auth à étapes + LED ---
+
+face_verifications_total = Counter(
+    "resilience_face_verifications_total",
+    "Vérifications faciales 1:1 (identifiant <-> visage).",
+    labelnames=("result",),  # match | nomatch | error
+)
+
+face_verify_duration_seconds = Histogram(
+    "resilience_face_verify_duration_seconds",
+    "Latence d'une vérification faciale.",
+)
+
+face_enrollments = Gauge(
+    "resilience_face_enrollments",
+    "Nombre de visages enrôlés (embeddings stockés).",
+)
+
+auth_face_steps_total = Counter(
+    "resilience_auth_face_steps_total",
+    "Issues de l'étape visage de l'authentification back-office.",
+    labelnames=("result",),  # recognized | rejected
+)
+
+auth_lockouts_total = Counter(
+    "resilience_auth_lockouts_total",
+    "Blocages d'accès au back-office (quota d'échecs atteint).",
+)
+
+led_publish_total = Counter(
+    "resilience_led_publish_total",
+    "Publications d'état LED vers le broker MQTT.",
+    labelnames=("state", "result"),  # state sémantique ; result ok | error
+)
+
 # --- HTTP standard (contrat §2) -------------------------------------------------
 # Noms et labels EXACTS du contrat. L'ordre des labels (service avant path) est
 # significatif : il conditionne l'ordre d'affichage dans /metrics.
@@ -86,7 +121,8 @@ mttr_seconds = Gauge(
 # prometheus-fastapi-instrumentator — voir instrument() ci-dessous.
 
 
-_EXCLUDED_PATHS = frozenset({"/metrics", "/health", "/ready"})
+# /api/v1/status : sonde publique du bandeau client (#42), même statut que /ready.
+_EXCLUDED_PATHS = frozenset({"/metrics", "/health", "/ready", "/api/v1/status"})
 
 
 def instrument(app, service: str) -> None:
@@ -104,7 +140,7 @@ def instrument(app, service: str) -> None:
 
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
     from starlette.requests import Request
-    from starlette.responses import PlainTextResponse, Response
+    from starlette.responses import PlainTextResponse
 
     @app.middleware("http")
     async def _metrics_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -121,6 +157,8 @@ def instrument(app, service: str) -> None:
         http_request_duration_seconds.labels(service, request.method, path).observe(elapsed)
         return response
 
-    @app.get("/metrics")
-    def _metrics() -> Response:  # type: ignore[no-untyped-def]
+    # Pas d'annotation de retour : avec `from __future__ import annotations`, FastAPI
+    # devrait résoudre un nom importé localement, ce qui échoue selon sa version.
+    @app.get("/metrics", response_class=PlainTextResponse)
+    def _metrics():  # type: ignore[no-untyped-def]
         return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)

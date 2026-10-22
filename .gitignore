@@ -1,5 +1,8 @@
 # Secrets déchiffrés et clés — JAMAIS commités
 .env
+.env.local
+security/sops/secrets.env
+security/sops/.sops.yaml
 *.decrypted.env
 *.env.dec
 secrets.enc.env.dec
@@ -44,5 +47,24 @@ infra/ansible/backups/*
 
 # Livrables générés (scripts/package_deliverables.sh) — produits à la demande, jamais commités
 Workshop2026-M2-G1-*
+# Prises écran brutes + pistes de légendes du Clip Chrono (peuvent contenir ce qui s'affiche à l'écran)
+*.mkv
+*.mp4
+*.mov
+prise_brute*
+docs/dossier/clip/*.ass
 # venv de travail cyber (local)
 .venv-cyber/
+# Captures ML en cours (écrites en .tmp puis renommées si valides)
+ml/training/data/*.tmp
+
+# Journal et PID du lanceur de scénarios (exécution locale)
+attacks/.runlog
+attacks/.run.pid
+
+# Graphe de connaissance local (graphify) — régénérable
+graphify-out/
+# Résultats du banc de latence de détection (make bench)
+bench-detection*.json
+# Artefacts de recette live (logs, captures d anomalies)
+.testrun/

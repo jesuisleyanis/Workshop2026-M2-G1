@@ -27,6 +27,8 @@ function tone(p: Phase, incident: Incident | null): Tone {
 
 export function headline(p: Phase, i: Incident | null): string {
   if (p === 'before' || !i) return 'Surveillance active · aucun incident en cours'
+  // Action confirmée par un opérateur : ni détection, ni remédiation automatique (hors boucle ZTR).
+  if (i.incidentType === 'manual_action') return `${INCIDENT_LABEL.manual_action} sur ${i.service}`
   if (p === 'after') return `Service ${i.service} rétabli en ${formatDuration(incidentMttr(i))} · transaction de vérification OK`
   if (i.failure) return `Remédiation échouée sur ${i.service} : ${i.failure.reason}`
   return `${INCIDENT_LABEL[i.incidentType]} détecté sur ${i.service} · remédiation automatique en cours`
@@ -59,7 +61,7 @@ export function PhaseBanner({ phase, incident }: Props) {
       </ol>
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">
         <span className="text-[15px] text-pretty text-fg-2" data-testid="headline">{headline(phase, incident)}</span>
-        {phase === 'after' && <Pill tone="ok">Reprise sans intervention humaine</Pill>}
+        {phase === 'after' && incident?.incidentType !== 'manual_action' && <Pill tone="ok">Reprise sans intervention humaine</Pill>}
       </div>
     </section>
   )

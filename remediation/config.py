@@ -42,8 +42,12 @@ def _secret(env: Mapping[str, str], name: str) -> str | None:
 
 @dataclass(frozen=True)
 class Settings:
-    # --- Authentification de l'API (POST /events, /stream, /incidents) ---
+    # --- Authentification de l'API ---
+    # Jeton de SERVICE (machine-à-machine) : POST /events*, lectures (/stream, /incidents, ...).
     token: str | None = None  # REMEDIATION_TOKEN
+    # Jeton OPÉRATEUR (humain, saisi dans le dashboard) : seules les écritures déclenchées par un humain.
+    # Distinct du jeton de service, que le nginx du dashboard détient pour les lectures.
+    operator_token: str | None = None  # REMEDIATION_OPERATOR_TOKEN
     # --- Appels sortants ---
     internal_token: str | None = None  # INTERNAL_TOKEN (API interne du service auth)
     docker_proxy_url: str = "http://docker-socket-proxy:2375"
@@ -63,6 +67,8 @@ class Settings:
     # --- Ansible (opérations WAF / restauration), exécuté DANS le conteneur ---
     ansible_private_data_dir: str = "/tmp/ansible-runner"  # artefacts (inscriptible)
     ansible_project_dir: str = "/opt/ansible/project"  # playbooks (lecture seule)
+    # Deny-list partagée avec le WAF (volume waf-deny), écrite par waf_deny_ip.yml ; lue par GET /waf/blocked-ips.
+    waf_deny_file: str = "/etc/resilience/waf-deny/blocked_ips.conf"
     waf_service: str = "waf"  # service Compose rechargé (SIGHUP) après mise à jour de la deny-list
     # --- Garde-fous ---
     dry_run: bool = False  # REMEDIATION_DRY_RUN : peut seulement FORCER le dry-run
@@ -75,12 +81,20 @@ class Settings:
     def token_configured(self) -> bool:
         return bool(self.token) and len(self.token or "") >= MIN_TOKEN_LENGTH
 
+    @property
+    def operator_token_configured(self) -> bool:
+        """Fail closed : absent, trop court ou ÉGAL au jeton de service = routes opérateur fermées
+        (sinon quiconque détient le jeton de service, dont le nginx du dashboard, serait opérateur)."""
+        tok = self.operator_token or ""
+        return len(tok) >= MIN_TOKEN_LENGTH and tok != (self.token or "")
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
         e = os.environ if env is None else env
         d = cls()
         return cls(
             token=_secret(e, "REMEDIATION_TOKEN"),
+            operator_token=_secret(e, "REMEDIATION_OPERATOR_TOKEN"),
             internal_token=_secret(e, "INTERNAL_TOKEN"),
             docker_proxy_url=e.get("DOCKER_PROXY_URL", d.docker_proxy_url).rstrip("/"),
             docker_allow_recreate=_bool(e.get("DOCKER_PROXY_ALLOW_RECREATE")),
@@ -97,6 +111,7 @@ class Settings:
             action_timeout_s=float(e.get("ACTION_TIMEOUT_S", d.action_timeout_s)),
             ansible_private_data_dir=e.get("ANSIBLE_PRIVATE_DATA_DIR", d.ansible_private_data_dir),
             ansible_project_dir=e.get("ANSIBLE_PROJECT_DIR", d.ansible_project_dir),
+            waf_deny_file=e.get("WAF_DENY_FILE", d.waf_deny_file),
             waf_service=e.get("WAF_SERVICE", d.waf_service),
             dry_run=_bool(e.get("REMEDIATION_DRY_RUN")),
             never_block_ips=_csv(e.get("NEVER_BLOCK_IPS"), d.never_block_ips),

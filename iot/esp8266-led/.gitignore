@@ -1,0 +1,5 @@
+# Secrets du firmware (SSID/PSK du PA, creds MQTT) — jamais versionnés.
+include/secrets.h
+
+# Artefacts de build PlatformIO.
+.pio/

@@ -48,6 +48,31 @@ def test_queries_cover_every_feature_with_contract_metrics():
         assert metric in joined
 
 
+def test_auth_failed_counts_rate_limited_refusals_too():
+    """Régression (capture réelle) : une force brute est vite refusée en 429 par le rate-limit,
+    compté à part ; sans lui auth_failed_per_s retombait à ~0 et l'attaque était routée en
+    service_flood (redémarrage de payment-api au lieu du blocage + rate-limit)."""
+    q = QUERIES["auth_failed_per_s"]
+    assert 'resilience_auth_logins_total{result="failed"}' in q
+    assert "resilience_auth_rate_limited_total" in q
+    assert q.count("or vector(0)") == 2  # un compteur encore sans série ne masque pas l'autre
+
+
+@pytest.mark.parametrize("feature", ["cpu_pct_max", "mem_pct_max"])
+def test_resource_features_only_look_at_platform_containers(feature):
+    """La charge de l'observabilité (cAdvisor à 92 % de sa limite, compactions Prometheus) n'est
+    pas un signal d'attaque : elle dominait mem_pct_max (91-99 % en continu dans la baseline)."""
+    from ml.collector.collector import PLATFORM_SERVICES
+
+    q = QUERIES[feature]
+    assert 'name!=""' not in q
+    selector = 'container_label_com_docker_compose_service=~"waf|front|payment-api|auth|postgres"'
+    assert q.count(selector) == (2 if feature == "mem_pct_max" else 1)
+    assert set(PLATFORM_SERVICES) == {"waf", "front", "payment-api", "auth", "postgres"}
+    for excluded in ("cadvisor", "prometheus", "grafana", "loki"):
+        assert excluded not in q
+
+
 def test_collect_builds_vector_in_contract_order():
     values = {n: float(i + 1) for i, n in enumerate(FEATURE_NAMES)}
     snap = asyncio.run(make_collector(values).collect())
@@ -107,3 +132,45 @@ def test_http_api_features_ready_health_metrics():
         assert body["feature_names"] == list(FEATURE_NAMES)
         assert body["vector"] == [1.0] * len(FEATURE_NAMES) and body["ts"].endswith("Z")
         assert client.get("/metrics").status_code == 200
+
+
+def test_each_collection_gets_an_increasing_sequence_number():
+    c = make_collector({n: 1.0 for n in FEATURE_NAMES})
+    first, second = asyncio.run(c.tick()), asyncio.run(c.tick())
+    assert (first.seq, second.seq) == (1, 2) and second.to_json()["seq"] == 2
+
+
+def test_long_poll_returns_as_soon_as_a_newer_collection_exists():
+    c = make_collector({n: 1.0 for n in FEATURE_NAMES})
+
+    async def scenario():
+        await c.tick()  # seq 1
+        waiter = asyncio.create_task(c.wait_newer(after=1, timeout=5.0))
+        await asyncio.sleep(0.05)
+        assert not waiter.done()  # rien de neuf : il attend
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await c.tick()  # seq 2 -> réveil immédiat
+        snap = await waiter
+        return snap, loop.time() - t0
+
+    snap, waited = asyncio.run(scenario())
+    assert snap.seq == 2 and waited < 0.5
+
+
+def test_long_poll_times_out_with_the_current_snapshot():
+    c = make_collector({n: 1.0 for n in FEATURE_NAMES})
+
+    async def scenario():
+        await c.tick()
+        return await c.wait_newer(after=1, timeout=0.05)
+
+    assert asyncio.run(scenario()).seq == 1
+
+
+def test_http_long_poll_parameters_are_validated():
+    c = make_collector({n: 1.0 for n in FEATURE_NAMES})
+    with TestClient(create_app(c, start_loop=False)) as client:
+        asyncio.run(c.tick())
+        assert client.get("/api/v1/features", params={"after": 0, "wait": 1}).json()["seq"] == 1
+        assert client.get("/api/v1/features", params={"wait": 60}).status_code == 422  # plafond 10 s

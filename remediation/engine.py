@@ -245,6 +245,12 @@ class RemediationEngine:
     async def _remediate(self, inc: _Incident) -> None:
         max_attempts = self.table.defaults.max_attempts
         cooldown = self.table.defaults.cooldown_seconds
+        if inc.rule.verify_first and not inc.dry_run:
+            if await self._verify(inc, 0, after="pré-contrôle (avant toute action)"):
+                self._emit_inc(inc, "decision", "info",
+                               "Service disponible : attaque contenue par les protections du WAF, aucune action",
+                               {"verify_first": True})
+                return self._close(inc)
         for attempt in range(1, max_attempts + 1):
             if attempt > 1 and inc.last_action_at is not None:
                 wait = cooldown - (self.clock() - inc.last_action_at).total_seconds()
@@ -285,14 +291,16 @@ class RemediationEngine:
                             incident_id=inc.incident_id, dry_run=inc.dry_run, extra=extra or {})
         started = self.clock()
         first = inc.first_action_at is None
+        mttd = None
         if first:  # MTTD = détection -> première action
             inc.first_action_at = started
-            mttd = max(0.0, (started - inc.detected_at).total_seconds())
-            self._set_gauge(mttd_seconds, inc.incident_id, mttd)
-        else:
-            mttd = None
+            # Action manuelle (event None) : aucune détection, donc aucun MTTD (sinon ~0 s fausserait
+            # la jauge resilience_mttd_seconds et le journal).
+            if inc.event is not None:
+                mttd = max(0.0, (started - inc.detected_at).total_seconds())
+                self._set_gauge(mttd_seconds, inc.incident_id, mttd)
         inc.last_action_at = started
-        self.journal.mark_action(inc.incident_id, started, first, mttd if first else None)
+        self.journal.mark_action(inc.incident_id, started, first, mttd)
         self._emit_inc(inc, "action", "running", f"Action {action.type} en cours",
                        {"action": action.type, "params": action.params, "attempt": attempt})
 

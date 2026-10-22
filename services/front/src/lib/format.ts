@@ -38,6 +38,18 @@ export function formatIban(iban: string): string {
   return iban.replace(/\s+/g, '').replace(/(.{4})/g, '$1 ').trim()
 }
 
+/**
+ * IBAN masqué pour un écran partageable (#45) : pays + clé, code banque (2e groupe) et 4e groupe
+ * restent lisibles — dans le seed, le 2e distingue un client (0000) d'un tiers (9999) et le 4e
+ * numérote le compte. Le reste est masqué.
+ */
+export function maskIban(iban: string): string {
+  const groups = formatIban(iban).split(' ')
+  if (groups.length <= 3) return groups.join(' ')
+  const keep = new Set([0, 1, Math.min(3, groups.length - 1)])
+  return groups.map((g, i) => (keep.has(i) ? g : '•'.repeat(g.length))).join(' ')
+}
+
 /** « FR76 … 0142 » pour les espaces contraints. */
 export function shortIban(iban: string): string {
   const x = iban.replace(/\s+/g, '')

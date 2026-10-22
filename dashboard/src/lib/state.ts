@@ -3,6 +3,7 @@ import type {
   DashboardState,
   Incident,
   IncidentType,
+  JournalIncidentType,
   Phase,
   ScoreSample,
   ServiceHealth,
@@ -38,7 +39,7 @@ export type Action =
   | { type: 'rejected' }
   | { type: 'reset' }
 
-function newIncident(id: string, ts: string, type: IncidentType = 'unknown', service = 'inconnu'): Incident {
+function newIncident(id: string, ts: string, type: JournalIncidentType = 'unknown', service = 'inconnu'): Incident {
   return {
     id,
     incidentType: type,
@@ -59,7 +60,7 @@ function upsert(
   id: string,
   ts: string,
   patch: (i: Incident) => Incident,
-  defaults?: { type?: IncidentType; service?: string },
+  defaults?: { type?: JournalIncidentType; service?: string },
 ): Incident[] {
   const idx = incidents.findIndex((i) => i.id === id)
   if (idx === -1) {
@@ -200,6 +201,7 @@ const secondsBetween = (from: string, to: string): number => Math.max(0, (Date.p
 
 /** MTTR fourni par le moteur, sinon repli : détection -> vérification OK. */
 export function incidentMttr(i: Incident): number | null {
+  if (i.incidentType === 'manual_action') return null // ni détection ni reprise : aucun MTTR
   if (i.mttrSeconds !== null) return i.mttrSeconds
   if (i.verification?.ok) return secondsBetween(i.detectedAt, i.verification.ts)
   return null
@@ -218,12 +220,13 @@ const ACTION_LABEL: Record<string, string> = {
 }
 export const actionLabel = (type: string): string => ACTION_LABEL[type] ?? type
 
-export const INCIDENT_LABEL: Record<IncidentType, string> = {
+export const INCIDENT_LABEL: Record<JournalIncidentType, string> = {
   service_flood: 'Saturation du service',
   auth_abuse: "Abus d'authentification",
   web_attack: 'Attaque web',
   data_corruption: 'Corruption de données',
   unknown: 'Anomalie non classée',
+  manual_action: 'Action manuelle (opérateur)',
 }
 
 /** Les 4 étapes de la boucle : détection -> décision -> action -> vérification. */

@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { IncidentReportPanel, OperatorCommandPanel } from './OperatorTools'
 import { initialState, latestIncident, reducer } from '../lib/state'
 import { parseStreamMessage } from '../lib/parse'
 import { FULL_SEQUENCE } from '../test/fixtures'
+import { OPERATOR_TOKEN_KEY } from '../lib/operatorToken'
+
+const OP = 'operator-token-0123456789abcdef'
 
 const incidentAfter = (n: number) =>
   latestIncident(
@@ -20,10 +23,12 @@ let fetchMock: ReturnType<typeof vi.fn>
 beforeEach(() => {
   fetchMock = vi.fn()
   vi.stubGlobal('fetch', fetchMock)
+  sessionStorage.clear()
 })
 afterEach(() => vi.unstubAllGlobals())
 
 const calls = () => fetchMock.mock.calls.map(([url, init]) => [url, JSON.parse((init as RequestInit).body as string)])
+const authOf = (i: number) => ((fetchMock.mock.calls[i]?.[1] as RequestInit | undefined)?.headers as Record<string, string> | undefined)?.Authorization
 
 describe('IncidentReportPanel', () => {
   it('résumé DSI : POST /summarize avec l’incident, texte + badge mode dégradé', async () => {
@@ -73,7 +78,7 @@ describe('OperatorCommandPanel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Proposer' }))
   }
 
-  it('propose -> Confirmer appelle /remediation/manual-actions et affiche le statut', async () => {
+  it('propose -> Confirmer -> jeton opérateur -> /remediation/manual-actions, statut affiché', async () => {
     fetchMock
       .mockResolvedValueOnce(json(200, { proposal, message: 'ok', degraded: false }))
       .mockResolvedValueOnce(json(200, { incident_id: 'man-1', action: 'waf_block_ip', status: 'dry_run', detail: 'simulé' }))
@@ -82,11 +87,51 @@ describe('OperatorCommandPanel', () => {
     expect(fetchMock).toHaveBeenCalledOnce() // rien d'exécuté sans clic
     await userEvent.type(screen.getByLabelText('Motif (optionnel)'), 'scan')
     await userEvent.click(screen.getByRole('button', { name: 'Confirmer' }))
+    expect(fetchMock).toHaveBeenCalledOnce() // ni exécuté sans jeton opérateur
+    const field = screen.getByLabelText(/Jeton opérateur requis/)
+    expect(field).toHaveAttribute('type', 'password')
+    await userEvent.type(field, OP)
+    await userEvent.click(screen.getByRole('button', { name: 'Valider' }))
     expect(await screen.findByText('dry_run')).toBeInTheDocument()
     expect(calls()).toEqual([
       ['/assistant/api/v1/propose', { command: "bloque l'IP 192.168.137.50" }],
       ['/remediation/manual-actions', { action: 'waf_block_ip', params: { source: '192.168.137.50' }, reason: 'scan' }],
     ])
+    // Le jeton ne part que vers le moteur, jamais vers l'assistant.
+    expect(authOf(0)).toBeUndefined()
+    expect(authOf(1)).toBe(`Bearer ${OP}`)
+    expect(sessionStorage.getItem(OPERATOR_TOKEN_KEY)).toBe(OP)
+  })
+
+  it('jeton refusé (401) : message clair et jeton oublié', async () => {
+    sessionStorage.setItem(OPERATOR_TOKEN_KEY, 'mauvais-jeton-0000000000')
+    fetchMock
+      .mockResolvedValueOnce(json(200, { proposal, message: 'ok', degraded: false }))
+      .mockResolvedValueOnce(json(401, { error: { code: 'unauthorized', message: 'unauthorized', request_id: 'r' } }))
+    await propose()
+    await userEvent.click(await screen.findByRole('button', { name: 'Confirmer' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('401')
+    expect(sessionStorage.getItem(OPERATOR_TOKEN_KEY)).toBeNull()
+  })
+
+  it('jeton de service présenté (403) : message explicite', async () => {
+    sessionStorage.setItem(OPERATOR_TOKEN_KEY, OP)
+    fetchMock
+      .mockResolvedValueOnce(json(200, { proposal, message: 'ok', degraded: false }))
+      .mockResolvedValueOnce(json(403, { error: { code: 'operator_token_required', message: 'x', request_id: 'r' } }))
+    await propose()
+    await userEvent.click(await screen.findByRole('button', { name: 'Confirmer' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent("n'est pas le jeton opérateur")
+  })
+
+  it('annuler la saisie du jeton : rien n’est exécuté', async () => {
+    fetchMock.mockResolvedValueOnce(json(200, { proposal, message: 'ok', degraded: false }))
+    await propose()
+    await userEvent.click(await screen.findByRole('button', { name: 'Confirmer' }))
+    const form = screen.getByLabelText(/Jeton opérateur requis/).closest('form') as HTMLFormElement
+    await userEvent.click(within(form).getByRole('button', { name: 'Annuler' }))
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(screen.queryByLabelText(/Jeton opérateur requis/)).not.toBeInTheDocument()
   })
 
   it('Annuler n’appelle rien', async () => {
@@ -105,6 +150,7 @@ describe('OperatorCommandPanel', () => {
   })
 
   it('422 du moteur (action_refused) affiché en clair', async () => {
+    sessionStorage.setItem(OPERATOR_TOKEN_KEY, OP)
     fetchMock
       .mockResolvedValueOnce(json(200, { proposal: { ...proposal, action: 'restart_service', params: { service: 'db' } }, message: 'ok', degraded: false }))
       .mockResolvedValueOnce(json(422, { error: { code: 'action_refused', message: 'service hors liste blanche', request_id: 'r' } }))

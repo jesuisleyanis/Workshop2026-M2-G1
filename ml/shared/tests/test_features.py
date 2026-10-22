@@ -100,3 +100,11 @@ def test_top_features_sorted_by_abs_z_and_never_empty():
     assert [t["name"] for t in top] == ["req_per_s", "ratio_5xx", "auth_failed_per_s"]
     # aucune feature au-dessus du seuil -> on garde quand même la plus déviante
     assert len(top_features(vec, _z(cpu_pct_max=0.5))) == 1
+
+
+def test_unauthenticated_flood_of_4xx_is_routed_to_service_flood():
+    # Flood non authentifié (démo du 21/10) : 401 en rafale, aucun échec de LOGIN, aucun blocage WAF.
+    assert classify_incident(_z(ratio_4xx=25.0)) is IncidentType.SERVICE_FLOOD
+    # Si les échecs de login ou les blocages WAF montent aussi, ce sont eux qui expliquent les 4xx.
+    assert classify_incident(_z(ratio_4xx=25.0, auth_failed_per_s=8.0)) is IncidentType.AUTH_ABUSE
+    assert classify_incident(_z(ratio_4xx=25.0, waf_blocked_per_s=8.0)) is IncidentType.WEB_ATTACK

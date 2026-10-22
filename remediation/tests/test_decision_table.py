@@ -11,7 +11,7 @@ from resilience_common import IncidentType
 EXPECTED = {
     IncidentType.SERVICE_FLOOD: ["waf_block_ip", "restart_service"],
     IncidentType.AUTH_ABUSE: ["waf_block_ip", "tighten_rate_limit"],
-    IncidentType.WEB_ATTACK: ["confirm_waf_block", "waf_blacklist_ip"],
+    IncidentType.WEB_ATTACK: ["waf_blacklist_ip", "confirm_waf_block"],
     IncidentType.DATA_CORRUPTION: ["restore_pg_dump"],
     IncidentType.UNKNOWN: ["dry_run_report"],
 }
@@ -109,3 +109,13 @@ def test_refuses_missing_type_unknown_action_extra_keys_and_bad_params():
 def test_helper_overrides_defaults():
     t = make_table(cooldown=5, max_attempts=2, dry_run=True)
     assert (t.defaults.cooldown_seconds, t.defaults.max_attempts, t.defaults.dry_run) == (5, 2, True)
+
+
+def test_verify_first_only_for_availability_and_web_attack_always_blocks():
+    # Disponibilité (flood) : contenu par le WAF = rien à faire. Compromission tentée (web_attack) :
+    # ModSecurity renvoie déjà 403, verify_tx passerait d'emblée -> verify_first empêcherait tout blocage.
+    t = load_decision_table(TABLE_PATH)
+    assert {r.incident_type for r in t.rules if r.verify_first} == {IncidentType.SERVICE_FLOOD}
+    web = t.rule_for(IncidentType.WEB_ATTACK)
+    assert web.actions[0].params == {"source": "from_event_or_loki"}
+    assert web.actions[-1].type == "confirm_waf_block" and web.actions[-1].params == {"require": True}

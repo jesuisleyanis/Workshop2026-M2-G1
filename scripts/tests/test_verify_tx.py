@@ -114,3 +114,27 @@ def test_main_reads_seed_password_and_env(verify_tx, monkeypatch):
     assert verify_tx.main() == 0
     assert captured == {"user": "demo01", "password": SEED_PASSWORD, "dst_user": "demo02",
                         "dst_account": 7, "amount_cents": 100, "base_url": "https://waf"}
+
+
+def test_drained_source_replays_the_proof_in_the_other_direction(verify_tx, capsys):
+    # Les transactions de contrôle répétées (chaque remédiation) vident demo01 : la preuve est rejouée
+    # dans l'autre sens (demo02 -> demo01) au lieu de faire échouer toute vérification en 409.
+    class OneSidedApi(FakeApi):
+        def request(self, method, path, payload=None, token=None):
+            if (method, path) == ("POST", "/api/v1/transactions") and payload["src_account"] == 1:
+                self.posted.append(payload)
+                return 409, {"error": {"code": "insufficient_funds", "message": "Insufficient funds"}}
+            return super().request(method, path, payload, token)
+
+    FakeApi.TransportError = verify_tx.TransportError
+    api = OneSidedApi()
+    assert _run(verify_tx, api) == 0
+    assert api.posted[-1] == {"src_account": 2, "dst_account": 1, "amount_cents": 100}
+    assert "2 -> 1" in capsys.readouterr().out
+
+
+def test_no_reverse_when_destination_account_is_given_without_login(verify_tx):
+    # Sans jeton du destinataire (VERIFY_DST_ACCOUNT), impossible de payer dans l'autre sens : 1.
+    api = FakeApi(balance_cents=10)
+    FakeApi.TransportError = verify_tx.TransportError
+    assert _run(verify_tx, api, dst_account=2) == 1

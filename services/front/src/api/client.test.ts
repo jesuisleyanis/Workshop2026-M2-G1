@@ -16,6 +16,29 @@ function make(fetchImpl: typeof fetch, extra: Partial<Parameters<typeof createAp
 }
 
 describe('client API centralisé', () => {
+  it('logoutOnUnauthorized:false : un 401 (mauvais mot de passe au step-up) ne déconnecte pas', async () => {
+    const f = vi.fn(async () => jsonResponse({ error: { code: 'invalid_credentials', message: 'x' } }, 401))
+    const { client, onUnauthorized } = make(f as unknown as typeof fetch)
+    await expect(client.request('/api/v1/auth/step-up', { method: 'POST', body: {}, logoutOnUnauthorized: false })).rejects.toMatchObject({ status: 401 })
+    expect(onUnauthorized).not.toHaveBeenCalled()
+    await expect(client.request('/api/v1/accounts')).rejects.toMatchObject({ status: 401 })
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
+  })
+
+  it('reportRecovery:false : un 429 ou un 200 ne vaut pas reprise, un 5xx reste signalé', async () => {
+    const onAvailability = vi.fn()
+    let status = 429
+    const f = vi.fn(async () => jsonResponse({ status: 'ok', checked_at: 'x' }, status))
+    const { client } = make(f as unknown as typeof fetch, { onAvailability })
+    await client.request('/api/v1/status', { auth: false, reportRecovery: false }).catch(() => {})
+    status = 200
+    await client.request('/api/v1/status', { auth: false, reportRecovery: false })
+    expect(onAvailability).not.toHaveBeenCalled()
+    status = 503
+    await client.request('/api/v1/status', { auth: false, reportRecovery: false }).catch(() => {})
+    expect(onAvailability).toHaveBeenCalledWith(false, expect.any(Number))
+  })
+
   it('préfixe la base, envoie le Bearer et parse le JSON', async () => {
     const f = vi.fn(async () => jsonResponse([{ id: 'a' }]))
     const { client } = make(f as unknown as typeof fetch)
@@ -97,5 +120,24 @@ describe('client API centralisé', () => {
     const f = vi.fn(async () => new Response(null, { status: 204 }))
     const { client } = make(f as unknown as typeof fetch)
     expect(await client.request('/x')).toBeNull()
+  })
+})
+
+describe('client API : téléchargement (#50)', () => {
+  it('download : Bearer, corps binaire et nom tiré de Content-Disposition ; erreur JSON normalisée', async () => {
+    const f = vi.fn(async () =>
+      new Response('﻿Date;Référence\n', {
+        status: 200,
+        headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="releve-1-2026-03-01-2026-03-15.csv"' },
+      }),
+    )
+    const { client } = make(f as unknown as typeof fetch)
+    const file = await client.download('/api/v1/statements?format=csv')
+    expect(file.filename).toBe('releve-1-2026-03-01-2026-03-15.csv')
+    expect(await file.blob.text()).toContain('Date;Référence')
+    const [, init] = f.mock.calls[0] as unknown as [string, RequestInit]
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok123')
+    const bad = make((async () => jsonResponse({ error: { code: 'invalid_period', message: 'x' } }, 422)) as unknown as typeof fetch)
+    await expect(bad.client.download('/x')).rejects.toMatchObject({ status: 422, code: 'invalid_period' })
   })
 })

@@ -6,11 +6,12 @@ Le détecteur ML émet un AnomalyEvent vers le moteur de remédiation
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime, timezone
 from enum import Enum
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 SCHEMA_VERSION = "1.0"
 
@@ -23,10 +24,49 @@ RESERVED_EVENTS: frozenset[str] = frozenset(
         "auth_login_success",
         "auth_login_failed",
         "auth_rate_limited",
+        "auth_step_up_success",
+        "auth_step_up_failed",
+        # auth — consigne additionnelle 1 (authentification à étapes + LED)
+        "auth_identify_started",
+        "auth_face_recognized",
+        "auth_face_rejected",
+        "auth_locked_out",
+        "led_state_published",
+        "led_publish_failed",
+        # auth — back-office : refroidissement et administration
+        "auth_cooldown",
+        "admin_user_created",
+        "admin_role_changed",
+        "admin_face_enrolled",
+        "admin_face_revoked",
+        "backoffice_bootstrap",
+        # face-id — consigne additionnelle 1 (reconnaissance de visage 1:1)
+        "face_verify_match",
+        "face_verify_nomatch",
+        "face_verify_error",
+        "face_enrolled",
+        "face_enrollment_revoked",
+        "face_photos_viewed",
+        "face_enrollment_rejected",
         # payment-api
         "transaction_created",
         "transaction_rejected",
         "db_error",
+        "beneficiary_added",
+        "beneficiary_removed",
+        "beneficiary_rejected",
+        "transaction_access_denied",
+        "card_frozen",
+        "card_unfrozen",
+        "card_settings_changed",
+        "card_access_denied",
+        "scheduled_transfer_executed",
+        "scheduled_transfer_failed",
+        "scheduled_transfer_created",
+        "scheduled_transfer_rejected",
+        "scheduled_transfer_changed",
+        "statement_exported",
+        "step_up_required",
         # waf
         "waf_blocked",
         # detector
@@ -95,3 +135,13 @@ class AnomalyEvent(BaseModel):
     incident_type: IncidentType
     features_top: list[FeatureTop] = Field(default_factory=list)
     evidence: Evidence | None = None
+    #: IP source dominante de l'incident (champ ADDITIF, optionnel — contrat §3) : renseignée par le
+    #: detector quand une IP domine les logs WAF de la fenêtre, sinon absente. Elle alimente les
+    #: actions de blocage (`source: from_event`) : une seule IP littérale, jamais de nom ni de réseau
+    #: (la valeur finit dans une conf Nginx -> aucune injection possible).
+    source_ip: str | None = None
+
+    @field_validator("source_ip")
+    @classmethod
+    def _single_ip_literal(cls, v: str | None) -> str | None:
+        return None if v is None else str(ipaddress.ip_address(v.strip()))

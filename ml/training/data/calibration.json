@@ -1,0 +1,62 @@
+{
+  "separable": true,
+  "threshold": 0.708,
+  "threshold_high": null,
+  "confirm_windows": 4,
+  "guardrail_z": 15.0,
+  "margin": 0.5,
+  "normal": {
+    "n": 3601,
+    "score_p999": 0.7502,
+    "score_max": 0.7732,
+    "held_level": 0.6821,
+    "false_positive_rate": 0.0
+  },
+  "attacks": {
+    "service_flood": {
+      "separable": true,
+      "detected_all_runs": true,
+      "runs": 3,
+      "windows": 93,
+      "peak_min": 0.7358,
+      "held_min": 0.734,
+      "mttd_s_worst": 9.0
+    },
+    "auth_abuse": {
+      "separable": true,
+      "detected_all_runs": true,
+      "runs": 3,
+      "windows": 93,
+      "peak_min": 0.8155,
+      "held_min": 0.8155,
+      "mttd_s_worst": 7.0
+    },
+    "web_attack": {
+      "separable": false,
+      "detected_all_runs": true,
+      "runs": 3,
+      "windows": 93,
+      "peak_min": 0.7025,
+      "held_min": 0.6528,
+      "mttd_s_worst": 4.0
+    },
+    "data_corruption": {
+      "separable": false,
+      "detected_all_runs": true,
+      "runs": 3,
+      "windows": 93,
+      "peak_min": 0.6699,
+      "held_min": 0.5868,
+      "mttd_s_worst": 9.0
+    }
+  },
+  "max_mttd_s": 10.0,
+  "mttd_ok": true,
+  "model_fingerprint": "165f8d33969a0ac0",
+  "calibrated_at": "2026-10-21T11:05:21+00:00",
+  "model_version": "1.2.0",
+  "data": {
+    "normal": "baseline_real.csv",
+    "attacks": "attacks_real.csv"
+  }
+}

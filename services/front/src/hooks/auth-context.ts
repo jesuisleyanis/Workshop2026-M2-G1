@@ -12,6 +12,8 @@ export interface AuthContextValue {
   notice: string | null
   login: (username: string, password: string) => Promise<void>
   logout: (reason?: LogoutReason) => void
+  /** Ré-authentification (#51) : remplace le jeton de session par un jeton à auth_time frais. */
+  stepUp: (password: string) => Promise<void>
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null)

@@ -1,0 +1,32 @@
+# Proxy NATIF Windows devant la stack (mode « IP réelle », REAL_IP=1) — voir README.md.
+#
+# Lancé sur le PC hôte (pas dans Docker) : il voit la VRAIE IP du PC attaquant, que Docker Desktop masque.
+# Il la transmet au WAF dans X-Forwarded-For (en ÉCRASANT toute valeur envoyée par le client : un client
+# ne peut pas choisir son IP). Le WAF n'est joignable qu'en 127.0.0.1:8443 dans ce mode.
+#   caddy run --config infra/caddy/Caddyfile        (ou : make caddy)
+{
+	# Pas d'API d'administration : rien à exposer, la conf est relue au démarrage.
+	admin off
+	# CA interne de labo : ne pas l'installer dans le magasin de certificats Windows (droits admin).
+	skip_install_trust
+	auto_https disable_redirects
+}
+
+# Points d'entrée : IP du hotspot (PC attaquant, jury) et poste local (scripts make verify, bench...).
+https://192.168.137.1, https://localhost, https://127.0.0.1 {
+	tls internal
+
+	reverse_proxy https://127.0.0.1:8443 {
+		# IP vue par Caddy = vraie IP du client ; jamais celle annoncée par le client.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+		transport http {
+			# Certificat auto-signé du WAF (lab fermé, sur la boucle locale).
+			tls_insecure_skip_verify
+		}
+	}
+}
+
+http://192.168.137.1, http://localhost {
+	redir https://{host}{uri} permanent
+}

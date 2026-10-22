@@ -1,11 +1,10 @@
 """/summarize, /postmortem, /propose : Ollama MOCKÉ, aucune dépendance réseau, rien n'est exécuté."""
 
 import pytest
-from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage
-
 from app.main import create_app
 from app.store import open_store
+from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
 
 INCIDENT = {
     "id": "inc-0042",
@@ -92,7 +91,7 @@ def test_postmortem_nominal_timeline_is_deterministic(client, fake_llm):
     body = client.post("/api/v1/postmortem", json={"incident": INCIDENT}).json()
     md = body["markdown"]
     assert body["degraded"] is False
-    titles = [l for l in md.splitlines() if l.startswith("## ")]
+    titles = [line for line in md.splitlines() if line.startswith("## ")]
     assert titles == ["## Résumé", "## Chronologie", "## Impact", "## Cause probable",
                       "## Actions de remédiation", "## Actions correctives proposées"]
     assert "heure inventée" not in md  # la chronologie du LLM est ignorée

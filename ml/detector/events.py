@@ -22,7 +22,8 @@ EVIDENCE: dict[IncidentType, tuple[str, str]] = {
     ),
     IncidentType.WEB_ATTACK: (
         "rate(resilience_waf_blocked_total[1m])",
-        '{service="waf"} |= "waf_blocked"',
+        # label Loki = service Compose émetteur (posé par Promtail) : waf-exporter, pas waf
+        '{service="waf-exporter"} |= "waf_blocked"',
     ),
     IncidentType.DATA_CORRUPTION: (
         "rate(resilience_db_errors_total[1m])",
@@ -44,6 +45,7 @@ def build_event(
     vector: list[float],
     z: dict[str, float],
     now: datetime | None = None,
+    source_ip: str | None = None,
 ) -> AnomalyEvent:
     """Assemble l'événement ; la validation pydantic garantit la conformité au schéma partagé."""
     prom_q, loki_q = EVIDENCE[incident_type]
@@ -56,4 +58,5 @@ def build_event(
         incident_type=incident_type,
         features_top=[FeatureTop(**f) for f in top_features(vector, z)],
         evidence=Evidence(prometheus_query=prom_q, loki_query=loki_q),
+        source_ip=source_ip,
     )

@@ -65,3 +65,22 @@ def test_remediation_container_matches_read_only_claim() -> None:
     vol_name = journal.split(":")[0]
     assert vol_name in COMPOSE.get("volumes", {}), f"{vol_name} doit être un volume nommé (persistance)"
     assert "/tmp" in (rem.get("tmpfs") or []), "tmpfs /tmp requis pour ansible-runner sous read_only"
+
+
+def test_mosquitto_is_limited_to_iot_profile_and_hotspot() -> None:
+    mqtt = SERVICES["mosquitto"]
+    assert mqtt["profiles"] == ["iot"]
+    assert mqtt["ports"] == ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]
+    assert mqtt["networks"] == ["app"]
+    assert mqtt["user"] == "1883:1883"
+    assert mqtt["read_only"] is True
+    assert any(mount.startswith("/run/mosquitto:") for mount in mqtt["tmpfs"])
+    assert any(mount.startswith("/tmp:") for mount in mqtt["tmpfs"])
+
+    config = (ROOT / "infra" / "mosquitto" / "mosquitto.conf").read_text(encoding="utf-8")
+    acl = (ROOT / "infra" / "mosquitto" / "aclfile").read_text(encoding="utf-8")
+    assert "allow_anonymous false" in config
+    assert "password_file /run/mosquitto/passwd" in config
+    assert "acl_file /run/mosquitto/aclfile" in config
+    assert "user auth\ntopic write resilience/led/cmd" in acl
+    assert "user led\ntopic read resilience/led/cmd\ntopic write resilience/led/status" in acl

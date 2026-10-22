@@ -1,0 +1,8 @@
+# Surcouche « supervision locale » (make ui) : publie le dashboard sur le SEUL loopback du PC hôte.
+# Le compose principal ne publie que le WAF (et MQTT en profil iot) ; le dashboard donne la vue
+# d'ensemble du SI : jamais sur 0.0.0.0 ni sur l'IP du hotspot (dashboard/README.md, docs/network.md).
+#   docker compose -f docker-compose.yml -f docker-compose.ui-local.yml up -d dashboard
+services:
+  dashboard:
+    ports:
+      - "127.0.0.1:8081:8080"

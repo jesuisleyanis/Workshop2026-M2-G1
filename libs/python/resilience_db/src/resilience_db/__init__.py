@@ -11,12 +11,32 @@ from resilience_db.config import (
     make_session_factory,
     read_secret,
 )
-from resilience_db.models import Account, Base, Transaction, TransactionStatus, User
+from resilience_db.models import (
+    Account,
+    Base,
+    Beneficiary,
+    Card,
+    FaceEnrollment,
+    Notification,
+    ScheduledRun,
+    ScheduledTransfer,
+    Transaction,
+    TransactionCategory,
+    TransactionStatus,
+    User,
+)
 
 __all__ = [
     "Account",
     "Base",
+    "Beneficiary",
+    "Card",
+    "FaceEnrollment",
+    "Notification",
+    "ScheduledRun",
+    "ScheduledTransfer",
     "Transaction",
+    "TransactionCategory",
     "TransactionStatus",
     "User",
     "build_database_url",

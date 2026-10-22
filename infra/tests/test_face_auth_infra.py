@@ -1,0 +1,187 @@
+"""Contrat infra de l'intégration face-id / back-office / MQTT (vérifiable sans Docker).
+
+Lit le Compose, la config Mosquitto, l'ACL, le Prometheus et le fichier d'exemple SOPS.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+COMPOSE = yaml.safe_load((ROOT / "infra" / "compose" / "docker-compose.yml").read_text(encoding="utf-8"))
+SERVICES = COMPOSE["services"]
+MOSQ = ROOT / "infra" / "mosquitto"
+NEW_SERVICES = ("face-id", "backoffice", "mosquitto")
+
+
+def _tmpfs_paths(svc: dict) -> list[str]:
+    return [t.split(":")[0] for t in (svc.get("tmpfs") or [])]
+
+
+def test_new_services_are_hardened() -> None:
+    for name in NEW_SERVICES:
+        svc = SERVICES[name]
+        assert svc.get("cap_drop") == ["ALL"], name
+        assert "no-new-privileges:true" in svc.get("security_opt", []), name
+        assert svc.get("read_only") is True, name
+        assert svc.get("healthcheck"), name
+        assert svc.get("mem_limit"), name
+
+
+def test_only_waf_and_mosquitto_publish_ports() -> None:
+    assert {n for n, s in SERVICES.items() if "ports" in s} == {"waf", "mosquitto"}
+
+
+def test_host_listener_9443_is_published_on_loopback_only() -> None:
+    ports = SERVICES["waf"]["ports"]
+    assert "127.0.0.1:9443:9443" in ports
+    for p in ports:
+        if p.endswith(":9443"):
+            assert p.startswith("127.0.0.1:"), "9443 ne doit jamais être publié hors loopback"
+    assert "backoffice" in SERVICES["waf"]["depends_on"]
+
+
+def test_mosquitto_not_published_on_all_interfaces() -> None:
+    mosq = SERVICES["mosquitto"]
+    assert mosq["image"] == "eclipse-mosquitto:2.0.18"
+    # Broker de l'équipe (profil iot, `make up-iot`) : jamais levé par `make up` (le bind exige l'IP du PA).
+    assert mosq["profiles"] == ["iot"]
+    assert mosq["ports"] == ["${MQTT_BIND_ADDR:-192.168.137.1}:1883:1883"]
+    for p in mosq["ports"]:
+        assert not p.startswith(("0.0.0.0:", "1883:", ":")), "MQTT jamais sur 0.0.0.0"
+    assert mosq["networks"] == ["app"]
+    assert mosq["user"] == "1883:1883"
+
+
+def test_mosquitto_passwd_lives_in_tmpfs_run_dir_and_config_is_read_only() -> None:
+    mosq = SERVICES["mosquitto"]
+    run = [t for t in mosq["tmpfs"] if t.startswith("/run/mosquitto:")]
+    assert run and "uid=1883" in run[0] and "gid=1883" in run[0] and "mode=0700" in run[0]
+    for v in mosq["volumes"]:
+        assert v.endswith(":ro"), f"volume mosquitto non read-only : {v}"
+    assert any(v.startswith("../mosquitto/entrypoint.sh:") for v in mosq["volumes"])
+    assert "/mosquitto/config/entrypoint.sh" in " ".join(mosq["entrypoint"])
+    env = mosq["environment"]
+    assert env["MQTT_AUTH_PASSWORD"] == "${MQTT_AUTH_PASSWORD:-}"
+    assert env["MQTT_LED_PASSWORD"] == "${MQTT_LED_PASSWORD:-}"
+    hc = " ".join(mosq["healthcheck"]["test"])
+    assert "test -s /run/mosquitto/passwd" in hc and "1883" in hc
+    # L'ancien entrypoint de la branche face-auth est remplacé par celui de l'équipe.
+    assert not (MOSQ / "docker-entrypoint.sh").exists()
+
+
+def test_mosquitto_conf_and_entrypoint_agree_on_passwd_path() -> None:
+    conf = (MOSQ / "mosquitto.conf").read_text(encoding="utf-8")
+    assert re.search(r"^password_file /run/mosquitto/passwd\s*$", conf, re.M)
+    assert re.search(r"^acl_file /run/mosquitto/aclfile\s*$", conf, re.M)
+    sh = (MOSQ / "entrypoint.sh").read_text(encoding="utf-8")
+    assert b"\r\n" not in (MOSQ / "entrypoint.sh").read_bytes(), "entrypoint monté dans un conteneur Linux : LF obligatoire"
+    assert "/run/mosquitto/passwd" in sh and "/run/mosquitto/aclfile" in sh
+    assert re.search(r"mosquitto_passwd -b -c \S+ auth ", sh)
+    assert re.search(r"mosquitto_passwd -b \S+ led ", sh)
+    assert sh.index("mosquitto_passwd") < sh.index("exec mosquitto")
+    assert "exec mosquitto -c /mosquitto/config/mosquitto.conf" in sh
+    # Échec franc si un mot de passe est vide (pas de broker sans creds).
+    assert re.search(r'\$\{MQTT_AUTH_PASSWORD:\?', sh) and re.search(r'\$\{MQTT_LED_PASSWORD:\?', sh)
+    assert "set -eu" in sh
+    attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert re.search(r"^infra/mosquitto/entrypoint\.sh\s+text\s+eol=lf\s*$", attrs, re.M)
+
+
+def test_acl_auth_reads_led_status_and_least_privilege_kept() -> None:
+    acl = (MOSQ / "aclfile").read_text(encoding="utf-8")
+    blocks: dict[str, list[str]] = {}
+    cur = None
+    for line in acl.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("user "):
+            cur = line.split()[1]
+            blocks[cur] = []
+        else:
+            blocks[cur].append(line)
+    assert "topic write resilience/led/cmd" in blocks["auth"]
+    assert "topic read resilience/led/status" in blocks["auth"]
+    assert "topic read resilience/led/cmd" in blocks["led"]
+    assert "topic write resilience/led/status" in blocks["led"]
+
+
+def test_face_id_service() -> None:
+    f = SERVICES["face-id"]
+    assert f["build"] == {"context": "../..", "dockerfile": "services/face-id/Dockerfile"}
+    assert f["networks"] == ["app", "data"]
+    env = f["environment"]
+    for k in ("POSTGRES_HOST", "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD",
+              "FACE_INTERNAL_TOKEN", "FACE_DATA_KEY"):
+        assert k in env, k
+    # Forme fail-fast `${VAR:?message}` : `docker compose` refuse de démarrer sans le secret.
+    assert env["FACE_INTERNAL_TOKEN"].startswith("${FACE_INTERNAL_TOKEN:?")
+    assert env["FACE_DATA_KEY"].startswith("${FACE_DATA_KEY:?")
+    assert env["RECOGNIZER_BACKEND"] == "team"
+    assert "/tmp" in _tmpfs_paths(f)
+    assert f["mem_limit"] == "1g" and float(f["cpus"]) == 1.5
+    assert "8006/health" in " ".join(f["healthcheck"]["test"])
+    assert "postgres" in f["depends_on"]
+
+
+def test_backoffice_service() -> None:
+    b = SERVICES["backoffice"]
+    assert b["build"] == {"context": "../../services/backoffice"}
+    assert b["networks"] == ["app"]
+    assert "/tmp" in _tmpfs_paths(b)
+    assert b["mem_limit"] == "128m"
+    assert "8080/healthz" in " ".join(b["healthcheck"]["test"])
+
+
+def test_auth_wired_to_face_id_and_mqtt() -> None:
+    a = SERVICES["auth"]
+    env = a["environment"]
+    assert env["FACE_ID_URL"] == "http://face-id:8006"
+    assert env["FACE_INTERNAL_TOKEN"].startswith("${FACE_INTERNAL_TOKEN:?")
+    assert env["MQTT_HOST"] == "mosquitto"
+    assert env["MQTT_AUTH_PASSWORD"] == "${MQTT_AUTH_PASSWORD}"
+    assert env["BACKOFFICE_BOOTSTRAP_TOKEN"] == "${BACKOFFICE_BOOTSTRAP_TOKEN}"
+    assert set(a["depends_on"]) >= {"postgres", "face-id", "mosquitto"}
+
+
+def test_auth_face_timeout_and_challenge_ttl_fit_dlib_and_mediapipe() -> None:
+    env = SERVICES["auth"]["environment"]
+    # dlib sur 3 images : le défaut du code (2 s) est trop court pour l'étape visage.
+    assert float(env["BACKOFFICE_FACE_TIMEOUT"]) == 8
+    # Chargement à froid de MediaPipe + 3 maintiens de pose dans la durée de vie du challenge.
+    assert int(env["BACKOFFICE_CHALLENGE_TTL"]) == 120
+
+
+def test_auth_starts_without_mqtt_broker() -> None:
+    """Broker absent (IP du hotspot non montée) : auth et donc le WAF démarrent quand même."""
+    deps = SERVICES["auth"]["depends_on"]
+    assert isinstance(deps, dict), "syntaxe longue requise pour `required: false`"
+    assert deps["mosquitto"].get("required") is False
+    for hard in ("postgres", "face-id"):
+        assert deps[hard].get("required", True) is True, hard
+
+
+def test_prometheus_scrapes_face_id() -> None:
+    jobs = yaml.safe_load((ROOT / "infra" / "prometheus" / "prometheus.yml").read_text(encoding="utf-8"))["scrape_configs"]
+    job = next(j for j in jobs if j["job_name"] == "face-id")
+    assert job["static_configs"][0]["targets"] == ["face-id:8006"]
+
+
+def test_sops_example_has_new_secrets_with_fake_values() -> None:
+    env = dict(
+        line.split("=", 1)
+        for line in (ROOT / "security" / "sops" / "secrets.example.env").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    for k in ("FACE_INTERNAL_TOKEN", "FACE_DATA_KEY", "MQTT_AUTH_PASSWORD", "MQTT_LED_PASSWORD",
+              "BACKOFFICE_BOOTSTRAP_TOKEN", "MQTT_BIND_ADDR"):
+        assert k in env, k
+    for k in ("FACE_INTERNAL_TOKEN", "MQTT_AUTH_PASSWORD", "MQTT_LED_PASSWORD", "BACKOFFICE_BOOTSTRAP_TOKEN"):
+        assert env[k].startswith("change-me"), k
+    assert "change-me" in env["FACE_DATA_KEY"]
+    assert env["MQTT_BIND_ADDR"] == "192.168.137.1"
+    assert "MQTT_BIND" not in env, "variable renommée MQTT_BIND_ADDR (compose du profil iot)"

@@ -1,4 +1,4 @@
-"""Métriques HTTP du contrat (docs/contracts.md §2) : compteurs de `resilience_common.metrics`.
+"""Métriques HTTP standard du contrat (docs/contracts.md §2), noms et labels exacts.
 
 Les compteurs sont ceux de `resilience_common.metrics` (une seule déclaration dans le
 registre Prometheus : les redéclarer ici provoquait `DuplicateTimeseries` au boot, puisque

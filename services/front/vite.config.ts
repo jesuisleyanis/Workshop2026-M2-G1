@@ -13,9 +13,10 @@ import tailwindcss from '@tailwindcss/vite'
 // DEV_API_TARGET — comportement WAF inchangé.
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '')
-  const target = env.DEV_API_TARGET || 'http://localhost'
+  // WAF local : HTTPS seulement (le port 80 ne fait plus que rediriger), certificat auto-signé.
+  const target = env.DEV_API_TARGET || 'https://localhost'
   const authTarget = env.DEV_AUTH_TARGET || target
-  const proxyOpts = { changeOrigin: true }
+  const proxyOpts = { changeOrigin: true, secure: false }
   return {
     plugins: [react(), tailwindcss()],
     server: {
@@ -26,6 +27,7 @@ export default defineConfig(({ mode }) => {
         // Clés les plus spécifiques d'abord (auth), fallback /api sur payment-api.
         '/api/v1/login': { target: authTarget, ...proxyOpts },
         '/api/v1/register': { target: authTarget, ...proxyOpts },
+        '/api/v1/auth/': { target: authTarget, ...proxyOpts }, // step-up (#51)
         '/api': { target, ...proxyOpts },
       },
     },

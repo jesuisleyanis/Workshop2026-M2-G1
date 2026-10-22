@@ -42,6 +42,10 @@ class Rule(_Strict):
     actions: list[ActionSpec] = Field(min_length=1)
     verify: Literal["verify_tx"]
     escalation: str
+    # Contrôle AVANT d'agir : si le service répond déjà (attaque contenue par les protections
+    # préventives — limitation de débit et ModSecurity du WAF), l'incident est clos sans action
+    # modifiante. Évite p. ex. de redémarrer payment-api en boucle pendant un flood déjà écrêté.
+    verify_first: bool = False
 
 
 class Defaults(_Strict):

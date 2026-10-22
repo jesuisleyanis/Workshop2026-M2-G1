@@ -103,12 +103,22 @@ describe('parseStreamMessage', () => {
     expect(b.ok && b.value).toMatchObject({ action: 'waf_block_ip', result: 'failed' })
   })
 
-  it("remediation_started d'une action manuelle (incident_type hors énumération) : accepté, type ramené à null", () => {
+  it("remediation_started d'une action manuelle : type `manual_action` conservé (journal du moteur)", () => {
     const r = parseStreamMessage(
       'remediation_started',
       JSON.stringify({ incident_id: 'm', incident_type: 'manual_action', service: '203.0.113.9', actions: ['waf_block_ip'] }),
     )
-    expect(r.ok && r.value).toMatchObject({ kind: 'remediation_started', incidentType: null, actions: [{ type: 'waf_block_ip' }] })
+    expect(r.ok && r.value).toMatchObject({ kind: 'remediation_started', incidentType: 'manual_action', actions: [{ type: 'waf_block_ip' }] })
+    const other = parseStreamMessage('remediation_started', JSON.stringify({ incident_id: 'x', incident_type: 'bidon', actions: [] }))
+    expect(other.ok && other.value).toMatchObject({ incidentType: null })
+  })
+
+  it('trame timeline `manual_action` acceptée, AnomalyEvent `manual_action` refusé (énumération §3)', () => {
+    const frame = { id: 1, incident_id: 'm', incident_type: 'manual_action', ts: '2026-10-22T10:00:00.000Z', phase: 'decision', status: 'info',
+      message: 'Action manuelle', data: { action: 'waf_block_ip', manual: true } }
+    expect(parseStreamMessage('timeline', JSON.stringify(frame)).ok).toBe(true)
+    const detection = { ...frame, phase: 'detection', status: 'info', data: { service: 'x', anomaly_score: 0.9, threshold: 0.6, features_top: [] } }
+    expect(parseStreamMessage('timeline', JSON.stringify(detection)).ok).toBe(false)
   })
 
   it('rejette JSON invalide, type inconnu, incident_id manquant', () => {

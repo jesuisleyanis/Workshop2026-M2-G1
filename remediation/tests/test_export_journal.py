@@ -8,7 +8,6 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-
 from conftest import T0
 from export_journal import main
 from journal import Journal

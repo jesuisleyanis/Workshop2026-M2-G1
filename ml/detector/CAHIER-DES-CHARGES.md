@@ -4,7 +4,7 @@
 d'anomalie exploitable par le moteur de remédiation, **sans humain**. R8 : la décision vient du modèle ML.
 
 **Périmètre.**
-- Charge `model.joblib` + `baseline_stats.json` (après vérification du sha256), relève le collector toutes les 15 s.
+- Charge `model.joblib` + `baseline_stats.json` (après vérification du sha256), reçoit chaque vecteur du collector dès sa collecte (attente longue, un vecteur/s).
 - Calcule `anomaly_score` (IsolationForest), l'expose en `resilience_anomaly_score{service}` (via `resilience_common`).
 - Score >= seuil -> construit un `AnomalyEvent` (contrat §3, validé par pydantic), log `anomaly_detected`, `POST /events` sur la remédiation
   avec `Authorization: Bearer <REMEDIATION_TOKEN>`.
@@ -17,5 +17,5 @@ cooldown si l'envoi a échoué (nouvel essai au tick suivant ; 3 tentatives avec
 **Sécurité.** Token via secret monté (`REMEDIATION_TOKEN_FILE`, SOPS) ou variable d'env, jamais loggé ; `/ready` est KO sans token.
 Modèle refusé si le hash ou la liste de features ne correspondent pas. Réseau `app` interne, aucun port publié, `cap_drop: ALL` / `read_only` compatibles.
 
-**Limites.** Détection par fenêtre de 15 s (MTTD >= 1 tick) ; un détecteur par déploiement scorant le système globalement
+**Limites.** Détection par fenêtres de 5 s glissant chaque seconde, confirmée sur 2 fenêtres (ou 1 au-dessus du seuil haut) : MTTD >= 1-2 s ; un détecteur par déploiement scorant le système globalement
 (`service` = `TARGET_SERVICE`, défaut `payment-api`) ; l'attribution fine par service n'est pas modélisée.

@@ -34,20 +34,14 @@ def upgrade() -> None:
         sa.Column("iban_fake", sa.String(34), nullable=False, unique=True),
         sa.Column("balance_cents", sa.BigInteger(), nullable=False),
         sa.Column("currency", sa.String(3), nullable=False),
-        sa.CheckConstraint(
-            "balance_cents >= 0", name="ck_accounts_balance_non_negative"
-        ),
+        sa.CheckConstraint("balance_cents >= 0", name="ck_accounts_balance_non_negative"),
     )
     op.create_index("ix_accounts_user_id", "accounts", ["user_id"])
     op.create_table(
         "transactions",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column(
-            "src_account", sa.Integer(), sa.ForeignKey("accounts.id"), nullable=False
-        ),
-        sa.Column(
-            "dst_account", sa.Integer(), sa.ForeignKey("accounts.id"), nullable=False
-        ),
+        sa.Column("src_account", sa.Integer(), sa.ForeignKey("accounts.id"), nullable=False),
+        sa.Column("dst_account", sa.Integer(), sa.ForeignKey("accounts.id"), nullable=False),
         sa.Column("amount_cents", sa.BigInteger(), nullable=False),
         sa.Column("status", sa.String(16), nullable=False),
         sa.Column(
